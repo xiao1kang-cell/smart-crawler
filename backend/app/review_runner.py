@@ -28,7 +28,10 @@ def _get_crawler(channel: dict, max_pages: int):
     if platform == "trustpilot":
         from .crawlers.trustpilot import TrustpilotCrawler
         return TrustpilotCrawler(channel, max_pages=max_pages)
-    # 其余平台采集器待补（google_map / trustedshop / reviews_io ...）
+    if platform == "google_map":
+        from .crawlers.google_maps import GoogleMapsCrawler
+        return GoogleMapsCrawler(channel)
+    # 其余平台采集器待补（trustedshop / reviews_io / ...）
     raise ValueError(f"评论平台采集器未实现: {platform}")
 
 

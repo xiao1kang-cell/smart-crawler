@@ -61,6 +61,9 @@ def main(argv=None) -> int:
     pr.add_argument("--site", help="单个评论渠道，如 aosom_us")
     pr.add_argument("--platform", help="整个平台，如 trustpilot")
 
+    pa = sub.add_parser("analyze", help="评论 NLP 情感分析（模块二/三）")
+    pa.add_argument("--limit", type=int, default=300)
+
     args = parser.parse_args(argv)
     init_db()
 
@@ -104,6 +107,13 @@ def main(argv=None) -> int:
                       f"/ 更新 {r.get('updated',0)}")
                 for n in r.get("notes", []):
                     print(f"    {n}")
+        return 0
+
+    if args.cmd == "analyze":
+        from .nlp import analyze_pending
+        r = analyze_pending(args.limit)
+        print(f"✓ NLP 分析：{r['analyzed']} 成功 / {r['failed']} 失败 "
+              f"/ {r['candidates']} 待分析")
         return 0
 
     if args.cmd == "export":

@@ -13,9 +13,17 @@ channels:
   - {site: aosom_es, platform: trustpilot, country: ES, domain: aosom.es,       host: www.trustpilot.com}
   - {site: aosom_pt, platform: trustpilot, country: PT, domain: aosom.pt,       host: www.trustpilot.com}
 
-  # ===== 其余平台（采集器待补，配置先占位）=====
-  # Google Map / TrustedShop / Reviews.io / Opiniones Verificadas / Trusted.ro
-  # 见 docs/风控策略评估.md 与规格 §3.3
+  # ===== Google Map（7 渠道，规格 §3.3）=====
+  - {site: aosom_us, platform: google_map, country: US, query: "Aosom LLC"}
+  - {site: aosom_ca, platform: google_map, country: CA, query: "AOSOM CANADA INC."}
+  - {site: aosom_uk, platform: google_map, country: UK, query: "aosom uk"}
+  - {site: aosom_ie, platform: google_map, country: IE, query: "Aosom Ireland Ltd"}
+  - {site: aosom_de, platform: google_map, country: DE, query: "MH Handel GmbH"}
+  - {site: aosom_fr, platform: google_map, country: FR, query: "Aosom siege social"}
+  - {site: aosom_es, platform: google_map, country: ES, query: "Aosom Els Hostalets de Balenya"}
+
+  # ===== 其余平台采集器待补 =====
+  # TrustedShop / Reviews.io / Opiniones Verificadas / Trusted.ro —— 见规格 §3.3
 
 settings:
   max_pages: 10          # 每渠道最多翻页数（每页 ~20 条）

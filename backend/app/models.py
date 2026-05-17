@@ -188,7 +188,11 @@ class Review(Base):
     is_verified = Column(Boolean)
     review_topics = Column(JSON)                    # 平台话题标签
     sentiment = Column(String)                      # NLP：positive/negative/neutral
+    sentiment_score = Column(Float)                 # NLP：情感得分 -1.0~1.0
     category_l1 = Column(String)                    # NLP：一级分类
+    category_l2 = Column(String)                    # NLP：二级标签
+    nlp_topics = Column(JSON)                       # NLP：主题词
+    analyzed_time = Column(DateTime)                # NLP 分析时间
     collected_time = Column(DateTime, default=datetime.utcnow)
 
 
