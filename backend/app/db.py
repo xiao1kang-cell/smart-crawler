@@ -73,20 +73,22 @@ def _seed_sites() -> None:
     from .models import Site
 
     with session_scope() as s:
-        existing = {row.site for row in s.query(Site).all()}
+        rows = {row.site: row for row in s.query(Site).all()}
         for cfg in get_sites():
-            if cfg["site"] in existing:
-                continue
-            s.add(
-                Site(
-                    site=cfg["site"],
-                    brand=cfg["brand"],
-                    country=cfg["country"],
-                    url=cfg["url"],
+            row = rows.get(cfg["site"])
+            if row is None:                       # 新站点 —— 插入
+                s.add(Site(
+                    site=cfg["site"], brand=cfg["brand"],
+                    country=cfg["country"], url=cfg["url"],
                     platform=cfg["platform"],
                     proxy_tier=cfg.get("proxy_tier", "none"),
-                )
-            )
+                ))
+            else:                                 # 已存在 —— 同步 yaml 配置
+                row.brand = cfg["brand"]
+                row.country = cfg["country"]
+                row.url = cfg["url"]
+                row.platform = cfg["platform"]
+                row.proxy_tier = cfg.get("proxy_tier", "none")
 
 
 def _seed_users() -> None:
