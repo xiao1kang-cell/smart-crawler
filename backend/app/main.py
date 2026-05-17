@@ -63,3 +63,8 @@ def home():
 def dashboard():
     """数据看板控制台。"""
     return FileResponse(FRONTEND_DIR / "index.html")
+
+
+@app.get("/favicon.svg")
+def favicon():
+    return FileResponse(FRONTEND_DIR / "favicon.svg")

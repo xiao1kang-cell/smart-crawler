@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>smart-crawler · 遨森标杆数据采集平台</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <style>
@@ -18,6 +19,7 @@
     -webkit-font-smoothing:antialiased;}
   #app{min-height:100vh;}
   a{color:var(--accent);text-decoration:none;}
+  .mk{width:1.3em;height:1.3em;vertical-align:-.26em;margin-right:6px;}
 
   /* ===== 登录 ===== */
   .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;}
@@ -133,7 +135,7 @@
   <!-- ========== 登录 ========== -->
   <div v-if="!token" class="login-wrap">
     <div class="login-card">
-      <div class="logo">🕸 smart<span>·</span>crawler</div>
+      <div class="logo"><svg class="mk" viewBox="0 0 50 50"><g fill="none" stroke="#7c6ce0" stroke-width="1.7" stroke-linecap="round"><circle cx="25" cy="25" r="20"/><circle cx="25" cy="25" r="12.5"/><circle cx="25" cy="25" r="5"/><path d="M25 4v42M4 25h42M10.5 10.5l29 29M39.5 10.5l-29 29"/></g><circle cx="39.5" cy="10.5" r="4.2" fill="#d76b8f"/></svg>smart<span>·</span>crawler</div>
       <div class="sub">遨森标杆数据采集平台</div>
       <div class="field"><label>账号</label>
         <input type="text" v-model="loginForm.username" @keyup.enter="doLogin"
@@ -151,7 +153,7 @@
   <!-- ========== 主体 ========== -->
   <template v-else>
   <div class="topbar">
-    <div class="logo">🕸 smart<span>·</span>crawler</div>
+    <div class="logo"><svg class="mk" viewBox="0 0 50 50"><g fill="none" stroke="#7c6ce0" stroke-width="1.7" stroke-linecap="round"><circle cx="25" cy="25" r="20"/><circle cx="25" cy="25" r="12.5"/><circle cx="25" cy="25" r="5"/><path d="M25 4v42M4 25h42M10.5 10.5l29 29M39.5 10.5l-29 29"/></g><circle cx="39.5" cy="10.5" r="4.2" fill="#d76b8f"/></svg>smart<span>·</span>crawler</div>
     <select v-model="currentSite" @change="loadAll">
       <option v-for="s in sites" :key="s.site" :value="s.site">
         {{ s.brand }} · {{ s.country }}{{ s.sku_count? '（'+s.sku_count+'）':'' }}

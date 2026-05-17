@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>smart-crawler · 为 AI Agent 打造的网页数据采集引擎</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <style>
   :root{
     --bg:#faf7f2; --card:#fff; --line:#efe9e0; --txt:#3a3340; --mut:#8c8479;
@@ -21,8 +22,9 @@
   .nav{position:sticky;top:0;z-index:20;background:rgba(250,247,242,.9);
     backdrop-filter:blur(10px);border-bottom:1px solid var(--line);}
   .nav .wrap{display:flex;align-items:center;height:64px;gap:24px;}
-  .brand{font-size:18px;font-weight:800;}
+  .brand{font-size:18px;font-weight:800;display:flex;align-items:center;}
   .brand span{color:var(--accent);}
+  .mk{width:24px;height:24px;margin-right:7px;}
   .nav .links{display:flex;gap:24px;margin-left:18px;font-size:14px;color:var(--mut);}
   .nav .links a:hover{color:var(--txt);}
   .spacer{flex:1;}
@@ -115,7 +117,7 @@
 <body>
 
   <nav class="nav"><div class="wrap">
-    <div class="brand">🕸 smart<span>·</span>crawler</div>
+    <div class="brand"><svg class="mk" viewBox="0 0 50 50"><g fill="none" stroke="#7c6ce0" stroke-width="1.8" stroke-linecap="round"><circle cx="25" cy="25" r="20"/><circle cx="25" cy="25" r="12.5"/><circle cx="25" cy="25" r="5"/><path d="M25 4v42M4 25h42M10.5 10.5l29 29M39.5 10.5l-29 29"/></g><circle cx="39.5" cy="10.5" r="4.4" fill="#d76b8f"/></svg>smart<span>·</span>crawler</div>
     <div class="links">
       <a href="#value">能力</a><a href="#why">为什么</a><a href="#cap">覆盖</a>
     </div>
@@ -218,7 +220,7 @@
   </div></section>
 
   <footer><div class="wrap">
-    🕸 smart·crawler — 为 AI Agent 打造的网页数据采集引擎 ·
+    smart·crawler — 为 AI Agent 打造的网页数据采集引擎 ·
     Aosom 竞品情报平台 · smartcrawler.io
   </div></footer>
 
