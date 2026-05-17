@@ -22,8 +22,13 @@ channels:
   - {site: aosom_fr, platform: google_map, country: FR, query: "Aosom siege social"}
   - {site: aosom_es, platform: google_map, country: ES, query: "Aosom Els Hostalets de Balenya"}
 
-  # ===== 其余平台采集器待补 =====
-  # TrustedShop / Reviews.io / Opiniones Verificadas / Trusted.ro —— 见规格 §3.3
+  # ===== Reviews.io（UK，公开 API）=====
+  - {site: aosom_uk, platform: reviews_io, country: UK, store: aosom-uk}
+
+  # ===== 可导出平台：走 feed 导入（规格 F2-007，非爬取）=====
+  # TrustedShop（DE）/ Opiniones Verificadas（ES/PT）—— 平台后台导出 CSV/Excel，
+  # 用 `cli reviews-import --file X --platform trustedshop --site aosom_de` 导入
+  # Trusted.ro（RO）评论走 AJAX，采集器待补
 
 settings:
   max_pages: 10          # 每渠道最多翻页数（每页 ~20 条）

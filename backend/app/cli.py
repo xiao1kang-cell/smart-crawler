@@ -64,6 +64,11 @@ def main(argv=None) -> int:
     pa = sub.add_parser("analyze", help="评论 NLP 情感分析（模块二/三）")
     pa.add_argument("--limit", type=int, default=300)
 
+    pi = sub.add_parser("reviews-import", help="导入评论 feed（CSV/Excel）")
+    pi.add_argument("--file", required=True)
+    pi.add_argument("--platform", required=True, help="如 trustedshop")
+    pi.add_argument("--site", required=True, help="如 aosom_de")
+
     args = parser.parse_args(argv)
     init_db()
 
@@ -107,6 +112,14 @@ def main(argv=None) -> int:
                       f"/ 更新 {r.get('updated',0)}")
                 for n in r.get("notes", []):
                     print(f"    {n}")
+        return 0
+
+    if args.cmd == "reviews-import":
+        from .review_import import import_feed
+        r = import_feed(args.file, args.platform, args.site)
+        print(f"✓ 导入 {args.platform}/{args.site}：{r['rows']} 行 → "
+              f"解析 {r['parsed']} / 新增 {r['inserted']} / 更新 {r['updated']}")
+        print(f"    列映射: {r['mapped_columns']}")
         return 0
 
     if args.cmd == "analyze":

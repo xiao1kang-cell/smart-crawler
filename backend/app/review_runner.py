@@ -31,7 +31,11 @@ def _get_crawler(channel: dict, max_pages: int):
     if platform == "google_map":
         from .crawlers.google_maps import GoogleMapsCrawler
         return GoogleMapsCrawler(channel)
-    # 其余平台采集器待补（trustedshop / reviews_io / ...）
+    if platform == "reviews_io":
+        from .crawlers.reviews_io import ReviewsIoCrawler
+        return ReviewsIoCrawler(channel, max_pages=max_pages)
+    # TrustedShop / Opiniones Verificadas 等「可导出」平台走 feed 导入
+    # （app/review_import.py），不在此爬取 —— 规格 F2-007
     raise ValueError(f"评论平台采集器未实现: {platform}")
 
 
