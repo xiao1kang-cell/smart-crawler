@@ -1,6 +1,26 @@
 # smart-crawler —— NAS 一键部署
 # 用法： docker compose up -d   →   http://<NAS-IP>:8077
 services:
+  # PostgreSQL —— 服务化部署主数据库（替代 SQLite）
+  postgres:
+    image: postgres:16-alpine
+    container_name: smart-crawler-pg
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-smart_crawler}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-smart-crawler-pg-2026-aosom}
+      - POSTGRES_DB=${POSTGRES_DB:-smart_crawler}
+    volumes:
+      - ./data/pgdata:/var/lib/postgresql/data   # 数据卷持久化
+    # 仅容器网络内访问；如需宿主机调试可临时打开 ports
+    # ports:
+    #   - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-smart_crawler} -d ${POSTGRES_DB:-smart_crawler}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   smart-crawler:
     build: .
     image: smart-crawler:latest
@@ -9,10 +29,12 @@ services:
     ports:
       - "8077:8077"
     volumes:
-      - ./data:/app/data            # SQLite 数据持久化
+      - ./data:/app/data            # 数据持久化（迁移脚本 / SQLite 备份等）
       - ./backend/sites.yaml:/app/backend/sites.yaml:ro
       - ./backend/proxies.txt:/app/backend/proxies.txt:ro
     environment:
+      # 连接 postgres 服务；服务名 postgres 即容器网络内的主机名
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-smart-crawler-pg-2026-aosom}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
       - SC_SECRET=${SC_SECRET:-smart-crawler-secret-2026-aosom}
       - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
       - HOMARY_LIMIT=${HOMARY_LIMIT:-500}
@@ -20,6 +42,9 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://router.flatkey.ai/v1}
       - LLM_MODEL=${LLM_MODEL:-gpt-5-mini}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # Cloudflare Tunnel —— 把 smartcrawler.io 接到本容器（需填 TUNNEL_TOKEN）
   # 在 Cloudflare Zero Trust 创建 Tunnel 后，把 token 写入 .env 再启用本段
