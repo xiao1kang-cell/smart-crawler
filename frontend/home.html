@@ -89,6 +89,32 @@
   .band .item h4::before{content:"▸";color:#b9aef0;}
   .band .item p{color:#c4bcd8;font-size:14px;}
 
+  /* connect / agent access */
+  .connect{display:grid;grid-template-columns:1.15fr 1fr;gap:20px;}
+  .ep{background:#1f1b30;border-radius:18px;padding:30px;color:#e8e4f5;}
+  .ep .k{font-size:13px;color:#b9aef0;font-weight:700;letter-spacing:.5px;}
+  .ep h3{font-size:20px;font-weight:850;margin:6px 0 4px;color:#fff;}
+  .ep .meta{color:#9b94b8;font-size:13px;margin-bottom:16px;}
+  .code{background:#15121f;border:1px solid #322b4a;border-radius:11px;
+    padding:13px 15px;font-family:"SF Mono",ui-monospace,monospace;
+    font-size:13px;color:#c9b8ff;display:flex;align-items:center;gap:10px;
+    cursor:pointer;word-break:break-all;}
+  .code:hover{border-color:var(--accent);}
+  .code .cp{margin-left:auto;flex:none;color:#7a7298;font-size:11px;}
+  .ep .toolc{margin-top:14px;color:#9b94b8;font-size:12.5px;line-height:1.9;}
+  .ep .toolc b{color:#cfc6ec;}
+  .ep.rest{background:var(--card);color:var(--txt);border:1px solid var(--line);}
+  .ep.rest .k{color:var(--accent);} .ep.rest h3{color:var(--txt);}
+  .ep.rest .meta{color:var(--mut);}
+  .ep.rest .code{background:#faf8f5;border-color:var(--line);color:#6a5ad0;}
+  .ep.rest .code .cp{color:#c8bfb2;}
+  .ep.rest .toolc{color:var(--mut);} .ep.rest .toolc b{color:var(--txt);}
+  .disc{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:24px;}
+  .disc a{font-size:12.5px;color:var(--mut);background:var(--card);
+    border:1px solid var(--line);border-radius:9px;padding:7px 13px;
+    font-family:ui-monospace,monospace;}
+  .disc a:hover{border-color:var(--accent);color:var(--accent);}
+
   /* capability list */
   .caps{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;}
   .cap{background:var(--card);border:1px solid var(--line);border-radius:14px;
@@ -119,7 +145,8 @@
   <nav class="nav"><div class="wrap">
     <div class="brand"><svg class="mk" viewBox="0 0 50 50"><g fill="none" stroke="#7c6ce0" stroke-width="1.8" stroke-linecap="round"><circle cx="25" cy="25" r="20"/><circle cx="25" cy="25" r="12.5"/><circle cx="25" cy="25" r="5"/><path d="M25 4v42M4 25h42M10.5 10.5l29 29M39.5 10.5l-29 29"/></g><circle cx="39.5" cy="10.5" r="4.4" fill="#d76b8f"/></svg>smart<span>·</span>crawler</div>
     <div class="links">
-      <a href="#value">能力</a><a href="#why">为什么</a><a href="#cap">覆盖</a>
+      <a href="#value">能力</a><a href="#why">为什么</a>
+      <a href="#connect">Agent 接入</a><a href="#cap">覆盖</a>
     </div>
     <div class="spacer"></div>
     <a class="btn solid" href="/app">进入控制台</a>
@@ -191,6 +218,47 @@
     </div>
   </div></section>
 
+  <!-- CONNECT / AGENT ACCESS -->
+  <section id="connect"><div class="wrap">
+    <div class="sec-tag">AGENT ACCESS</div>
+    <h2 class="sec-h">一行 URL，接入你的 Agent</h2>
+    <p class="sec-sub">能力直接暴露给 AI Agent —— 不用打开界面、不用写爬虫，
+       MCP 或 REST 二选一即可调用。</p>
+    <div class="connect">
+      <div class="ep">
+        <div class="k">▸ 推荐 · MCP 服务器</div>
+        <h3>Model Context Protocol</h3>
+        <div class="meta">streamable-http 传输 · 7 个工具 · 开箱即用</div>
+        <div class="code" onclick="cp(this)">https://smartcrawler.io/mcp
+          <span class="cp">点击复制</span></div>
+        <div class="toolc">
+          <b>list_data_sources</b> · <b>search_competitor_products</b> ·
+          <b>get_product_detail</b> · <b>list_promotions</b> ·
+          <b>get_voc_reviews</b> · <b>voc_summary</b> ·
+          <b>competitor_landscape</b>
+        </div>
+      </div>
+      <div class="ep rest">
+        <div class="k">▸ 备选 · REST API</div>
+        <h3>OpenAPI 3.1</h3>
+        <div class="meta">X-API-Key 鉴权 · 稳定 schema · 统一信封</div>
+        <div class="code" onclick="cp(this)">https://smartcrawler.io/openapi.json
+          <span class="cp">点击复制</span></div>
+        <div class="toolc">
+          鉴权头 <b>X-API-Key: sck_…</b>（控制台「API 接入」生成）<br/>
+          端点 <b>/api/v1/products</b> · <b>/api/v1/promotions</b> ·
+          <b>/api/v1/site/{site}</b>
+        </div>
+      </div>
+    </div>
+    <div class="disc">
+      <a href="/llms.txt" target="_blank">/llms.txt</a>
+      <a href="/.well-known/mcp.json" target="_blank">/.well-known/mcp.json</a>
+      <a href="/agents.json" target="_blank">/agents.json</a>
+      <a href="/docs" target="_blank">/docs</a>
+    </div>
+  </div></section>
+
   <!-- CAPABILITY -->
   <section id="cap"><div class="wrap">
     <div class="sec-tag">COVERAGE</div>
@@ -224,5 +292,15 @@
     Aosom 竞品情报平台 · smartcrawler.io
   </div></footer>
 
+<script>
+  function cp(el){
+    const txt=el.childNodes[0].textContent.trim();
+    navigator.clipboard.writeText(txt).then(()=>{
+      const tag=el.querySelector('.cp'), old=tag.textContent;
+      tag.textContent='✓ 已复制';
+      setTimeout(()=>{tag.textContent=old;},1600);
+    });
+  }
+</script>
 </body>
 </html>

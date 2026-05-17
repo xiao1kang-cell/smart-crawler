@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 
 from .api.routes import public_router, router as api_router
 from .api.output import router as v1_router
+from .api.discovery import router as discovery_router
 from .config import FRONTEND_DIR
 from .db import init_db
 from .mcp_server import mcp
@@ -43,14 +44,20 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="smart-crawler — 遨森标杆数据采集平台",
+    title="smart-crawler — 为 AI Agent 打造的竞品数据采集引擎",
     version="0.1.0",
-    description="P0 三品牌（SONGMICS / Homary / Costway）商品采集 MVP",
+    description=(
+        "跨境电商竞品数据采集引擎，覆盖 9 大家居品牌 46 个独立站 + 21 个评论渠道。\n\n"
+        "**AI Agent 推荐用 MCP 接入**：`/mcp`（streamable-http，7 个工具）。\n"
+        "REST API 用 `X-API-Key: sck_...` 鉴权。能力总览见 `/agents.json`，"
+        "站点简介见 `/llms.txt`。"
+    ),
     lifespan=lifespan,
 )
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
+app.include_router(discovery_router)     # Agent 发现层 (llms.txt / .well-known)
 app.include_router(public_router)
 app.include_router(api_router)
 app.include_router(v1_router)

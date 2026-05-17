@@ -129,6 +129,36 @@
   .pager button:disabled{opacity:.4;cursor:not-allowed;}
   .empty{text-align:center;color:#c8bfb2;padding:42px;font-size:13px;}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+
+  /* ===== 数据源卡片网格（NewAPI 风）===== */
+  .ds-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));
+    gap:14px;}
+  .ds-card{background:var(--card);border:1px solid var(--line);border-radius:15px;
+    padding:17px 18px;display:flex;flex-direction:column;gap:10px;
+    transition:border-color .15s,box-shadow .15s;}
+  .ds-card:hover{border-color:var(--accent);
+    box-shadow:0 6px 20px rgba(124,108,224,.1);}
+  .ds-top{display:flex;align-items:flex-start;gap:10px;}
+  .ds-ic{width:38px;height:38px;border-radius:10px;flex:none;display:flex;
+    align-items:center;justify-content:center;font-size:19px;}
+  .ds-ic.product{background:#eef0ff;} .ds-ic.review{background:#fde9ef;}
+  .ds-ic.shopping{background:#fbf3da;}
+  .ds-name{font-weight:800;font-size:14.5px;line-height:1.3;}
+  .ds-plat{color:var(--mut);font-size:11.5px;margin-top:2px;
+    font-family:ui-monospace,monospace;}
+  .ds-st{flex:none;font-size:11px;font-weight:700;padding:3px 9px;
+    border-radius:7px;}
+  .ds-st.online{background:var(--green-bg);color:var(--green);}
+  .ds-st.idle{background:#f3eee6;color:var(--mut);}
+  .ds-method{font-size:12.5px;color:var(--mut);line-height:1.55;
+    background:#faf8f5;border-radius:9px;padding:9px 11px;min-height:54px;}
+  .ds-method b{color:var(--accent);font-weight:600;}
+  .ds-foot{display:flex;align-items:baseline;gap:6px;
+    border-top:1px solid var(--line2);padding-top:9px;}
+  .ds-cnt{font-size:22px;font-weight:850;color:var(--txt);}
+  .ds-unit{font-size:12px;color:var(--mut);}
+  .ds-freq{margin-left:auto;font-size:11px;color:var(--mut);
+    background:#f3eee6;border-radius:6px;padding:3px 8px;}
 </style>
 </head>
 <body>
@@ -290,6 +320,48 @@
       </div>
     </div>
 
+    <!-- 数据源 -->
+    <div v-show="tab==='datasources'">
+      <div class="panel">
+        <h3>数据源总览
+          <small>{{ datasources.length }} 个源 · 商品站 / 评论平台 / Google Shopping</small>
+        </h3>
+        <div class="filterbar">
+          <span class="pill" :class="{active:dsTab==='all'}" @click="dsTab='all'">
+            全部 {{ datasources.length }}</span>
+          <span class="pill" :class="{active:dsTab==='product'}" @click="dsTab='product'">
+            商品站 {{ dsCount('product') }}</span>
+          <span class="pill" :class="{active:dsTab==='review'}" @click="dsTab='review'">
+            评论平台 {{ dsCount('review') }}</span>
+          <span class="pill" :class="{active:dsTab==='shopping'}" @click="dsTab='shopping'">
+            Google Shopping {{ dsCount('shopping') }}</span>
+          <span style="margin-left:auto;color:var(--mut);font-size:12px;">
+            在线 {{ dsOnline }} · 累计 {{ num(dsTotalCount) }} 条样本</span>
+        </div>
+        <div class="ds-grid">
+          <div class="ds-card" v-for="d in dsFiltered" :key="d.id">
+            <div class="ds-top">
+              <div class="ds-ic" :class="d.type">
+                {{ d.type==='product'?'🛒':d.type==='review'?'💬':'🔍' }}</div>
+              <div style="flex:1;min-width:0;">
+                <div class="ds-name">{{ d.name }}</div>
+                <div class="ds-plat">{{ d.platform }}</div>
+              </div>
+              <span class="ds-st" :class="d.status">
+                {{ d.status==='online'?'● 在线':'○ 待采' }}</span>
+            </div>
+            <div class="ds-method">{{ d.method }}</div>
+            <div class="ds-foot">
+              <span class="ds-cnt">{{ num(d.count) }}</span>
+              <span class="ds-unit">{{ d.unit }}</span>
+              <span class="ds-freq">⟳ {{ d.freq }}</span>
+            </div>
+          </div>
+        </div>
+        <div class="empty" v-if="!datasources.length">数据源加载中…</div>
+      </div>
+    </div>
+
     <!-- 采集任务 -->
     <div v-show="tab==='jobs'">
       <div class="grid2">
@@ -381,14 +453,21 @@ createApp({
     loginForm:{username:"",password:""}, logging:false, loginErr:"",
     sites:[], currentSite:"", tab:"overview", pTab:"all",
     tabList:[{k:"overview",label:"总体分析"},{k:"products",label:"产品分析"},
-      {k:"promotions",label:"销售促销"},{k:"jobs",label:"采集任务"},
-      {k:"api",label:"API 接入"}],
+      {k:"promotions",label:"销售促销"},{k:"datasources",label:"数据源"},
+      {k:"jobs",label:"采集任务"},{k:"api",label:"API 接入"}],
+    datasources:[], dsTab:"all",
     apiKeys:[], newKeyName:"", newKey:"",
     ov:{cards:{},trends:[]}, products:[], total:0, page:1, pageSize:20,
     counts:{all:0,bestseller:0,new:0}, search:"", minP:null, maxP:null,
     promotions:[], jobs:[], proxy:{}, triggering:false, chart:null,
   };},
-  computed:{ site(){ return this.sites.find(s=>s.site===this.currentSite); } },
+  computed:{
+    site(){ return this.sites.find(s=>s.site===this.currentSite); },
+    dsFiltered(){ return this.dsTab==='all'?this.datasources
+      :this.datasources.filter(d=>d.type===this.dsTab); },
+    dsOnline(){ return this.datasources.filter(d=>d.status==='online').length; },
+    dsTotalCount(){ return this.datasources.reduce((a,d)=>a+(d.count||0),0); },
+  },
   async mounted(){ if(this.token) await this.boot(); },
   methods:{
     num(v){return (v??0).toLocaleString();},
@@ -435,7 +514,13 @@ createApp({
     },
     switchTab(k){ this.tab=k;
       if(k==='overview') this.$nextTick(this.renderChart);
-      if(k==='api') this.loadKeys(); },
+      if(k==='api') this.loadKeys();
+      if(k==='datasources'&&!this.datasources.length) this.loadDatasources(); },
+    dsCount(t){ return this.datasources.filter(d=>d.type===t).length; },
+    async loadDatasources(){
+      try{ this.datasources=await this.api("/api/datasources"); }
+      catch(e){ this.datasources=[]; }
+    },
     async loadOverview(){
       this.ov=await this.api(`/api/sites/${this.currentSite}/overview`);
       this.$nextTick(this.renderChart);
