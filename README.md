@@ -87,7 +87,61 @@ frontend/index.html  Vue3 + ECharts 单文件看板
 Playwright（难站兜底）· APScheduler · pandas/openpyxl · Vue3 + ECharts。
 选型依据见 `research/github-crawler-survey.md`。
 
+## MCP 接入（面向 AI Agent）
+
+smart-crawler 把竞品数据采集能力直接做成 **MCP 服务器**，AI Agent 无需自己写爬虫即可调用。
+落地原则：**Agents 是新的分发渠道 —— 做能力，不做界面。**
+
+- **端点**：`https://smartcrawler.io/mcp`
+- **传输**：streamable-http
+- **鉴权**：请求头 `Authorization: Bearer sck_...`（API Key，在控制台「API 接入」生成）
+- **清单**：项目根 [`server.json`](./server.json)（官方 MCP Registry 格式）
+- **发现层**：`/llms.txt` · `/.well-known/mcp.json` · `/.well-known/ai-plugin.json` · `/agents.json`
+
+### 7 个 MCP 工具
+
+| 工具 | 说明 |
+|------|------|
+| `list_data_sources` | 列出全部数据源：46 个竞品站 + 评论平台 + Google Shopping |
+| `search_competitor_products` | 按品牌 / 国家 / 关键词 / 品类 / 价格 / 促销搜索竞品商品 |
+| `get_product_detail` | 取单个商品完整信息 + 历史价格曲线 |
+| `list_promotions` | 列出竞品当前促销活动及折扣率 |
+| `get_voc_reviews` | 取消费者口碑（VOC）评论 + NLP 情感 / 分类标注 |
+| `voc_summary` | 口碑分析汇总：情感分布 + 痛点分类占比 |
+| `competitor_landscape` | Google Shopping 某关键词下各商家出现占有率 |
+
+### 客户端配置示例
+
+streamable-http 远程 MCP 服务器，配置示例（Claude Desktop / Cursor 等）：
+
+```json
+{
+  "mcpServers": {
+    "smart-crawler": {
+      "type": "streamable-http",
+      "url": "https://smartcrawler.io/mcp",
+      "headers": { "Authorization": "Bearer sck_你的密钥" }
+    }
+  }
+}
+```
+
+直接 JSON-RPC 握手探测：
+
+```bash
+curl -X POST https://smartcrawler.io/mcp \
+  -H 'Authorization: Bearer sck_你的密钥' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
+
+---
+
 ## REST API
+
+REST 为 MCP 的备选接入方式，鉴权用请求头 `X-API-Key: sck_...`。
+本地启动后的端点：
 
 | 端点 | 说明 |
 |------|------|
