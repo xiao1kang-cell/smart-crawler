@@ -6,6 +6,9 @@
 settings:
   review_rate: 0.025
   request_delay: 1.2
+  freq_products: "0 2 * * *"
+  freq_reviews: "0 4 * * 1"
+  freq_shopping: "0 5 * * 1"
   default_freq: "0 2 * * *"
 
 sites:
