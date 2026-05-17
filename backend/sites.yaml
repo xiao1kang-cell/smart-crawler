@@ -1,0 +1,135 @@
+# smart-crawler 标杆站点配置 —— P0 三品牌 20 站
+# proxy_tier: none(直连) | datacenter(数据中心代理) | residential(住宅代理)
+# crawl_freq: 采集频率 cron 表达式（APScheduler），默认每日 02:00 当地低峰
+
+settings:
+  review_rate: 0.025          # 销量估算评论率（家居类经验值 2.5%，规格 Q-001）
+  request_delay: 1.5          # 同站请求间隔（秒）
+  default_freq: "0 2 * * *"   # 默认每日 02:00
+
+sites:
+  # ---- SONGMICS（致欧）— Shopify，反爬低，直连 ----
+  - site: songmics_us
+    brand: SONGMICS
+    country: US
+    url: https://www.songmics.com/
+    platform: shopify
+    proxy_tier: none
+  - site: songmics_uk
+    brand: SONGMICS
+    country: UK
+    url: https://songmicshome.co.uk/
+    platform: shopify
+    proxy_tier: none
+  - site: songmics_de
+    brand: SONGMICS
+    country: DE
+    url: https://www.songmics.de/
+    platform: shopify
+    proxy_tier: none
+  - site: songmics_it
+    brand: SONGMICS
+    country: IT
+    url: https://www.songmics.it/
+    platform: shopify
+    proxy_tier: none
+  - site: songmics_es
+    brand: SONGMICS
+    country: ES
+    url: https://www.songmics.es/
+    platform: shopify
+    proxy_tier: none
+  - site: songmics_fr
+    brand: SONGMICS
+    country: FR
+    url: https://www.songmics.fr/
+    platform: shopify
+    proxy_tier: none
+
+  # ---- Homary（爆米科技）— Nuxt SSR，反爬中，curl_cffi ----
+  - site: homary_us
+    brand: Homary
+    country: US
+    url: https://www.homary.com/
+    platform: nuxt
+    proxy_tier: datacenter
+  - site: homary_uk
+    brand: Homary
+    country: UK
+    url: https://uk.homary.com/
+    platform: nuxt
+    proxy_tier: datacenter
+  - site: homary_de
+    brand: Homary
+    country: DE
+    url: https://de.homary.com/
+    platform: nuxt
+    proxy_tier: datacenter
+  - site: homary_es
+    brand: Homary
+    country: ES
+    url: https://es.homary.com/
+    platform: nuxt
+    proxy_tier: datacenter
+  - site: homary_fr
+    brand: Homary
+    country: FR
+    url: https://fr.homary.com/
+    platform: nuxt
+    proxy_tier: datacenter
+
+  # ---- Costway（豪雅）— Vue3 SPA，反爬极高，住宅代理 + Playwright ----
+  - site: costway_us
+    brand: Costway
+    country: US
+    url: https://www.costway.com/
+    platform: vue_spa
+    proxy_tier: residential
+  - site: costway_uk
+    brand: Costway
+    country: UK
+    url: https://www.costway.co.uk/
+    platform: vue_spa
+    proxy_tier: residential
+  - site: costway_ca
+    brand: Costway
+    country: CA
+    url: https://www.costway.ca/
+    platform: vue_spa
+    proxy_tier: residential
+  - site: costway_de
+    brand: Costway
+    country: DE
+    url: https://www.costway.de/
+    platform: vue_spa
+    proxy_tier: residential
+  - site: costway_it
+    brand: Costway
+    country: IT
+    url: https://www.costway.it/
+    platform: vue_spa
+    proxy_tier: residential
+  - site: costway_es
+    brand: Costway
+    country: ES
+    url: https://www.costway.es/
+    platform: vue_spa
+    proxy_tier: residential
+  - site: costway_fr
+    brand: Costway
+    country: FR
+    url: https://www.costway.fr/
+    platform: vue_spa
+    proxy_tier: residential
+  - site: costway_nl
+    brand: Costway
+    country: NL
+    url: https://nl.costway.com/
+    platform: vue_spa
+    proxy_tier: residential
+  - site: costway_pl
+    brand: Costway
+    country: PL
+    url: https://costway.pl/
+    platform: vue_spa
+    proxy_tier: residential

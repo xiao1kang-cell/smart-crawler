@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>smart-crawler · 遨森标杆数据采集平台</title>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: #f0f2f5; color: #1f2329; }
+  #app { min-height: 100vh; }
+  /* 顶栏 */
+  .topbar { background: #fff; border-bottom: 1px solid #e5e6eb; padding: 12px 24px;
+            display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .logo { font-weight: 700; font-size: 17px; color: #165dff; }
+  .logo small { color: #86909c; font-weight: 400; font-size: 12px; }
+  select { padding: 6px 10px; border: 1px solid #c9cdd4; border-radius: 6px;
+           font-size: 13px; background: #fff; }
+  .site-url { color: #86909c; font-size: 12px; }
+  .spacer { flex: 1; }
+  .updated { color: #86909c; font-size: 12px; }
+  .btn { padding: 6px 14px; border: none; border-radius: 6px; cursor: pointer;
+         font-size: 13px; background: #165dff; color: #fff; }
+  .btn:hover { background: #0e42d2; }
+  .btn.ghost { background: #fff; color: #165dff; border: 1px solid #165dff; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  /* tab */
+  .tabs { background: #fff; padding: 0 24px; display: flex; gap: 4px;
+          border-bottom: 1px solid #e5e6eb; }
+  .tab { padding: 13px 18px; cursor: pointer; font-size: 14px; color: #4e5969;
+         border-bottom: 2px solid transparent; }
+  .tab.active { color: #165dff; border-bottom-color: #165dff; font-weight: 600; }
+  .main { padding: 20px 24px; }
+  /* 指标卡 */
+  .cards { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; }
+  .card { background: #fff; border-radius: 10px; padding: 16px 18px;
+          box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+  .card .label { color: #86909c; font-size: 12px; }
+  .card .value { font-size: 26px; font-weight: 700; margin-top: 8px; }
+  .card .sub { font-size: 11px; color: #c9cdd4; margin-top: 4px; }
+  .panel { background: #fff; border-radius: 10px; padding: 18px;
+           box-shadow: 0 1px 3px rgba(0,0,0,.05); margin-top: 16px; }
+  .panel h3 { font-size: 14px; margin-bottom: 12px; }
+  #chart { width: 100%; height: 360px; }
+  /* 筛选行 */
+  .filterbar { display: flex; gap: 8px; align-items: center; margin-bottom: 14px;
+               flex-wrap: wrap; }
+  .pill { padding: 6px 14px; border-radius: 16px; background: #f2f3f5;
+          cursor: pointer; font-size: 13px; color: #4e5969; }
+  .pill.active { background: #165dff; color: #fff; }
+  input[type=text], input[type=number] { padding: 6px 10px; border: 1px solid #c9cdd4;
+          border-radius: 6px; font-size: 13px; }
+  /* 表格 */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; background: #fff; }
+  th, td { padding: 9px 10px; text-align: left; border-bottom: 1px solid #f0f2f5;
+           vertical-align: middle; }
+  th { color: #86909c; font-weight: 500; background: #fafbfc; white-space: nowrap; }
+  td img { width: 46px; height: 46px; object-fit: cover; border-radius: 6px;
+           background: #f2f3f5; }
+  .badge { padding: 2px 7px; border-radius: 4px; font-size: 11px; }
+  .badge.new { background: #e8f3ff; color: #165dff; }
+  .badge.best { background: #fff3e8; color: #ff7d00; }
+  .badge.on_sale { background: #e8ffea; color: #00b42a; }
+  .badge.out_of_stock { background: #ffece8; color: #f53f3f; }
+  .badge.success { background: #e8ffea; color: #00b42a; }
+  .badge.failed { background: #ffece8; color: #f53f3f; }
+  .badge.running { background: #e8f3ff; color: #165dff; }
+  .price { color: #f53f3f; font-weight: 600; }
+  .price-old { color: #c9cdd4; text-decoration: line-through; font-size: 12px; }
+  .pager { display: flex; gap: 6px; align-items: center; margin-top: 14px;
+           justify-content: flex-end; font-size: 13px; }
+  .pager button { padding: 4px 10px; border: 1px solid #c9cdd4; border-radius: 5px;
+                  background: #fff; cursor: pointer; }
+  .pager button:disabled { opacity: .4; cursor: not-allowed; }
+  .empty { text-align: center; color: #c9cdd4; padding: 40px; }
+  .title-cell { max-width: 320px; }
+  .title-cell a { color: #1f2329; text-decoration: none; }
+  .title-cell a:hover { color: #165dff; }
+  .link { color: #165dff; text-decoration: none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- 顶栏 -->
+  <div class="topbar">
+    <div class="logo">smart-crawler <small>遨森标杆数据采集平台</small></div>
+    <select v-model="currentSite" @change="onSiteChange">
+      <option v-for="s in sites" :key="s.site" :value="s.site">
+        {{ s.brand }} | {{ s.country }}
+      </option>
+    </select>
+    <span class="site-url" v-if="site">{{ site.url }}</span>
+    <div class="spacer"></div>
+    <span class="updated" v-if="site && site.last_crawled">
+      最后更新 {{ fmt(site.last_crawled) }}</span>
+    <span class="updated" v-else>未采集</span>
+    <button class="btn ghost" @click="exportExcel">⬇ 数据导出</button>
+  </div>
+
+  <!-- Tab -->
+  <div class="tabs">
+    <div v-for="t in tabList" :key="t.k" class="tab"
+         :class="{active: tab===t.k}" @click="switchTab(t.k)">{{ t.label }}</div>
+  </div>
+
+  <div class="main">
+    <!-- ===== 总体分析 ===== -->
+    <div v-show="tab==='overview'">
+      <div class="cards">
+        <div class="card"><div class="label">在售 SKU</div>
+          <div class="value">{{ num(ov.cards.sku_count) }}</div>
+          <div class="sub">站点全部在售 SKU</div></div>
+        <div class="card"><div class="label">新增产品</div>
+          <div class="value">{{ num(ov.cards.new_product_count) }}</div>
+          <div class="sub">New Arrivals</div></div>
+        <div class="card"><div class="label">30 天销量</div>
+          <div class="value">{{ num(ov.cards.thirty_day_sales) }}</div>
+          <div class="sub">评论增量倒推 · 预估</div></div>
+        <div class="card"><div class="label">30 天收入</div>
+          <div class="value">{{ money(ov.cards.thirty_day_revenue) }}</div>
+          <div class="sub">销量 × 售价 · 预估</div></div>
+        <div class="card"><div class="label">30 天流量</div>
+          <div class="value">—</div>
+          <div class="sub">需第三方数据接入</div></div>
+        <div class="card"><div class="label">30 天转化率</div>
+          <div class="value">—</div>
+          <div class="sub">需第三方数据接入</div></div>
+      </div>
+      <div class="panel">
+        <h3>趋势分析（SKU 数 / 新品 / 预估销量 / 预估营收）</h3>
+        <div id="chart"></div>
+        <div class="empty" v-if="ov.trends.length<=1">
+          趋势图需多日采集数据积累；目前仅 {{ ov.trends.length }} 个采集日。
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 产品分析 ===== -->
+    <div v-show="tab==='products'">
+      <div class="panel">
+        <div class="filterbar">
+          <span class="pill" :class="{active:pTab==='all'}"
+                @click="setPTab('all')">所有产品 ({{ counts.all }})</span>
+          <span class="pill" :class="{active:pTab==='bestseller'}"
+                @click="setPTab('bestseller')">畅销产品 ({{ counts.bestseller }})</span>
+          <span class="pill" :class="{active:pTab==='new'}"
+                @click="setPTab('new')">最新产品 ({{ counts.new }})</span>
+          <input type="text" v-model="search" placeholder="搜索标题 / SKU"
+                 @keyup.enter="loadProducts(1)" style="width:200px" />
+          <input type="number" v-model.number="minP" placeholder="最低价" style="width:80px"/>
+          <input type="number" v-model.number="maxP" placeholder="最高价" style="width:80px"/>
+          <button class="btn" @click="loadProducts(1)">筛选</button>
+        </div>
+        <table>
+          <thead><tr>
+            <th>NO.</th><th>图片</th><th>产品标题</th><th>SKU</th><th>属性</th>
+            <th>标签</th><th>售价</th><th>原价</th><th>30天销量</th><th>30天营收</th>
+            <th>评分</th><th>评论数</th><th>状态</th><th>品类</th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="(p,i) in products" :key="p.id">
+              <td>{{ (page-1)*pageSize + i + 1 }}</td>
+              <td><img :src="p.image" loading="lazy"
+                       referrerpolicy="no-referrer" /></td>
+              <td class="title-cell">
+                <a :href="p.product_url" target="_blank">{{ p.title }}</a></td>
+              <td>{{ p.sku }}</td>
+              <td>{{ attrText(p.attributes) }}</td>
+              <td><span v-if="p.label" class="badge"
+                   :class="p.is_new?'new':'best'">{{ p.label }}</span></td>
+              <td><span class="price">{{ money(p.sale_price) }}</span></td>
+              <td><span v-if="p.original_price>p.sale_price" class="price-old">
+                   {{ money(p.original_price) }}</span></td>
+              <td>{{ p.thirty_day_sales ?? '—' }}</td>
+              <td>{{ p.thirty_day_revenue ? money(p.thirty_day_revenue) : '—' }}</td>
+              <td>{{ p.ratings ?? '—' }}</td>
+              <td>{{ p.review_count ?? '—' }}</td>
+              <td><span class="badge" :class="p.status">{{ statusText(p.status) }}</span></td>
+              <td>{{ p.category_path || '—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="empty" v-if="!products.length">暂无数据，请先采集该站点。</div>
+        <div class="pager">
+          <span>共 {{ total }} 条</span>
+          <select v-model.number="pageSize" @change="loadProducts(1)">
+            <option :value="10">10</option><option :value="20">20</option>
+            <option :value="50">50</option><option :value="100">100</option>
+          </select>
+          <button :disabled="page<=1" @click="loadProducts(page-1)">上一页</button>
+          <span>{{ page }} / {{ Math.max(1, Math.ceil(total/pageSize)) }}</span>
+          <button :disabled="page>=Math.ceil(total/pageSize)"
+                  @click="loadProducts(page+1)">下一页</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 销售促销 ===== -->
+    <div v-show="tab==='promotions'">
+      <div class="panel">
+        <h3>促销活动 —— 售价低于原价的在售商品</h3>
+        <table>
+          <thead><tr>
+            <th>NO.</th><th>SKU</th><th>产品标题</th><th>图片</th><th>类型</th>
+            <th>折扣</th><th>原价</th><th>活动价</th><th>检测时间</th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="(p,i) in promotions" :key="p.id">
+              <td>{{ i+1 }}</td><td>{{ p.sku }}</td>
+              <td class="title-cell">{{ p.product_title }}</td>
+              <td><img :src="p.product_image" loading="lazy"
+                       referrerpolicy="no-referrer" /></td>
+              <td>{{ p.promotion_type }}</td>
+              <td>-{{ p.discount_percent }}%</td>
+              <td><span class="price-old">{{ money(p.original_price) }}</span></td>
+              <td><span class="price">{{ money(p.promotion_price) }}</span></td>
+              <td>{{ fmt(p.detected_time) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="empty" v-if="!promotions.length">
+          当前站点未检测到价格促销（原价 = 售价）。
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 采集任务 ===== -->
+    <div v-show="tab==='jobs'">
+      <div class="panel">
+        <h3>采集任务看板
+          <button class="btn" style="float:right" @click="trigger"
+                  :disabled="triggering">▶ 采集当前站点</button>
+          <button class="btn ghost" style="float:right;margin-right:8px"
+                  @click="loadJobs">⟳ 刷新</button>
+        </h3>
+        <table>
+          <thead><tr>
+            <th>#</th><th>站点</th><th>状态</th><th>商品数</th><th>新品</th>
+            <th>促销</th><th>成功率</th><th>耗时(s)</th><th>开始时间</th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="j in jobs" :key="j.id">
+              <td>{{ j.id }}</td><td>{{ j.site }}</td>
+              <td><span class="badge" :class="j.status">{{ j.status }}</span></td>
+              <td>{{ j.products_count }}</td><td>{{ j.new_count }}</td>
+              <td>{{ j.promotion_count }}</td>
+              <td>{{ j.success_rate!=null ? j.success_rate+'%' : '—' }}</td>
+              <td>{{ j.duration_sec ?? '—' }}</td>
+              <td>{{ fmt(j.started_at) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="empty" v-if="!jobs.length">暂无采集任务记录。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const { createApp } = Vue;
+const API = "";  // 同源
+createApp({
+  data() {
+    return {
+      sites: [], currentSite: "", tab: "overview", pTab: "all",
+      tabList: [
+        {k:"overview", label:"总体分析"},
+        {k:"products", label:"产品分析"},
+        {k:"promotions", label:"销售促销"},
+        {k:"jobs", label:"采集任务"},
+      ],
+      ov: { cards:{}, trends:[] },
+      products: [], total: 0, page: 1, pageSize: 20,
+      counts: { all:0, bestseller:0, new:0 },
+      search: "", minP: null, maxP: null,
+      promotions: [], jobs: [], triggering: false, chart: null,
+    };
+  },
+  computed: {
+    site() { return this.sites.find(s => s.site === this.currentSite); },
+  },
+  async mounted() {
+    await this.loadSites();
+    if (this.sites.length) {
+      this.currentSite = this.sites.find(s => s.sku_count > 0)?.site
+                         || this.sites[0].site;
+      await this.loadAll();
+    }
+  },
+  methods: {
+    num(v){ return (v ?? 0).toLocaleString(); },
+    money(v){ return v==null ? "—" : "$" + Number(v).toLocaleString(
+      undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); },
+    fmt(v){ return v ? v.replace("T"," ").slice(0,16) : "—"; },
+    attrText(a){ return a ? Object.entries(a).map(([k,x])=>k+":"+x).join(" / ") : "—"; },
+    statusText(s){ return {on_sale:"在售",out_of_stock:"缺货",
+      discontinued:"下架"}[s] || s; },
+    async loadSites(){
+      this.sites = await (await fetch(API+"/api/sites")).json();
+    },
+    async onSiteChange(){ await this.loadAll(); },
+    async loadAll(){
+      await Promise.all([this.loadOverview(), this.loadCounts(),
+        this.loadProducts(1), this.loadPromotions(), this.loadJobs()]);
+    },
+    async switchTab(k){
+      this.tab = k;
+      if (k==="overview") this.$nextTick(this.renderChart);
+    },
+    async loadOverview(){
+      this.ov = await (await fetch(
+        API+`/api/sites/${this.currentSite}/overview`)).json();
+      this.$nextTick(this.renderChart);
+    },
+    async loadCounts(){
+      for (const t of ["all","bestseller","new"]) {
+        const r = await (await fetch(API+`/api/products?site=${this.currentSite}`
+          +`&tab=${t}&page_size=1`)).json();
+        this.counts[t] = r.total;
+      }
+    },
+    setPTab(t){ this.pTab=t; this.loadProducts(1); },
+    async loadProducts(p){
+      this.page = p;
+      let u = API+`/api/products?site=${this.currentSite}&tab=${this.pTab}`
+        +`&page=${p}&page_size=${this.pageSize}`;
+      if (this.search) u += `&search=${encodeURIComponent(this.search)}`;
+      if (this.minP!=null) u += `&min_price=${this.minP}`;
+      if (this.maxP!=null) u += `&max_price=${this.maxP}`;
+      const r = await (await fetch(u)).json();
+      this.products = r.items; this.total = r.total;
+    },
+    async loadPromotions(){
+      const r = await (await fetch(
+        API+`/api/promotions?site=${this.currentSite}`)).json();
+      this.promotions = r.items;
+    },
+    async loadJobs(){
+      this.jobs = await (await fetch(API+"/api/jobs")).json();
+    },
+    async trigger(){
+      this.triggering = true;
+      await fetch(API+`/api/jobs/trigger?site=${this.currentSite}`,
+        {method:"POST"});
+      setTimeout(()=>{ this.triggering=false; this.loadJobs(); }, 1500);
+      alert("采集任务已加入后台队列，稍后点「刷新」查看结果。");
+    },
+    exportExcel(){
+      window.open(API+`/api/export/products?site=${this.currentSite}`,"_blank");
+    },
+    renderChart(){
+      const el = document.getElementById("chart");
+      if (!el || this.ov.trends.length===0) return;
+      if (!this.chart) this.chart = echarts.init(el);
+      const t = this.ov.trends;
+      this.chart.setOption({
+        tooltip:{trigger:"axis"},
+        legend:{data:["SKU数","新品","预估销量","预估营收"]},
+        grid:{left:50,right:50,top:40,bottom:40},
+        xAxis:{type:"category",data:t.map(x=>x.date)},
+        yAxis:[{type:"value"},{type:"value"}],
+        series:[
+          {name:"SKU数",type:"line",smooth:true,data:t.map(x=>x.sku_count)},
+          {name:"新品",type:"line",smooth:true,data:t.map(x=>x.new_product_count)},
+          {name:"预估销量",type:"line",smooth:true,data:t.map(x=>x.estimated_sales)},
+          {name:"预估营收",type:"line",smooth:true,yAxisIndex:1,
+           data:t.map(x=>x.estimated_revenue)},
+        ],
+      });
+    },
+  },
+}).mount("#app");
+</script>
+</body>
+</html>
