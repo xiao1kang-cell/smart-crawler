@@ -3,346 +3,323 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>SMART-CRAWLER // BENCHMARK FEED</title>
+<title>smart-crawler · 遨森标杆数据采集平台</title>
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <style>
   :root{
-    --bg:#0a0b0a; --panel:#0e110e; --panel2:#070807; --line:#1d241d;
-    --txt:#c6d0bf; --mut:#586055; --dim:#3a4138;
-    --red:#ff3b30; --amber:#ffb000; --green:#46ff9b; --cyan:#46d6ff;
+    --bg:#faf7f2; --card:#ffffff; --line:#efe9e0; --line2:#f3eee6;
+    --txt:#3a3340; --mut:#a89f93; --accent:#7c6ce0; --accent-sl:#efe9ff;
+    --green:#3d6b54; --green-bg:#e6f7ef; --red:#a8466b; --red-bg:#fde9ef;
   }
   *{margin:0;padding:0;box-sizing:border-box;}
   body{background:var(--bg);color:var(--txt);
-    font-family:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
-    font-size:13px;-webkit-font-smoothing:antialiased;}
-  /* 扫描线 + CRT 暗角 */
-  body::before{content:"";position:fixed;inset:0;z-index:9;pointer-events:none;
-    background:repeating-linear-gradient(0deg,
-      rgba(0,0,0,0) 0 2px, rgba(0,0,0,.22) 2px 4px);}
-  body::after{content:"";position:fixed;inset:0;z-index:9;pointer-events:none;
-    background:radial-gradient(120% 120% at 50% 50%,transparent 62%,rgba(0,0,0,.55));}
-  #app{position:relative;z-index:1;min-height:100vh;}
-  a{color:var(--cyan);text-decoration:none;}
-  ::selection{background:var(--red);color:#000;}
+    font-family:-apple-system,"PingFang SC","Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;}
+  #app{min-height:100vh;}
+  a{color:var(--accent);text-decoration:none;}
 
   /* ===== 登录 ===== */
   .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;}
-  .login-box{width:430px;border:1px solid var(--line);background:var(--panel);}
-  .login-box .bar{background:var(--red);color:#000;font-weight:700;padding:5px 10px;
-    letter-spacing:2px;font-size:11px;display:flex;justify-content:space-between;}
-  .login-body{padding:26px 26px 30px;}
-  .lg{color:var(--green);font-size:23px;font-weight:700;letter-spacing:3px;
-    text-shadow:0 0 14px rgba(70,255,155,.5);}
-  .lg i{color:var(--red);font-style:normal;}
-  .lg-sub{color:var(--mut);font-size:10px;letter-spacing:1.5px;
-    margin:7px 0 22px;}
-  .login-body .row{margin-bottom:12px;}
-  .login-body label{color:var(--mut);font-size:11px;letter-spacing:1px;}
-  .login-body label::before{content:"> ";color:var(--red);}
-  .login-body input{width:100%;margin-top:5px;padding:9px 11px;background:var(--panel2);
-    border:1px solid var(--line);color:var(--txt);font-family:inherit;font-size:13px;}
-  .login-body input:focus{outline:none;border-color:var(--green);
-    box-shadow:0 0 0 2px rgba(70,255,155,.12);}
-  .ln-btn{width:100%;margin-top:8px;padding:10px;border:1px solid var(--green);
-    background:transparent;color:var(--green);font-family:inherit;font-weight:700;
-    letter-spacing:3px;cursor:pointer;font-size:12px;}
-  .ln-btn:hover{background:var(--green);color:#000;}
-  .ln-err{color:var(--red);font-size:11px;margin-top:10px;min-height:15px;}
-  .ln-err::before{content:attr(data-on);}
+  .login-card{width:380px;background:var(--card);border-radius:20px;
+    padding:40px 36px;box-shadow:0 18px 50px rgba(124,108,224,.14);}
+  .login-card .logo{font-size:21px;font-weight:800;}
+  .login-card .logo span{color:var(--accent);}
+  .login-card .sub{color:var(--mut);font-size:12px;margin:7px 0 28px;}
+  .field{margin-bottom:14px;}
+  .field label{display:block;font-size:12px;color:var(--mut);margin-bottom:7px;}
+  .field input{width:100%;padding:12px 14px;background:#faf8f5;
+    border:1.5px solid var(--line);border-radius:12px;color:var(--txt);font-size:14px;}
+  .field input:focus{outline:none;border-color:var(--accent);background:#fff;}
+  .login-btn{width:100%;margin-top:10px;padding:12px;border:none;border-radius:12px;
+    background:var(--accent);color:#fff;font-weight:700;font-size:14px;cursor:pointer;}
+  .login-btn:hover{background:#6a5ad0;}
+  .login-btn:disabled{opacity:.5;cursor:not-allowed;}
+  .login-err{color:var(--red);font-size:12px;margin-top:12px;min-height:16px;}
+  .login-hint{color:#c8bfb2;font-size:11px;margin-top:20px;text-align:center;}
 
   /* ===== 顶栏 ===== */
-  .topbar{display:flex;align-items:center;gap:14px;padding:9px 16px;
-    border-bottom:1px solid var(--line);background:var(--panel2);flex-wrap:wrap;}
-  .brand{color:var(--red);font-weight:700;letter-spacing:2px;}
-  .brand b{color:var(--txt);}
-  select{background:var(--panel2);border:1px solid var(--line);color:var(--txt);
-    font-family:inherit;font-size:12px;padding:5px 8px;}
-  select:focus{outline:none;border-color:var(--green);}
-  .url{color:var(--mut);font-size:11px;}
-  .sp{flex:1;}
-  .stat{color:var(--mut);font-size:11px;}
-  .stat .on{color:var(--green);}
-  .live::before{content:"●";color:var(--green);margin-right:4px;
-    animation:bl 1.4s steps(1) infinite;}
-  @keyframes bl{50%{opacity:.25;}}
-  .btn{background:transparent;border:1px solid var(--line);color:var(--txt);
-    font-family:inherit;font-size:11px;padding:5px 10px;cursor:pointer;
-    letter-spacing:1px;}
-  .btn:hover{border-color:var(--red);color:var(--red);}
-  .btn.go:hover{border-color:var(--green);color:var(--green);}
-  .btn:disabled{opacity:.35;cursor:not-allowed;}
+  .topbar{background:var(--card);border-bottom:1px solid var(--line);
+    padding:13px 24px;display:flex;align-items:center;gap:15px;flex-wrap:wrap;}
+  .logo{font-size:16px;font-weight:800;}
+  .logo span{color:var(--accent);}
+  select{padding:8px 12px;border:1.5px solid var(--line);border-radius:10px;
+    font-size:13px;background:#faf8f5;color:var(--txt);}
+  select:focus{outline:none;border-color:var(--accent);}
+  .site-url{color:var(--mut);font-size:12px;}
+  .spacer{flex:1;}
+  .who{color:var(--mut);font-size:12px;}
+  .who b{color:var(--accent);}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+    background:#3dc98a;margin-right:5px;vertical-align:middle;}
+  .btn{padding:8px 14px;border:1.5px solid var(--line);border-radius:10px;
+    background:var(--card);color:var(--txt);font-size:12px;cursor:pointer;}
+  .btn:hover{border-color:var(--accent);color:var(--accent);}
+  .btn.solid{background:var(--accent);color:#fff;border-color:var(--accent);
+    font-weight:600;}
+  .btn.solid:hover{background:#6a5ad0;}
+  .btn:disabled{opacity:.5;cursor:not-allowed;}
 
   /* ===== Tab ===== */
-  .tabs{display:flex;border-bottom:1px solid var(--line);background:var(--panel2);
-    padding:0 10px;}
-  .tab{padding:9px 14px;cursor:pointer;color:var(--mut);font-size:12px;
-    letter-spacing:1px;border-bottom:2px solid transparent;}
-  .tab:hover{color:var(--txt);}
-  .tab.on{color:var(--red);border-bottom-color:var(--red);}
-  .tab.on::before{content:"▸ ";}
-  .main{padding:14px 16px;}
-
-  /* ===== 面板 ===== */
-  .panel{border:1px solid var(--line);background:var(--panel);margin-top:12px;}
-  .panel>.ph{border-bottom:1px solid var(--line);padding:5px 10px;
-    color:var(--mut);font-size:11px;letter-spacing:2px;background:var(--panel2);}
-  .panel>.ph b{color:var(--amber);}
-  .panel>.pb{padding:12px;}
-
-  /* 指标卡 —— 点导引样式 */
-  .cards{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;}
-  .cell{border:1px solid var(--line);background:var(--panel);padding:11px 12px;}
-  .cell .k{color:var(--mut);font-size:10px;letter-spacing:1px;}
-  .cell .v{font-size:23px;font-weight:700;margin-top:7px;color:var(--txt);
-    text-shadow:0 0 10px rgba(198,208,191,.25);}
-  .cell .v.red{color:var(--red);text-shadow:0 0 12px rgba(255,59,48,.4);}
-  .cell .v.grn{color:var(--green);text-shadow:0 0 12px rgba(70,255,155,.4);}
-  .cell .d{color:var(--dim);font-size:10px;margin-top:4px;}
-  #chart{width:100%;height:330px;}
-
-  /* 筛选 */
-  .filter{display:flex;gap:6px;align-items:center;margin-bottom:10px;flex-wrap:wrap;}
-  .seg{padding:5px 11px;border:1px solid var(--line);background:var(--panel2);
-    color:var(--mut);cursor:pointer;font-size:11px;}
-  .seg:hover{color:var(--txt);}
-  .seg.on{border-color:var(--red);color:var(--red);background:rgba(255,59,48,.08);}
-  input[type=text],input[type=number]{background:var(--panel2);border:1px solid var(--line);
-    color:var(--txt);font-family:inherit;font-size:12px;padding:5px 8px;}
-  input:focus{outline:none;border-color:var(--green);}
-
-  /* 表格 —— ASCII 风 */
-  table{width:100%;border-collapse:collapse;font-size:12px;}
-  th,td{padding:6px 9px;text-align:left;border-bottom:1px dotted var(--line);
-    white-space:nowrap;}
-  th{color:var(--amber);font-weight:400;font-size:10px;letter-spacing:1px;
+  .tabs{background:var(--card);padding:0 24px;display:flex;gap:6px;
     border-bottom:1px solid var(--line);}
-  td{color:var(--txt);}
-  tbody tr:hover{background:rgba(255,59,48,.05);}
-  td img{width:38px;height:38px;object-fit:cover;border:1px solid var(--line);
-    filter:saturate(.7) brightness(.92);}
-  .tag{padding:1px 5px;font-size:10px;border:1px solid;}
-  .tag.new{color:var(--cyan);border-color:var(--cyan);}
-  .tag.best{color:var(--amber);border-color:var(--amber);}
-  .st-on_sale,.st-success{color:var(--green);}
-  .st-out_of_stock,.st-failed{color:var(--red);}
-  .st-running,.st-pending,.st-queued{color:var(--cyan);}
-  .px{color:var(--red);font-weight:700;}
-  .px-o{color:var(--dim);text-decoration:line-through;}
-  .tc{max-width:300px;overflow:hidden;text-overflow:ellipsis;}
-  .tc a{color:var(--txt);}
-  .tc a:hover{color:var(--red);}
-  .pager{display:flex;gap:6px;align-items:center;justify-content:flex-end;
-    margin-top:10px;font-size:11px;color:var(--mut);}
-  .pager button{background:var(--panel2);border:1px solid var(--line);
-    color:var(--txt);font-family:inherit;cursor:pointer;padding:3px 8px;}
-  .pager button:disabled{opacity:.3;}
-  .empty{text-align:center;color:var(--dim);padding:34px;font-size:12px;}
-  .empty::before{content:"// ";}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .tab{padding:13px 18px;cursor:pointer;font-size:14px;color:var(--mut);
+    border-bottom:2.5px solid transparent;}
+  .tab:hover{color:var(--txt);}
+  .tab.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:700;}
+  .main{padding:22px 24px;}
+
+  /* ===== 指标卡（粉彩）===== */
+  .cards{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;}
+  .card{border-radius:16px;padding:18px;}
+  .card .label{font-size:12px;opacity:.75;}
+  .card .value{font-size:27px;font-weight:800;margin-top:9px;}
+  .card .sub{font-size:11px;opacity:.6;margin-top:5px;}
+  .c0{background:#eef0ff;color:#4a4866;}
+  .c1{background:#e6f7ef;color:#3d6b54;}
+  .c2{background:#fdeede;color:#a06f33;}
+  .c3{background:#fde9ef;color:#a8466b;}
+  .c4{background:#e4f1fb;color:#3b6f93;}
+  .c5{background:#fbf3da;color:#8a7320;}
+  .panel{background:var(--card);border-radius:16px;padding:20px;margin-top:16px;
+    box-shadow:0 2px 14px rgba(124,108,224,.05);}
+  .panel h3{font-size:14px;margin-bottom:14px;}
+  .panel h3 small{color:var(--mut);font-weight:400;margin-left:6px;}
+  #chart{width:100%;height:350px;}
+
+  /* ===== 筛选 ===== */
+  .filterbar{display:flex;gap:9px;align-items:center;margin-bottom:15px;
+    flex-wrap:wrap;}
+  .pill{padding:7px 15px;border-radius:20px;background:#f3eee6;cursor:pointer;
+    font-size:13px;color:var(--mut);}
+  .pill:hover{color:var(--txt);}
+  .pill.active{background:var(--accent-sl);color:var(--accent);font-weight:700;}
+  input[type=text],input[type=number]{padding:7px 12px;background:#faf8f5;
+    border:1.5px solid var(--line);border-radius:10px;font-size:13px;color:var(--txt);}
+  input:focus{outline:none;border-color:var(--accent);}
+
+  /* ===== 表格 ===== */
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{padding:10px 11px;text-align:left;border-bottom:1px solid var(--line2);
+    vertical-align:middle;}
+  th{color:var(--mut);font-weight:600;font-size:12px;white-space:nowrap;}
+  tbody tr{border-radius:8px;}
+  tbody tr:hover{background:#faf8f5;}
+  td img{width:46px;height:46px;object-fit:cover;border-radius:10px;
+    background:#f3eee6;}
+  .badge{padding:3px 9px;border-radius:8px;font-size:11px;font-weight:600;}
+  .badge.new{background:#e4f1fb;color:#3b6f93;}
+  .badge.best{background:#fbf3da;color:#8a7320;}
+  .badge.on_sale,.badge.success{background:var(--green-bg);color:var(--green);}
+  .badge.out_of_stock,.badge.failed{background:var(--red-bg);color:var(--red);}
+  .badge.running,.badge.pending,.badge.queued{background:#e4f1fb;color:#3b6f93;}
+  .price{color:var(--accent);font-weight:700;}
+  .price-old{color:#c8bfb2;text-decoration:line-through;font-size:12px;}
+  .title-cell{max-width:300px;}
+  .title-cell a{color:var(--txt);}
+  .title-cell a:hover{color:var(--accent);}
+  .pager{display:flex;gap:7px;align-items:center;margin-top:15px;
+    justify-content:flex-end;font-size:13px;color:var(--mut);}
+  .pager button{padding:5px 12px;border:1.5px solid var(--line);border-radius:9px;
+    background:var(--card);cursor:pointer;color:var(--txt);}
+  .pager button:disabled{opacity:.4;cursor:not-allowed;}
+  .empty{text-align:center;color:#c8bfb2;padding:42px;font-size:13px;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
 </style>
 </head>
 <body>
 <div id="app">
 
-  <!-- ========== AUTH ========== -->
+  <!-- ========== 登录 ========== -->
   <div v-if="!token" class="login-wrap">
-    <div class="login-box">
-      <div class="bar"><span>SMART-CRAWLER // AUTH</span><span>SECURE</span></div>
-      <div class="login-body">
-<div class="lg">▮ SMART<i>-</i>CRAWLER</div>
-        <div class="lg-sub">// BENCHMARK INTELLIGENCE FEED — AOSOM · v0.1</div>
-        <div class="row"><label>OPERATOR</label>
-          <input type="text" v-model="loginForm.username"
-                 @keyup.enter="doLogin" placeholder="username" autofocus /></div>
-        <div class="row"><label>PASSKEY</label>
-          <input type="password" v-model="loginForm.password"
-                 @keyup.enter="doLogin" placeholder="••••••" /></div>
-        <button class="ln-btn" @click="doLogin" :disabled="logging">
-          {{ logging ? 'AUTHENTICATING…' : '[ ENTER ]' }}</button>
-        <div class="ln-err">{{ loginErr }}</div>
-      </div>
+    <div class="login-card">
+      <div class="logo">🕸 smart<span>·</span>crawler</div>
+      <div class="sub">遨森标杆数据采集平台</div>
+      <div class="field"><label>账号</label>
+        <input type="text" v-model="loginForm.username" @keyup.enter="doLogin"
+               placeholder="请输入账号" autofocus /></div>
+      <div class="field"><label>密码</label>
+        <input type="password" v-model="loginForm.password" @keyup.enter="doLogin"
+               placeholder="请输入密码" /></div>
+      <button class="login-btn" @click="doLogin" :disabled="logging">
+        {{ logging ? '登录中…' : '登 录' }}</button>
+      <div class="login-err">{{ loginErr }}</div>
+      <div class="login-hint">Aosom 竞品情报 · 授权访问</div>
     </div>
   </div>
 
-  <!-- ========== CONSOLE ========== -->
+  <!-- ========== 主体 ========== -->
   <template v-else>
   <div class="topbar">
-    <span class="brand">▮ SMART<b>-</b>CRAWLER</span>
+    <div class="logo">🕸 smart<span>·</span>crawler</div>
     <select v-model="currentSite" @change="loadAll">
       <option v-for="s in sites" :key="s.site" :value="s.site">
-        {{ s.brand }}/{{ s.country }}{{ s.sku_count? ' ['+s.sku_count+']':'' }}
+        {{ s.brand }} · {{ s.country }}{{ s.sku_count? '（'+s.sku_count+'）':'' }}
       </option>
     </select>
-    <span class="url" v-if="site">{{ site.url }}</span>
-    <div class="sp"></div>
-    <span class="stat live">OP: <span class="on">{{ user.display_name }}</span></span>
-    <span class="stat" v-if="site && site.last_crawled">SYNC {{ fmt(site.last_crawled) }}</span>
-    <button class="btn go" @click="exportExcel">[ EXPORT ]</button>
-    <button class="btn" @click="logout">[ LOGOUT ]</button>
+    <span class="site-url" v-if="site">{{ site.url }}</span>
+    <div class="spacer"></div>
+    <span class="who"><span class="dot"></span>{{ user.display_name }}</span>
+    <span class="who" v-if="site && site.last_crawled">更新 {{ fmt(site.last_crawled) }}</span>
+    <button class="btn" @click="exportExcel">⬇ 导出 Excel</button>
+    <button class="btn" @click="logout">退出</button>
   </div>
 
   <div class="tabs">
     <div v-for="t in tabList" :key="t.k" class="tab"
-         :class="{on:tab===t.k}" @click="switchTab(t.k)">{{ t.label }}</div>
+         :class="{active:tab===t.k}" @click="switchTab(t.k)">{{ t.label }}</div>
   </div>
 
   <div class="main">
-    <!-- OVERVIEW -->
+    <!-- 总体分析 -->
     <div v-show="tab==='overview'">
       <div class="cards">
-        <div class="cell"><div class="k">SKU // 在售</div>
-          <div class="v">{{ num(ov.cards.sku_count) }}</div>
-          <div class="d">total live SKU</div></div>
-        <div class="cell"><div class="k">NEW // 新增</div>
-          <div class="v">{{ num(ov.cards.new_product_count) }}</div>
-          <div class="d">new arrivals</div></div>
-        <div class="cell"><div class="k">SALES // 30D</div>
-          <div class="v grn">{{ num(ov.cards.thirty_day_sales) }}</div>
-          <div class="d">est · review delta</div></div>
-        <div class="cell"><div class="k">REV // 30D</div>
-          <div class="v grn">{{ money(ov.cards.thirty_day_revenue) }}</div>
-          <div class="d">est · sales×price</div></div>
-        <div class="cell"><div class="k">TRAFFIC // 30D</div>
-          <div class="v">--</div><div class="d">3rd-party feed</div></div>
-        <div class="cell"><div class="k">CVR // 30D</div>
-          <div class="v">--</div><div class="d">3rd-party feed</div></div>
+        <div class="card c0"><div class="label">在售 SKU</div>
+          <div class="value">{{ num(ov.cards.sku_count) }}</div>
+          <div class="sub">站点全部在售 SKU</div></div>
+        <div class="card c1"><div class="label">新增产品</div>
+          <div class="value">{{ num(ov.cards.new_product_count) }}</div>
+          <div class="sub">New Arrivals</div></div>
+        <div class="card c2"><div class="label">30 天销量</div>
+          <div class="value">{{ num(ov.cards.thirty_day_sales) }}</div>
+          <div class="sub">评论增量倒推 · 预估</div></div>
+        <div class="card c3"><div class="label">30 天收入</div>
+          <div class="value">{{ money(ov.cards.thirty_day_revenue) }}</div>
+          <div class="sub">销量 × 售价 · 预估</div></div>
+        <div class="card c4"><div class="label">30 天流量</div>
+          <div class="value">—</div>
+          <div class="sub">需第三方数据接入</div></div>
+        <div class="card c5"><div class="label">转化率</div>
+          <div class="value">—</div>
+          <div class="sub">需第三方数据接入</div></div>
       </div>
       <div class="panel">
-        <div class="ph">[ <b>TREND</b> ] SKU / NEW / EST.SALES / EST.REVENUE</div>
-        <div class="pb">
-          <div id="chart"></div>
-          <div class="empty" v-if="ov.trends.length<=1">
-            trend requires multi-day capture · {{ ov.trends.length }} day(s) on record</div>
-        </div>
+        <h3>趋势分析 <small>SKU 数 / 新品 / 预估销量 / 预估营收</small></h3>
+        <div id="chart"></div>
+        <div class="empty" v-if="ov.trends.length<=1">
+          趋势图需多日采集数据积累 · 当前 {{ ov.trends.length }} 个采集日</div>
       </div>
     </div>
 
-    <!-- PRODUCTS -->
+    <!-- 产品分析 -->
     <div v-show="tab==='products'">
       <div class="panel">
-        <div class="ph">[ <b>PRODUCT ANALYSIS</b> ]</div>
-        <div class="pb">
-          <div class="filter">
-            <span class="seg" :class="{on:pTab==='all'}" @click="setPTab('all')">
-              ALL [{{ counts.all }}]</span>
-            <span class="seg" :class="{on:pTab==='bestseller'}"
-              @click="setPTab('bestseller')">BEST [{{ counts.bestseller }}]</span>
-            <span class="seg" :class="{on:pTab==='new'}" @click="setPTab('new')">
-              NEW [{{ counts.new }}]</span>
-            <input type="text" v-model="search" placeholder="grep title/sku"
-              @keyup.enter="loadProducts(1)" style="width:180px" />
-            <input type="number" v-model.number="minP" placeholder="min$" style="width:66px"/>
-            <input type="number" v-model.number="maxP" placeholder="max$" style="width:66px"/>
-            <button class="btn go" @click="loadProducts(1)">[ RUN ]</button>
-          </div>
-          <table>
-            <thead><tr>
-              <th>#</th><th>IMG</th><th>TITLE</th><th>SKU</th><th>ATTR</th>
-              <th>FLAG</th><th>SALE</th><th>ORIG</th><th>30D.S</th><th>30D.R</th>
-              <th>RATE</th><th>RVW</th><th>STATUS</th><th>CATEGORY</th>
-            </tr></thead>
-            <tbody>
-              <tr v-for="(p,i) in products" :key="p.id">
-                <td>{{ (page-1)*pageSize+i+1 }}</td>
-                <td><img :src="p.image" loading="lazy" referrerpolicy="no-referrer"/></td>
-                <td class="tc"><a :href="p.product_url" target="_blank">{{ p.title }}</a></td>
-                <td>{{ p.sku }}</td>
-                <td>{{ attrText(p.attributes) }}</td>
-                <td><span v-if="p.label" class="tag"
-                  :class="p.is_new?'new':'best'">{{ p.label }}</span></td>
-                <td><span class="px">{{ money(p.sale_price) }}</span></td>
-                <td><span v-if="p.original_price>p.sale_price" class="px-o">
-                  {{ money(p.original_price) }}</span></td>
-                <td>{{ p.thirty_day_sales ?? '·' }}</td>
-                <td>{{ p.thirty_day_revenue?money(p.thirty_day_revenue):'·' }}</td>
-                <td>{{ p.ratings ?? '·' }}</td>
-                <td>{{ p.review_count ?? '·' }}</td>
-                <td :class="'st-'+p.status">{{ statusText(p.status) }}</td>
-                <td>{{ p.category_path || '·' }}</td>
-              </tr>
-            </tbody>
-          </table>
-          <div class="empty" v-if="!products.length">no data · capture site first</div>
-          <div class="pager">
-            <span>{{ total }} rows</span>
-            <select v-model.number="pageSize" @change="loadProducts(1)">
-              <option :value="20">20</option><option :value="50">50</option>
-              <option :value="100">100</option></select>
-            <button :disabled="page<=1" @click="loadProducts(page-1)">[ PREV ]</button>
-            <span>{{ page }}/{{ Math.max(1,Math.ceil(total/pageSize)) }}</span>
-            <button :disabled="page>=Math.ceil(total/pageSize)"
-              @click="loadProducts(page+1)">[ NEXT ]</button>
-          </div>
+        <div class="filterbar">
+          <span class="pill" :class="{active:pTab==='all'}" @click="setPTab('all')">
+            所有产品 {{ counts.all }}</span>
+          <span class="pill" :class="{active:pTab==='bestseller'}"
+            @click="setPTab('bestseller')">畅销 {{ counts.bestseller }}</span>
+          <span class="pill" :class="{active:pTab==='new'}" @click="setPTab('new')">
+            最新 {{ counts.new }}</span>
+          <input type="text" v-model="search" placeholder="搜索标题 / SKU"
+            @keyup.enter="loadProducts(1)" style="width:190px" />
+          <input type="number" v-model.number="minP" placeholder="最低价" style="width:78px"/>
+          <input type="number" v-model.number="maxP" placeholder="最高价" style="width:78px"/>
+          <button class="btn solid" @click="loadProducts(1)">筛选</button>
+        </div>
+        <table>
+          <thead><tr>
+            <th>#</th><th>图片</th><th>产品标题</th><th>SKU</th><th>属性</th>
+            <th>标签</th><th>售价</th><th>原价</th><th>30天销量</th><th>30天营收</th>
+            <th>评分</th><th>评论</th><th>状态</th><th>品类</th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="(p,i) in products" :key="p.id">
+              <td>{{ (page-1)*pageSize+i+1 }}</td>
+              <td><img :src="p.image" loading="lazy" referrerpolicy="no-referrer"/></td>
+              <td class="title-cell"><a :href="p.product_url" target="_blank">
+                {{ p.title }}</a></td>
+              <td>{{ p.sku }}</td>
+              <td>{{ attrText(p.attributes) }}</td>
+              <td><span v-if="p.label" class="badge"
+                :class="p.is_new?'new':'best'">{{ p.label }}</span></td>
+              <td><span class="price">{{ money(p.sale_price) }}</span></td>
+              <td><span v-if="p.original_price>p.sale_price" class="price-old">
+                {{ money(p.original_price) }}</span></td>
+              <td>{{ p.thirty_day_sales ?? '—' }}</td>
+              <td>{{ p.thirty_day_revenue?money(p.thirty_day_revenue):'—' }}</td>
+              <td>{{ p.ratings ?? '—' }}</td>
+              <td>{{ p.review_count ?? '—' }}</td>
+              <td><span class="badge" :class="p.status">{{ statusText(p.status) }}</span></td>
+              <td>{{ p.category_path || '—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="empty" v-if="!products.length">暂无数据 · 请先采集该站点</div>
+        <div class="pager">
+          <span>共 {{ total }} 条</span>
+          <select v-model.number="pageSize" @change="loadProducts(1)">
+            <option :value="20">20</option><option :value="50">50</option>
+            <option :value="100">100</option></select>
+          <button :disabled="page<=1" @click="loadProducts(page-1)">‹ 上一页</button>
+          <span>{{ page }} / {{ Math.max(1,Math.ceil(total/pageSize)) }}</span>
+          <button :disabled="page>=Math.ceil(total/pageSize)"
+            @click="loadProducts(page+1)">下一页 ›</button>
         </div>
       </div>
     </div>
 
-    <!-- PROMOTIONS -->
+    <!-- 销售促销 -->
     <div v-show="tab==='promotions'">
       <div class="panel">
-        <div class="ph">[ <b>PROMOTION FEED</b> ] sale_price &lt; original_price</div>
-        <div class="pb">
-          <table>
-            <thead><tr>
-              <th>#</th><th>SKU</th><th>TITLE</th><th>IMG</th><th>TYPE</th>
-              <th>DISC</th><th>ORIG</th><th>PROMO</th><th>DETECTED</th>
-            </tr></thead>
-            <tbody>
-              <tr v-for="(p,i) in promotions" :key="p.id">
-                <td>{{ i+1 }}</td><td>{{ p.sku }}</td>
-                <td class="tc">{{ p.product_title }}</td>
-                <td><img :src="p.product_image" loading="lazy"
-                  referrerpolicy="no-referrer"/></td>
-                <td>{{ p.promotion_type }}</td>
-                <td><span class="tag best">-{{ p.discount_percent }}%</span></td>
-                <td><span class="px-o">{{ money(p.original_price) }}</span></td>
-                <td><span class="px">{{ money(p.promotion_price) }}</span></td>
-                <td>{{ fmt(p.detected_time) }}</td>
-              </tr>
-            </tbody>
-          </table>
-          <div class="empty" v-if="!promotions.length">no price promotion detected</div>
-        </div>
+        <h3>促销活动 <small>售价低于原价的在售商品</small></h3>
+        <table>
+          <thead><tr>
+            <th>#</th><th>SKU</th><th>产品标题</th><th>图片</th><th>类型</th>
+            <th>折扣</th><th>原价</th><th>活动价</th><th>检测时间</th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="(p,i) in promotions" :key="p.id">
+              <td>{{ i+1 }}</td><td>{{ p.sku }}</td>
+              <td class="title-cell">{{ p.product_title }}</td>
+              <td><img :src="p.product_image" loading="lazy"
+                referrerpolicy="no-referrer"/></td>
+              <td>{{ p.promotion_type }}</td>
+              <td><span class="badge best">-{{ p.discount_percent }}%</span></td>
+              <td><span class="price-old">{{ money(p.original_price) }}</span></td>
+              <td><span class="price">{{ money(p.promotion_price) }}</span></td>
+              <td>{{ fmt(p.detected_time) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="empty" v-if="!promotions.length">当前站点未检测到价格促销</div>
       </div>
     </div>
 
-    <!-- JOBS -->
+    <!-- 采集任务 -->
     <div v-show="tab==='jobs'">
       <div class="grid2">
-        <div class="cell"><div class="k">SITES // 已配置</div>
-          <div class="v">{{ sites.length }}</div>
-          <div class="d">9 brands · 12 countries</div></div>
-        <div class="cell"><div class="k">PROXY POOL</div>
-          <div class="v">{{ proxy.residential||0 }}+{{ proxy.datacenter||0 }}</div>
-          <div class="d">residential + datacenter</div></div>
+        <div class="card c0"><div class="label">已配置站点</div>
+          <div class="value">{{ sites.length }}</div>
+          <div class="sub">9 品牌 · 12 国</div></div>
+        <div class="card c1"><div class="label">代理池</div>
+          <div class="value">{{ proxy.residential||0 }}+{{ proxy.datacenter||0 }}</div>
+          <div class="sub">住宅 + 数据中心 IP</div></div>
       </div>
       <div class="panel">
-        <div class="ph">[ <b>CRAWL QUEUE</b> ] task board
-          <button class="btn go" style="float:right" @click="trigger"
-            :disabled="triggering">[ ▸ CAPTURE ]</button>
-          <button class="btn" style="float:right;margin-right:6px"
-            @click="loadJobs">[ ⟳ ]</button></div>
-        <div class="pb">
-          <table>
-            <thead><tr>
-              <th>JOB</th><th>SITE</th><th>STATUS</th><th>ITEMS</th><th>NEW</th>
-              <th>PROMO</th><th>RATE</th><th>SEC</th><th>STARTED</th>
-            </tr></thead>
-            <tbody>
-              <tr v-for="j in jobs" :key="j.id">
-                <td>{{ j.id }}</td><td>{{ j.site }}</td>
-                <td :class="'st-'+j.status">[{{ j.status }}]</td>
-                <td>{{ j.products_count }}</td><td>{{ j.new_count }}</td>
-                <td>{{ j.promotion_count }}</td>
-                <td>{{ j.success_rate!=null?j.success_rate+'%':'·' }}</td>
-                <td>{{ j.duration_sec ?? '·' }}</td>
-                <td>{{ fmt(j.started_at) }}</td>
-              </tr>
-            </tbody>
-          </table>
-          <div class="empty" v-if="!jobs.length">queue empty</div>
-        </div>
+        <h3>采集任务看板
+          <button class="btn solid" style="float:right" @click="trigger"
+            :disabled="triggering">▶ 采集当前站点</button>
+          <button class="btn" style="float:right;margin-right:8px"
+            @click="loadJobs">⟳ 刷新</button></h3>
+        <table>
+          <thead><tr>
+            <th>#</th><th>站点</th><th>状态</th><th>商品数</th><th>新品</th>
+            <th>促销</th><th>成功率</th><th>耗时(s)</th><th>开始时间</th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="j in jobs" :key="j.id">
+              <td>{{ j.id }}</td><td>{{ j.site }}</td>
+              <td><span class="badge" :class="j.status">{{ j.status }}</span></td>
+              <td>{{ j.products_count }}</td><td>{{ j.new_count }}</td>
+              <td>{{ j.promotion_count }}</td>
+              <td>{{ j.success_rate!=null?j.success_rate+'%':'—' }}</td>
+              <td>{{ j.duration_sec ?? '—' }}</td>
+              <td>{{ fmt(j.started_at) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="empty" v-if="!jobs.length">暂无采集任务记录</div>
       </div>
     </div>
   </div>
@@ -357,8 +334,8 @@ createApp({
     user: JSON.parse(localStorage.getItem("sc_user")||"{}"),
     loginForm:{username:"",password:""}, logging:false, loginErr:"",
     sites:[], currentSite:"", tab:"overview", pTab:"all",
-    tabList:[{k:"overview",label:"OVERVIEW"},{k:"products",label:"PRODUCTS"},
-      {k:"promotions",label:"PROMOTIONS"},{k:"jobs",label:"QUEUE"}],
+    tabList:[{k:"overview",label:"总体分析"},{k:"products",label:"产品分析"},
+      {k:"promotions",label:"销售促销"},{k:"jobs",label:"采集任务"}],
     ov:{cards:{},trends:[]}, products:[], total:0, page:1, pageSize:20,
     counts:{all:0,bestseller:0,new:0}, search:"", minP:null, maxP:null,
     promotions:[], jobs:[], proxy:{}, triggering:false, chart:null,
@@ -367,17 +344,17 @@ createApp({
   async mounted(){ if(this.token) await this.boot(); },
   methods:{
     num(v){return (v??0).toLocaleString();},
-    money(v){return v==null?"·":"$"+Number(v).toLocaleString(undefined,
+    money(v){return v==null?"—":"$"+Number(v).toLocaleString(undefined,
       {minimumFractionDigits:2,maximumFractionDigits:2});},
-    fmt(v){return v?v.replace("T"," ").slice(0,16):"·";},
-    attrText(a){return a?Object.entries(a).map(([k,x])=>k+":"+x).join("/"):"·";},
-    statusText(s){return{on_sale:"ON_SALE",out_of_stock:"OOS",
-      discontinued:"DISC"}[s]||s;},
+    fmt(v){return v?v.replace("T"," ").slice(0,16):"—";},
+    attrText(a){return a?Object.entries(a).map(([k,x])=>k+":"+x).join(" / "):"—";},
+    statusText(s){return{on_sale:"在售",out_of_stock:"缺货",
+      discontinued:"下架"}[s]||s;},
     async api(path,opts){
       const o=opts||{}; o.headers=Object.assign(
         {"Authorization":"Bearer "+this.token},o.headers||{});
       const r=await fetch(path,o);
-      if(r.status===401){ this.logout(); throw new Error("session expired"); }
+      if(r.status===401){ this.logout(); throw new Error("登录已过期"); }
       return r.json();
     },
     async doLogin(){
@@ -386,13 +363,13 @@ createApp({
         const r=await fetch("/api/login",{method:"POST",
           headers:{"Content-Type":"application/json"},
           body:JSON.stringify(this.loginForm)});
-        if(!r.ok){ this.loginErr="ACCESS DENIED — invalid credentials"; return; }
+        if(!r.ok){ this.loginErr="账号或密码错误"; return; }
         const d=await r.json();
         this.token=d.token; this.user={display_name:d.display_name,role:d.role};
         localStorage.setItem("sc_token",d.token);
         localStorage.setItem("sc_user",JSON.stringify(this.user));
         await this.boot();
-      }catch(e){ this.loginErr="ERR — "+e.message; }
+      }catch(e){ this.loginErr="登录失败："+e.message; }
       finally{ this.logging=false; }
     },
     logout(){ this.token=""; localStorage.removeItem("sc_token");
@@ -442,7 +419,7 @@ createApp({
       this.triggering=true;
       await this.api(`/api/jobs/trigger?site=${this.currentSite}`,{method:"POST"});
       setTimeout(()=>{ this.triggering=false; this.loadJobs(); },1500);
-      alert("CAPTURE QUEUED — refresh queue to monitor.");
+      alert("采集任务已加入后台队列，稍后点「刷新」查看结果。");
     },
     exportExcel(){
       window.open(`/api/export/products?site=${this.currentSite}`+
@@ -455,28 +432,27 @@ createApp({
       const t=this.ov.trends;
       this.chart.setOption({
         backgroundColor:"transparent",
-        textStyle:{fontFamily:"ui-monospace,Menlo,monospace",color:"#586055"},
-        tooltip:{trigger:"axis",backgroundColor:"#0e110e",borderColor:"#1d241d",
-          textStyle:{color:"#c6d0bf",fontFamily:"monospace"}},
-        legend:{data:["SKU","NEW","EST.SALES","EST.REV"],
-          textStyle:{color:"#586055",fontFamily:"monospace"}},
-        grid:{left:52,right:52,top:38,bottom:32},
+        textStyle:{color:"#a89f93"},
+        tooltip:{trigger:"axis",backgroundColor:"#fff",borderColor:"#efe9e0",
+          textStyle:{color:"#3a3340"}},
+        legend:{data:["SKU数","新品","预估销量","预估营收"],
+          textStyle:{color:"#a89f93"}},
+        grid:{left:52,right:52,top:42,bottom:34},
         xAxis:{type:"category",data:t.map(x=>x.date),
-          axisLine:{lineStyle:{color:"#1d241d"}},axisLabel:{color:"#586055"},
-          axisTick:{show:false}},
-        yAxis:[{type:"value",splitLine:{lineStyle:{color:"#12161210",type:"dashed"}},
-          axisLabel:{color:"#586055"}},
-          {type:"value",splitLine:{show:false},axisLabel:{color:"#586055"}}],
-        color:["#46ff9b","#46d6ff","#ffb000","#ff3b30"],
+          axisLine:{lineStyle:{color:"#efe9e0"}},axisLabel:{color:"#a89f93"}},
+        yAxis:[{type:"value",splitLine:{lineStyle:{color:"#f3eee6"}},
+          axisLabel:{color:"#a89f93"}},
+          {type:"value",splitLine:{show:false},axisLabel:{color:"#a89f93"}}],
+        color:["#7c6ce0","#3dc98a","#e0a04a","#d76b8f"],
         series:[
-          {name:"SKU",type:"line",step:"end",symbol:"none",
+          {name:"SKU数",type:"line",smooth:true,symbol:"circle",symbolSize:6,
             data:t.map(x=>x.sku_count)},
-          {name:"NEW",type:"line",step:"end",symbol:"none",
+          {name:"新品",type:"line",smooth:true,symbol:"circle",symbolSize:6,
             data:t.map(x=>x.new_product_count)},
-          {name:"EST.SALES",type:"line",step:"end",symbol:"none",
+          {name:"预估销量",type:"line",smooth:true,symbol:"circle",symbolSize:6,
             data:t.map(x=>x.estimated_sales)},
-          {name:"EST.REV",type:"line",step:"end",symbol:"none",yAxisIndex:1,
-            data:t.map(x=>x.estimated_revenue)},
+          {name:"预估营收",type:"line",smooth:true,symbol:"circle",symbolSize:6,
+            yAxisIndex:1,data:t.map(x=>x.estimated_revenue)},
         ],
       });
     },

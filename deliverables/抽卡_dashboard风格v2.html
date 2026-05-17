@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>抽卡 · smart-crawler dashboard 风格 v2</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#16171a;color:#e8e8ea;
+    font-family:-apple-system,"PingFang SC","Segoe UI",sans-serif;padding:34px;}
+  h1{font-size:18px;font-weight:700;}
+  .sub{color:#8a8a92;font-size:13px;margin:6px 0 26px;}
+  .sub b{color:#7cc8ff;}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:22px;max-width:1500px;}
+  .opt{border-radius:12px;overflow:hidden;border:1px solid #2a2b30;}
+  .opt-h{padding:10px 16px;font-size:13px;font-weight:700;display:flex;
+    justify-content:space-between;align-items:center;}
+  .opt-h .tag{font-size:11px;font-weight:500;opacity:.7;}
+  .demo{padding:0;}
+  /* generic mini-dash bits */
+  .d-top{display:flex;align-items:center;gap:10px;padding:11px 15px;}
+  .d-logo{font-weight:800;font-size:13px;}
+  .d-pill{font-size:10px;padding:3px 8px;border-radius:20px;}
+  .d-tabs{display:flex;gap:16px;padding:0 15px 10px;font-size:11px;}
+  .d-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;padding:13px 15px;}
+  .d-card{border-radius:9px;padding:11px 12px;}
+  .d-k{font-size:9px;letter-spacing:.4px;text-transform:uppercase;opacity:.6;}
+  .d-v{font-size:21px;font-weight:800;margin-top:6px;}
+  .d-row{display:flex;gap:10px;align-items:center;padding:7px 15px;font-size:11px;}
+  .d-row .nm{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+  .d-chip{font-size:9px;padding:2px 7px;border-radius:5px;}
+  .note{padding:11px 16px;font-size:12px;line-height:1.6;}
+  .note b{font-size:13px;}
+</style>
+</head>
+<body>
+  <h1>▣ smart-crawler · dashboard 风格抽卡 v2</h1>
+  <div class="sub">终端风已弃。4 个全新方向，真实样式预览 —— 看完告诉我选 <b>A / B / C / D</b>（也可说"再换一批"）</div>
+  <div class="grid">
+
+    <!-- A 浅色简洁 SaaS -->
+    <div class="opt" style="border-color:#e3e6ea;">
+      <div class="opt-h" style="background:#2563eb;color:#fff;">
+        <span>A · 浅色简洁 SaaS</span><span class="tag">Linear / Stripe 风</span></div>
+      <div class="demo" style="background:#f6f7f9;">
+        <div class="d-top" style="background:#fff;border-bottom:1px solid #ebedf0;">
+          <span class="d-logo" style="color:#0f172a;">◆ smart-crawler</span>
+          <span class="d-pill" style="background:#eef2ff;color:#2563eb;">SONGMICS · US</span>
+          <span style="flex:1;"></span>
+          <span style="font-size:10px;color:#94a3b8;">导出 · aosen</span></div>
+        <div class="d-tabs" style="background:#fff;border-bottom:1px solid #ebedf0;padding-top:9px;">
+          <span style="color:#2563eb;font-weight:700;border-bottom:2px solid #2563eb;padding-bottom:8px;">总体分析</span>
+          <span style="color:#64748b;">产品分析</span><span style="color:#64748b;">销售促销</span><span style="color:#64748b;">采集任务</span></div>
+        <div class="d-cards">
+          <div class="d-card" style="background:#fff;border:1px solid #ebedf0;">
+            <div class="d-k" style="color:#94a3b8;">在售 SKU</div>
+            <div class="d-v" style="color:#0f172a;">4,153</div></div>
+          <div class="d-card" style="background:#fff;border:1px solid #ebedf0;">
+            <div class="d-k" style="color:#94a3b8;">新增产品</div>
+            <div class="d-v" style="color:#0f172a;">150</div></div>
+          <div class="d-card" style="background:#fff;border:1px solid #ebedf0;">
+            <div class="d-k" style="color:#94a3b8;">30天销量</div>
+            <div class="d-v" style="color:#16a34a;">8,420</div></div>
+          <div class="d-card" style="background:#fff;border:1px solid #ebedf0;">
+            <div class="d-k" style="color:#94a3b8;">促销</div>
+            <div class="d-v" style="color:#2563eb;">925</div></div></div>
+        <div class="d-row" style="border-top:1px solid #ebedf0;background:#fff;">
+          <span style="color:#94a3b8;">01</span>
+          <span class="nm" style="color:#0f172a;">SONGMICS TV Stand for TVs up to 70"</span>
+          <span style="color:#0f172a;font-weight:700;">$119.99</span>
+          <span class="d-chip" style="background:#dcfce7;color:#16a34a;">在售</span></div>
+        <div class="d-row" style="border-top:1px solid #f1f3f5;background:#fff;">
+          <span style="color:#94a3b8;">02</span>
+          <span class="nm" style="color:#0f172a;">Laundry Hamper 2-Section</span>
+          <span style="color:#0f172a;font-weight:700;">$21.99</span>
+          <span class="d-chip" style="background:#dcfce7;color:#16a34a;">在售</span></div>
+        <div class="note" style="background:#fff;color:#64748b;border-top:1px solid #ebedf0;">
+          <b style="color:#0f172a;">白底 · 蓝调 · 大留白</b> —— 干净、专业、像成熟 SaaS 产品。给业务方/老板看最稳。</div>
+      </div>
+    </div>
+
+    <!-- B 暗色精致 -->
+    <div class="opt" style="border-color:#26262b;">
+      <div class="opt-h" style="background:#6366f1;color:#fff;">
+        <span>B · 暗色精致</span><span class="tag">Vercel / Linear Dark 风</span></div>
+      <div class="demo" style="background:#0c0c0e;">
+        <div class="d-top" style="background:#111113;border-bottom:1px solid #1f1f23;">
+          <span class="d-logo" style="color:#fafafa;">◆ smart-crawler</span>
+          <span class="d-pill" style="background:#1e1b3a;color:#a5a3f5;">SONGMICS · US</span>
+          <span style="flex:1;"></span>
+          <span style="font-size:10px;color:#5a5a63;">导出 · aosen</span></div>
+        <div class="d-tabs" style="background:#111113;border-bottom:1px solid #1f1f23;padding-top:9px;">
+          <span style="color:#a5a3f5;font-weight:700;border-bottom:2px solid #6366f1;padding-bottom:8px;">总体分析</span>
+          <span style="color:#6e6e76;">产品分析</span><span style="color:#6e6e76;">销售促销</span><span style="color:#6e6e76;">采集任务</span></div>
+        <div class="d-cards">
+          <div class="d-card" style="background:#161618;border:1px solid #232328;">
+            <div class="d-k" style="color:#6e6e76;">在售 SKU</div>
+            <div class="d-v" style="color:#fafafa;">4,153</div></div>
+          <div class="d-card" style="background:#161618;border:1px solid #232328;">
+            <div class="d-k" style="color:#6e6e76;">新增产品</div>
+            <div class="d-v" style="color:#fafafa;">150</div></div>
+          <div class="d-card" style="background:#161618;border:1px solid #232328;">
+            <div class="d-k" style="color:#6e6e76;">30天销量</div>
+            <div class="d-v" style="color:#4ade80;">8,420</div></div>
+          <div class="d-card" style="background:#161618;border:1px solid #232328;">
+            <div class="d-k" style="color:#6e6e76;">促销</div>
+            <div class="d-v" style="color:#a5a3f5;">925</div></div></div>
+        <div class="d-row" style="border-top:1px solid #1f1f23;">
+          <span style="color:#5a5a63;">01</span>
+          <span class="nm" style="color:#e8e8ea;">SONGMICS TV Stand for TVs up to 70"</span>
+          <span style="color:#fafafa;font-weight:700;">$119.99</span>
+          <span class="d-chip" style="background:#10301c;color:#4ade80;">在售</span></div>
+        <div class="d-row" style="border-top:1px solid #1a1a1d;">
+          <span style="color:#5a5a63;">02</span>
+          <span class="nm" style="color:#e8e8ea;">Laundry Hamper 2-Section</span>
+          <span style="color:#fafafa;font-weight:700;">$21.99</span>
+          <span class="d-chip" style="background:#10301c;color:#4ade80;">在售</span></div>
+        <div class="note" style="background:#111113;color:#8a8a92;border-top:1px solid #1f1f23;">
+          <b style="color:#fafafa;">深灰 · 克制 · 靛蓝点缀</b> —— 暗色但不刺眼、不像黑客终端，精致现代。开发/数据团队都耐看。</div>
+      </div>
+    </div>
+
+    <!-- C 商务深蓝 -->
+    <div class="opt" style="border-color:#1c2b44;">
+      <div class="opt-h" style="background:#0a2540;color:#fff;">
+        <span>C · 商务深蓝</span><span class="tag">企业级 · 沉稳高级</span></div>
+      <div class="demo" style="background:#0a1828;">
+        <div class="d-top" style="background:#0a2540;border-bottom:1px solid #16395e;">
+          <span class="d-logo" style="color:#fff;">◆ smart-crawler</span>
+          <span class="d-pill" style="background:#16395e;color:#ffc94d;">SONGMICS · US</span>
+          <span style="flex:1;"></span>
+          <span style="font-size:10px;color:#7d93ab;">导出 · aosen</span></div>
+        <div class="d-tabs" style="background:#0a2540;border-bottom:1px solid #16395e;padding-top:9px;">
+          <span style="color:#ffc94d;font-weight:700;border-bottom:2px solid #ffc94d;padding-bottom:8px;">总体分析</span>
+          <span style="color:#7d93ab;">产品分析</span><span style="color:#7d93ab;">销售促销</span><span style="color:#7d93ab;">采集任务</span></div>
+        <div class="d-cards">
+          <div class="d-card" style="background:#0e2138;border:1px solid #16395e;">
+            <div class="d-k" style="color:#7d93ab;">在售 SKU</div>
+            <div class="d-v" style="color:#fff;">4,153</div></div>
+          <div class="d-card" style="background:#0e2138;border:1px solid #16395e;">
+            <div class="d-k" style="color:#7d93ab;">新增产品</div>
+            <div class="d-v" style="color:#fff;">150</div></div>
+          <div class="d-card" style="background:#0e2138;border:1px solid #16395e;">
+            <div class="d-k" style="color:#7d93ab;">30天销量</div>
+            <div class="d-v" style="color:#3ddc97;">8,420</div></div>
+          <div class="d-card" style="background:#0e2138;border:1px solid #16395e;">
+            <div class="d-k" style="color:#7d93ab;">促销</div>
+            <div class="d-v" style="color:#ffc94d;">925</div></div></div>
+        <div class="d-row" style="border-top:1px solid #16395e;">
+          <span style="color:#5d7691;">01</span>
+          <span class="nm" style="color:#e8eef4;">SONGMICS TV Stand for TVs up to 70"</span>
+          <span style="color:#fff;font-weight:700;">$119.99</span>
+          <span class="d-chip" style="background:#0d3a2a;color:#3ddc97;">在售</span></div>
+        <div class="d-row" style="border-top:1px solid #102a44;">
+          <span style="color:#5d7691;">02</span>
+          <span class="nm" style="color:#e8eef4;">Laundry Hamper 2-Section</span>
+          <span style="color:#fff;font-weight:700;">$21.99</span>
+          <span class="d-chip" style="background:#0d3a2a;color:#3ddc97;">在售</span></div>
+        <div class="note" style="background:#0a2540;color:#7d93ab;border-top:1px solid #16395e;">
+          <b style="color:#fff;">海军蓝 · 金色点缀</b> —— 金融/咨询报告那种沉稳高级感，权威、可信，适合对外汇报。</div>
+      </div>
+    </div>
+
+    <!-- D 柔和马卡龙 -->
+    <div class="opt" style="border-color:#ece6dd;">
+      <div class="opt-h" style="background:#7c6ce0;color:#fff;">
+        <span>D · 柔和马卡龙</span><span class="tag">暖白 · 亲和 · 圆润</span></div>
+      <div class="demo" style="background:#faf7f2;">
+        <div class="d-top" style="background:#fff;border-bottom:1px solid #efe9e0;">
+          <span class="d-logo" style="color:#3a3340;">🕸 smart-crawler</span>
+          <span class="d-pill" style="background:#efe9ff;color:#7c6ce0;">SONGMICS · US</span>
+          <span style="flex:1;"></span>
+          <span style="font-size:10px;color:#a89f93;">导出 · aosen</span></div>
+        <div class="d-tabs" style="background:#fff;border-bottom:1px solid #efe9e0;padding-top:9px;">
+          <span style="color:#7c6ce0;font-weight:700;border-bottom:2px solid #7c6ce0;padding-bottom:8px;">总体分析</span>
+          <span style="color:#a89f93;">产品分析</span><span style="color:#a89f93;">销售促销</span><span style="color:#a89f93;">采集任务</span></div>
+        <div class="d-cards">
+          <div class="d-card" style="background:#eef0ff;">
+            <div class="d-k" style="color:#8b8ab0;">在售 SKU</div>
+            <div class="d-v" style="color:#4a4866;">4,153</div></div>
+          <div class="d-card" style="background:#e6f7ef;">
+            <div class="d-k" style="color:#7faf95;">新增产品</div>
+            <div class="d-v" style="color:#3d6b54;">150</div></div>
+          <div class="d-card" style="background:#fdeede;">
+            <div class="d-k" style="color:#c0a079;">30天销量</div>
+            <div class="d-v" style="color:#a06f33;">8,420</div></div>
+          <div class="d-card" style="background:#fde9ef;">
+            <div class="d-k" style="color:#c08aa0;">促销</div>
+            <div class="d-v" style="color:#a8466b;">925</div></div></div>
+        <div class="d-row" style="border-top:1px solid #efe9e0;background:#fff;">
+          <span style="color:#a89f93;">01</span>
+          <span class="nm" style="color:#3a3340;">SONGMICS TV Stand for TVs up to 70"</span>
+          <span style="color:#3a3340;font-weight:700;">$119.99</span>
+          <span class="d-chip" style="background:#e6f7ef;color:#3d6b54;">在售</span></div>
+        <div class="d-row" style="border-top:1px solid #f3eee6;background:#fff;">
+          <span style="color:#a89f93;">02</span>
+          <span class="nm" style="color:#3a3340;">Laundry Hamper 2-Section</span>
+          <span style="color:#3a3340;font-weight:700;">$21.99</span>
+          <span class="d-chip" style="background:#e6f7ef;color:#3d6b54;">在售</span></div>
+        <div class="note" style="background:#fff;color:#a89f93;border-top:1px solid #efe9e0;">
+          <b style="color:#3a3340;">暖白底 · 粉彩卡片 · 圆润</b> —— 柔和亲和，不冰冷，看久舒服。运营日常用的话最讨喜。</div>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>

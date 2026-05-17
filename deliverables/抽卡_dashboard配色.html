@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>抽卡 · smart-crawler dashboard 配色</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#000;color:#c6d0bf;
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;padding:30px;}
+  body::before{content:"";position:fixed;inset:0;z-index:9;pointer-events:none;
+    background:repeating-linear-gradient(0deg,rgba(0,0,0,0) 0 2px,
+      rgba(0,0,0,.22) 2px 4px);}
+  h1{font-size:16px;letter-spacing:2px;margin-bottom:4px;}
+  .sub{color:#5a6356;font-size:12px;margin-bottom:22px;}
+  .sub b{color:#46ff9b;}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;max-width:1280px;}
+  .variant{border:1px solid #1d241d;background:#0a0b0a;}
+  .vhead{padding:7px 12px;font-size:11px;letter-spacing:2px;
+    display:flex;justify-content:space-between;font-weight:700;}
+  .vbody{padding:14px;}
+  /* mini dashboard */
+  .mini{border:1px solid #1d241d;background:#0e110e;font-size:10px;}
+  .mtop{display:flex;align-items:center;gap:8px;padding:6px 9px;
+    border-bottom:1px solid #1d241d;background:#070807;}
+  .mtabs{display:flex;gap:10px;padding:5px 9px;border-bottom:1px solid #1d241d;
+    background:#070807;color:#586055;font-size:9px;}
+  .mcards{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:9px;}
+  .mc{border:1px solid #1d241d;padding:7px 8px;}
+  .mc .k{color:#586055;font-size:8px;}
+  .mc .v{font-size:17px;font-weight:700;margin-top:3px;}
+  .mrow{display:flex;gap:8px;padding:4px 9px;border-top:1px dotted #1d241d;
+    font-size:9px;align-items:center;}
+  .mrow .px{font-weight:700;}
+  .swatch{display:flex;gap:5px;margin-top:10px;}
+  .sw{width:26px;height:14px;border:1px solid #1d241d;}
+  .pick{margin-top:9px;color:#586055;font-size:11px;}
+  .pick b{font-size:13px;}
+</style>
+</head>
+<body>
+  <h1>▮ SMART-CRAWLER // DASHBOARD 配色抽卡</h1>
+  <div class="sub">4 个终端风配色变体 —— 看完在对话里告诉我选 <b>A / B / C / D</b></div>
+  <div class="grid">
+
+    <!-- A 危险红（当前） -->
+    <div class="variant" style="border-color:#ff3b30;">
+      <div class="vhead" style="background:#ff3b30;color:#000;">
+        <span>A · 危险红 HAZARD-RED</span><span>当前</span></div>
+      <div class="vbody">
+        <div class="mini">
+          <div class="mtop"><span style="color:#ff3b30;font-weight:700;">▮ SMART-CRAWLER</span>
+            <span style="color:#586055;">SONGMICS/US</span></div>
+          <div class="mtabs"><span style="color:#ff3b30;">▸OVERVIEW</span><span>PRODUCTS</span><span>PROMOTIONS</span><span>QUEUE</span></div>
+          <div class="mcards">
+            <div class="mc"><div class="k">SKU</div><div class="v">4,153</div></div>
+            <div class="mc"><div class="k">SALES 30D</div><div class="v" style="color:#46ff9b;">8,420</div></div>
+            <div class="mc"><div class="k">PROMO</div><div class="v" style="color:#ff3b30;">925</div></div>
+          </div>
+          <div class="mrow"><span>01</span><span style="flex:1;">SONGMICS TV Stand…</span><span class="px" style="color:#ff3b30;">$119.99</span><span style="color:#46ff9b;">ON_SALE</span></div>
+          <div class="mrow"><span>02</span><span style="flex:1;">Laundry Hamper…</span><span class="px" style="color:#ff3b30;">$21.99</span><span style="color:#46ff9b;">ON_SALE</span></div>
+        </div>
+        <div class="swatch">
+          <div class="sw" style="background:#ff3b30;"></div>
+          <div class="sw" style="background:#46ff9b;"></div>
+          <div class="sw" style="background:#ffb000;"></div>
+          <div class="sw" style="background:#0a0b0a;"></div>
+        </div>
+        <div class="pick"><b>红</b> 主色 · 警戒/监控室感最强，攻击性强</div>
+      </div>
+    </div>
+
+    <!-- B CRT 琥珀 -->
+    <div class="variant" style="border-color:#ffb000;">
+      <div class="vhead" style="background:#ffb000;color:#000;">
+        <span>B · CRT 琥珀 AMBER</span><span>复古</span></div>
+      <div class="vbody">
+        <div class="mini">
+          <div class="mtop"><span style="color:#ffb000;font-weight:700;">▮ SMART-CRAWLER</span>
+            <span style="color:#586055;">SONGMICS/US</span></div>
+          <div class="mtabs"><span style="color:#ffb000;">▸OVERVIEW</span><span>PRODUCTS</span><span>PROMOTIONS</span><span>QUEUE</span></div>
+          <div class="mcards">
+            <div class="mc"><div class="k">SKU</div><div class="v" style="color:#ffd479;">4,153</div></div>
+            <div class="mc"><div class="k">SALES 30D</div><div class="v" style="color:#ffd479;">8,420</div></div>
+            <div class="mc"><div class="k">PROMO</div><div class="v" style="color:#ffb000;">925</div></div>
+          </div>
+          <div class="mrow"><span>01</span><span style="flex:1;color:#ffd479;">SONGMICS TV Stand…</span><span class="px" style="color:#ffb000;">$119.99</span><span style="color:#ffd479;">ON_SALE</span></div>
+          <div class="mrow"><span>02</span><span style="flex:1;color:#ffd479;">Laundry Hamper…</span><span class="px" style="color:#ffb000;">$21.99</span><span style="color:#ffd479;">ON_SALE</span></div>
+        </div>
+        <div class="swatch">
+          <div class="sw" style="background:#ffb000;"></div>
+          <div class="sw" style="background:#ffd479;"></div>
+          <div class="sw" style="background:#8a6a1f;"></div>
+          <div class="sw" style="background:#0a0b0a;"></div>
+        </div>
+        <div class="pick"><b>琥珀</b> 单色 · 经典 CRT 终端机，温暖、护眼、复古纯粹</div>
+      </div>
+    </div>
+
+    <!-- C 磷光绿 -->
+    <div class="variant" style="border-color:#46ff9b;">
+      <div class="vhead" style="background:#46ff9b;color:#000;">
+        <span>C · 磷光绿 PHOSPHOR</span><span>黑客</span></div>
+      <div class="vbody">
+        <div class="mini">
+          <div class="mtop"><span style="color:#46ff9b;font-weight:700;">▮ SMART-CRAWLER</span>
+            <span style="color:#586055;">SONGMICS/US</span></div>
+          <div class="mtabs"><span style="color:#46ff9b;">▸OVERVIEW</span><span>PRODUCTS</span><span>PROMOTIONS</span><span>QUEUE</span></div>
+          <div class="mcards">
+            <div class="mc"><div class="k">SKU</div><div class="v" style="color:#9affc8;">4,153</div></div>
+            <div class="mc"><div class="k">SALES 30D</div><div class="v" style="color:#46ff9b;">8,420</div></div>
+            <div class="mc"><div class="k">PROMO</div><div class="v" style="color:#46ff9b;">925</div></div>
+          </div>
+          <div class="mrow"><span>01</span><span style="flex:1;color:#9affc8;">SONGMICS TV Stand…</span><span class="px" style="color:#46ff9b;">$119.99</span><span style="color:#46ff9b;">ON_SALE</span></div>
+          <div class="mrow"><span>02</span><span style="flex:1;color:#9affc8;">Laundry Hamper…</span><span class="px" style="color:#46ff9b;">$21.99</span><span style="color:#46ff9b;">ON_SALE</span></div>
+        </div>
+        <div class="swatch">
+          <div class="sw" style="background:#46ff9b;"></div>
+          <div class="sw" style="background:#9affc8;"></div>
+          <div class="sw" style="background:#1f7a4d;"></div>
+          <div class="sw" style="background:#0a0b0a;"></div>
+        </div>
+        <div class="pick"><b>绿</b> 单色 · 最经典的黑客终端，The Matrix 感</div>
+      </div>
+    </div>
+
+    <!-- D 冰蓝 -->
+    <div class="variant" style="border-color:#46d6ff;">
+      <div class="vhead" style="background:#46d6ff;color:#000;">
+        <span>D · 冰蓝 ICE-CYAN</span><span>冷静</span></div>
+      <div class="vbody">
+        <div class="mini">
+          <div class="mtop"><span style="color:#46d6ff;font-weight:700;">▮ SMART-CRAWLER</span>
+            <span style="color:#586055;">SONGMICS/US</span></div>
+          <div class="mtabs"><span style="color:#46d6ff;">▸OVERVIEW</span><span>PRODUCTS</span><span>PROMOTIONS</span><span>QUEUE</span></div>
+          <div class="mcards">
+            <div class="mc"><div class="k">SKU</div><div class="v" style="color:#a6e9ff;">4,153</div></div>
+            <div class="mc"><div class="k">SALES 30D</div><div class="v" style="color:#46ff9b;">8,420</div></div>
+            <div class="mc"><div class="k">PROMO</div><div class="v" style="color:#46d6ff;">925</div></div>
+          </div>
+          <div class="mrow"><span>01</span><span style="flex:1;color:#a6e9ff;">SONGMICS TV Stand…</span><span class="px" style="color:#46d6ff;">$119.99</span><span style="color:#46ff9b;">ON_SALE</span></div>
+          <div class="mrow"><span>02</span><span style="flex:1;color:#a6e9ff;">Laundry Hamper…</span><span class="px" style="color:#46d6ff;">$21.99</span><span style="color:#46ff9b;">ON_SALE</span></div>
+        </div>
+        <div class="swatch">
+          <div class="sw" style="background:#46d6ff;"></div>
+          <div class="sw" style="background:#a6e9ff;"></div>
+          <div class="sw" style="background:#1f6a8a;"></div>
+          <div class="sw" style="background:#0a0b0a;"></div>
+        </div>
+        <div class="pick"><b>冰蓝</b> 主色 · 冷静、数据感，偏"指挥中心"而非"警戒"</div>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>

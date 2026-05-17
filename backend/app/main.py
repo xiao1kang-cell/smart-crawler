@@ -54,6 +54,12 @@ def health():
 
 
 @app.get("/")
+def home():
+    """产品主页 / 落地页 —— 面向 AI Agent 的数据采集引擎。"""
+    return FileResponse(FRONTEND_DIR / "home.html")
+
+
+@app.get("/app")
 def dashboard():
-    """3-Tab 数据看板。"""
+    """数据看板控制台。"""
     return FileResponse(FRONTEND_DIR / "index.html")
