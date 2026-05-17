@@ -13,7 +13,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import Category, PriceHistory, Product, Promotion, Site, Trend
+from ..models import (Category, PriceHistory, Product, Promotion, Review,
+                      Site, Trend)
 from .routes import require_user
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_user)],
@@ -166,6 +167,38 @@ def v1_trends(site: str, db: Session = Depends(get_db)):
         "estimated_sales": t.estimated_sales,
         "estimated_revenue": t.estimated_revenue,
     } for t in rows])
+
+
+@router.get("/reviews")
+def v1_reviews(site: str | None = None, platform: str | None = None,
+               min_rating: int | None = None, max_rating: int | None = None,
+               page: int = 1, page_size: int = Query(50, le=200),
+               db: Session = Depends(get_db)):
+    """口碑评论查询 —— 模块二。"""
+    q = db.query(Review)
+    if site:
+        q = q.filter(Review.site == site)
+    if platform:
+        q = q.filter(Review.platform == platform)
+    if min_rating is not None:
+        q = q.filter(Review.rating >= min_rating)
+    if max_rating is not None:
+        q = q.filter(Review.rating <= max_rating)
+    total = q.count()
+    rows = (q.order_by(Review.review_date.desc())
+            .offset((page - 1) * page_size).limit(page_size).all())
+    data = [{
+        "review_id": r.review_id, "platform": r.platform, "site": r.site,
+        "reviewer": {"name": r.reviewer_name, "country": r.reviewer_country},
+        "rating": r.rating, "title": r.title, "content": r.content,
+        "language": r.language,
+        "review_date": _iso(r.review_date),
+        "purchase_date": _iso(r.purchase_date),
+        "reply": {"content": r.reply_content, "date": _iso(r.reply_date)},
+        "is_verified": r.is_verified, "topics": r.review_topics or [],
+        "sentiment": r.sentiment, "sku": r.sku,
+    } for r in rows]
+    return _envelope(data, total, page, page_size)
 
 
 @router.get("/site/{site}")

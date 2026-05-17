@@ -68,7 +68,7 @@ sites:
   - {site: bcp_us, brand: BEST CHOICE PRODUCTS, country: US, url: "https://bestchoiceproducts.com/", platform: shopify, proxy_tier: none}
 
   # ========== VonHaus / VonShef（杜木 Domu, P2）— Magento ==========
-  - {site: vonhaus_uk, brand: VonHaus, country: UK, url: "https://www.vonhaus.com/", platform: generic, proxy_tier: none, product_match: ".html", max_products: 200}
+  - {site: vonhaus_uk, brand: VonHaus, country: UK, url: "https://www.vonhaus.com/", platform: vonhaus, proxy_tier: none, product_match: "/vh_en/", max_products: 200}
 
   # ========== Woltu（P2）— Shopware ==========
   - {site: woltu_de, brand: Woltu, country: DE, url: "https://www.woltu.eu/", platform: generic, proxy_tier: none, sitemap: "https://www.woltu.eu/sitemap.xml", product_match: "/p/", max_products: 200}

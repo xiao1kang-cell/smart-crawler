@@ -57,6 +57,10 @@ def main(argv=None) -> int:
     pe.add_argument("--out", required=True)
     pe.add_argument("--site")
 
+    pr = sub.add_parser("reviews", help="采集口碑评论（模块二）")
+    pr.add_argument("--site", help="单个评论渠道，如 aosom_us")
+    pr.add_argument("--platform", help="整个平台，如 trustpilot")
+
     args = parser.parse_args(argv)
     init_db()
 
@@ -81,6 +85,26 @@ def main(argv=None) -> int:
             return 0
         print("需指定 --site / --brand / --all", file=sys.stderr)
         return 2
+
+    if args.cmd == "reviews":
+        from .review_runner import run_review_channel, run_review_platform
+        if args.site:
+            results = [run_review_channel(args.site)]
+        elif args.platform:
+            results = run_review_platform(args.platform)
+        else:
+            print("需指定 --site 或 --platform", file=sys.stderr)
+            return 2
+        for r in results:
+            if r.get("error"):
+                print(f"✗ {r['site']}: {r['error']}")
+            else:
+                print(f"✓ {r['site']}（{r.get('platform')}）: "
+                      f"采集 {r.get('fetched',0)} / 新增 {r.get('inserted',0)} "
+                      f"/ 更新 {r.get('updated',0)}")
+                for n in r.get("notes", []):
+                    print(f"    {n}")
+        return 0
 
     if args.cmd == "export":
         s = SessionLocal()

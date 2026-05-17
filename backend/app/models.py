@@ -161,6 +161,37 @@ class User(Base):
     last_login = Column(DateTime)
 
 
+class Review(Base):
+    """口碑评论 —— 模块二，规格 §4.2.1 的 20 字段。(platform, review_id) 唯一。"""
+
+    __tablename__ = "reviews"
+    __table_args__ = (UniqueConstraint("platform", "review_id",
+                                       name="uq_platform_review"),)
+
+    id = Column(Integer, primary_key=True)
+    review_id = Column(String, index=True)          # 评论唯一标识
+    platform = Column(String, index=True)           # trustpilot / google_map / ...
+    site = Column(String, index=True)               # aosom_us / aosom_de ...
+    reviewer_name = Column(String)
+    reviewer_country = Column(String)
+    rating = Column(Integer)                        # 1-5 星
+    title = Column(String)
+    content = Column(Text)
+    language = Column(String)
+    review_date = Column(DateTime, index=True)
+    purchase_date = Column(DateTime)
+    reply_content = Column(Text)                    # 商家回复
+    reply_date = Column(DateTime)
+    sku = Column(String)                            # 关联 SKU（部分平台提供）
+    product_url = Column(String)
+    order_id = Column(String)
+    is_verified = Column(Boolean)
+    review_topics = Column(JSON)                    # 平台话题标签
+    sentiment = Column(String)                      # NLP：positive/negative/neutral
+    category_l1 = Column(String)                    # NLP：一级分类
+    collected_time = Column(DateTime, default=datetime.utcnow)
+
+
 class ApiKey(Base):
     """API 密钥 —— 供 AI Agent / 外部系统通过密钥调用数据输出 API。"""
 

@@ -1,0 +1,21 @@
+# 口碑评论渠道配置 —— 模块二（规格 §3.3）
+# Aosom 自身在各评论平台的页面。platform 决定用哪个采集器。
+
+channels:
+  # ===== Trustpilot（9 渠道）=====
+  - {site: aosom_us, platform: trustpilot, country: US, domain: www.aosom.com,  host: www.trustpilot.com}
+  - {site: aosom_ca, platform: trustpilot, country: CA, domain: aosom.ca,       host: www.trustpilot.com}
+  - {site: aosom_uk, platform: trustpilot, country: UK, domain: aosom.co.uk,    host: www.trustpilot.com}
+  - {site: aosom_ie, platform: trustpilot, country: IE, domain: www.aosom.ie,   host: ie.trustpilot.com}
+  - {site: aosom_de, platform: trustpilot, country: DE, domain: aosom.de,       host: www.trustpilot.com}
+  - {site: aosom_fr, platform: trustpilot, country: FR, domain: aosom.fr,       host: www.trustpilot.com}
+  - {site: aosom_it, platform: trustpilot, country: IT, domain: aosom.it,       host: www.trustpilot.com}
+  - {site: aosom_es, platform: trustpilot, country: ES, domain: aosom.es,       host: www.trustpilot.com}
+  - {site: aosom_pt, platform: trustpilot, country: PT, domain: aosom.pt,       host: www.trustpilot.com}
+
+  # ===== 其余平台（采集器待补，配置先占位）=====
+  # Google Map / TrustedShop / Reviews.io / Opiniones Verificadas / Trusted.ro
+  # 见 docs/风控策略评估.md 与规格 §3.3
+
+settings:
+  max_pages: 10          # 每渠道最多翻页数（每页 ~20 条）
