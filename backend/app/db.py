@@ -20,7 +20,13 @@ IS_SQLITE = DATABASE_URL.startswith("sqlite")
 
 _kwargs: dict = {"future": True, "pool_pre_ping": True}
 if IS_SQLITE:
+    # SQLite：同一连接跨线程复用（后台采集线程 + Web 线程）
     _kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    # PostgreSQL：连接池 + 回收，避免长连接被 DB / 网络中断
+    _kwargs["pool_size"] = 5
+    _kwargs["max_overflow"] = 10
+    _kwargs["pool_recycle"] = 1800
 
 engine = create_engine(DATABASE_URL, **_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
@@ -49,9 +55,11 @@ def init_db() -> None:
 
 
 def _migrate() -> None:
-    """幂等迁移：给已存在的表补上模型新增的列（SQLite ADD COLUMN）。"""
-    if not IS_SQLITE:
-        return
+    """幂等迁移：给已存在的表补上模型新增的列。
+
+    用 ANSI `ALTER TABLE ADD COLUMN`，SQLite / PostgreSQL 均兼容；
+    靠 inspect 判重避免重复加列。
+    """
     from sqlalchemy import inspect, text
 
     insp = inspect(engine)
