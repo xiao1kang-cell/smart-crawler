@@ -20,16 +20,17 @@ sites:
   - {site: songmics_es, brand: SONGMICS, country: ES, url: "https://www.songmics.es/", platform: shopify, proxy_tier: none}
   - {site: songmics_fr, brand: SONGMICS, country: FR, url: "https://www.songmics.fr/", platform: shopify, proxy_tier: none}
 
-  # ========== Costway（豪雅, P0）— Vue3 SPA / JSON API ==========
+  # ========== Costway（豪雅, P0）==========
+  # 美/加站 = Vue3 SPA + /api JSON；欧洲站 = Magento（/api 返回 404，走 sitemap）
   - {site: costway_us, brand: Costway, country: US, url: "https://www.costway.com/", platform: vue_spa, proxy_tier: none}
-  - {site: costway_uk, brand: Costway, country: UK, url: "https://www.costway.co.uk/", platform: vue_spa, proxy_tier: none}
   - {site: costway_ca, brand: Costway, country: CA, url: "https://www.costway.ca/", platform: vue_spa, proxy_tier: none}
-  - {site: costway_de, brand: Costway, country: DE, url: "https://www.costway.de/", platform: vue_spa, proxy_tier: none}
-  - {site: costway_it, brand: Costway, country: IT, url: "https://www.costway.it/", platform: vue_spa, proxy_tier: none}
-  - {site: costway_es, brand: Costway, country: ES, url: "https://www.costway.es/", platform: vue_spa, proxy_tier: none}
-  - {site: costway_fr, brand: Costway, country: FR, url: "https://www.costway.fr/", platform: vue_spa, proxy_tier: none}
-  - {site: costway_nl, brand: Costway, country: NL, url: "https://nl.costway.com/", platform: vue_spa, proxy_tier: none}
-  - {site: costway_pl, brand: Costway, country: PL, url: "https://costway.pl/", platform: vue_spa, proxy_tier: none}
+  - {site: costway_uk, brand: Costway, country: UK, url: "https://www.costway.co.uk/", platform: magento, proxy_tier: none, max_products: 400}
+  - {site: costway_de, brand: Costway, country: DE, url: "https://www.costway.de/", platform: magento, proxy_tier: none, max_products: 400}
+  - {site: costway_it, brand: Costway, country: IT, url: "https://www.costway.it/", platform: magento, proxy_tier: none, max_products: 400}
+  - {site: costway_es, brand: Costway, country: ES, url: "https://www.costway.es/", platform: magento, proxy_tier: none, max_products: 400}
+  - {site: costway_fr, brand: Costway, country: FR, url: "https://www.costway.fr/", platform: magento, proxy_tier: none, max_products: 400}
+  - {site: costway_nl, brand: Costway, country: NL, url: "https://nl.costway.com/", platform: magento, proxy_tier: none, max_products: 400}
+  - {site: costway_pl, brand: Costway, country: PL, url: "https://costway.pl/", platform: magento, proxy_tier: none, max_products: 400}
 
   # ========== Homary（爆米科技, P0）— Nuxt SSR ==========
   - {site: homary_us, brand: Homary, country: US, url: "https://www.homary.com/", platform: nuxt, proxy_tier: none}
@@ -71,7 +72,7 @@ sites:
   - {site: bcp_us, brand: BEST CHOICE PRODUCTS, country: US, url: "https://bestchoiceproducts.com/", platform: shopify, proxy_tier: none}
 
   # ========== VonHaus / VonShef（杜木 Domu, P2）— Magento ==========
-  - {site: vonhaus_uk, brand: VonHaus, country: UK, url: "https://www.vonhaus.com/", platform: vonhaus, proxy_tier: none, product_match: "/vh_en/", max_products: 200}
+  - {site: vonhaus_uk, brand: VonHaus, country: UK, url: "https://www.vonhaus.com/", platform: magento, proxy_tier: none, product_match: "/vh_en/", max_products: 200}
 
   # ========== Woltu（P2）— Shopware ==========
   - {site: woltu_de, brand: Woltu, country: DE, url: "https://www.woltu.eu/", platform: generic, proxy_tier: none, sitemap: "https://www.woltu.eu/sitemap.xml", product_match: "/p/", max_products: 200}

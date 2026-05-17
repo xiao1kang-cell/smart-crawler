@@ -28,4 +28,7 @@ def get_crawler(site: Site) -> BaseCrawler:
     if platform == "vonhaus":
         from .vonhaus import VonHausCrawler
         return VonHausCrawler(site)
+    if platform == "magento":
+        from .magento import MagentoCrawler
+        return MagentoCrawler(site)
     raise ValueError(f"未知平台: {platform}")
