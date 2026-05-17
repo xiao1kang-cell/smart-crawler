@@ -34,6 +34,7 @@ def init_db() -> None:
 
     Base.metadata.create_all(engine)
     _seed_sites()
+    _seed_users()
 
 
 def _seed_sites() -> None:
@@ -55,6 +56,22 @@ def _seed_sites() -> None:
                     proxy_tier=cfg.get("proxy_tier", "none"),
                 )
             )
+
+
+def _seed_users() -> None:
+    """初始化默认账号：aosen / admin（首次运行时创建）。"""
+    from .auth import hash_password
+    from .models import User
+
+    with session_scope() as s:
+        if s.query(User).filter(User.username == "aosen").first():
+            return
+        s.add(User(
+            username="aosen",
+            password_hash=hash_password("admin"),
+            role="admin",
+            display_name="Aosom 管理员",
+        ))
 
 
 @contextmanager

@@ -1,0 +1,10 @@
+.venv/
+data/
+input/
+deliverables/
+research/
+*.log
+.git/
+__pycache__/
+*.pyc
+.DS_Store

@@ -147,6 +147,20 @@ class Trend(Base):
     conversion_rate = Column(Float)                  # 第三方数据，MVP 留空
 
 
+class User(Base):
+    """后台账号 —— 登录鉴权。"""
+
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String, unique=True, index=True)
+    password_hash = Column(String)
+    role = Column(String, default="admin")          # admin / viewer
+    display_name = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_login = Column(DateTime)
+
+
 class CrawlJob(Base):
     """采集任务 —— 任务看板 C-030。"""
 

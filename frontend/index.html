@@ -7,234 +7,308 @@
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-         background: #f0f2f5; color: #1f2329; }
-  #app { min-height: 100vh; }
-  /* 顶栏 */
-  .topbar { background: #fff; border-bottom: 1px solid #e5e6eb; padding: 12px 24px;
-            display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-  .logo { font-weight: 700; font-size: 17px; color: #165dff; }
-  .logo small { color: #86909c; font-weight: 400; font-size: 12px; }
-  select { padding: 6px 10px; border: 1px solid #c9cdd4; border-radius: 6px;
-           font-size: 13px; background: #fff; }
-  .site-url { color: #86909c; font-size: 12px; }
-  .spacer { flex: 1; }
-  .updated { color: #86909c; font-size: 12px; }
-  .btn { padding: 6px 14px; border: none; border-radius: 6px; cursor: pointer;
-         font-size: 13px; background: #165dff; color: #fff; }
-  .btn:hover { background: #0e42d2; }
-  .btn.ghost { background: #fff; color: #165dff; border: 1px solid #165dff; }
-  .btn:disabled { opacity: .5; cursor: not-allowed; }
-  /* tab */
-  .tabs { background: #fff; padding: 0 24px; display: flex; gap: 4px;
-          border-bottom: 1px solid #e5e6eb; }
-  .tab { padding: 13px 18px; cursor: pointer; font-size: 14px; color: #4e5969;
-         border-bottom: 2px solid transparent; }
-  .tab.active { color: #165dff; border-bottom-color: #165dff; font-weight: 600; }
-  .main { padding: 20px 24px; }
-  /* 指标卡 */
-  .cards { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; }
-  .card { background: #fff; border-radius: 10px; padding: 16px 18px;
-          box-shadow: 0 1px 3px rgba(0,0,0,.05); }
-  .card .label { color: #86909c; font-size: 12px; }
-  .card .value { font-size: 26px; font-weight: 700; margin-top: 8px; }
-  .card .sub { font-size: 11px; color: #c9cdd4; margin-top: 4px; }
-  .panel { background: #fff; border-radius: 10px; padding: 18px;
-           box-shadow: 0 1px 3px rgba(0,0,0,.05); margin-top: 16px; }
-  .panel h3 { font-size: 14px; margin-bottom: 12px; }
-  #chart { width: 100%; height: 360px; }
-  /* 筛选行 */
-  .filterbar { display: flex; gap: 8px; align-items: center; margin-bottom: 14px;
-               flex-wrap: wrap; }
-  .pill { padding: 6px 14px; border-radius: 16px; background: #f2f3f5;
-          cursor: pointer; font-size: 13px; color: #4e5969; }
-  .pill.active { background: #165dff; color: #fff; }
-  input[type=text], input[type=number] { padding: 6px 10px; border: 1px solid #c9cdd4;
-          border-radius: 6px; font-size: 13px; }
-  /* 表格 */
-  table { width: 100%; border-collapse: collapse; font-size: 13px; background: #fff; }
-  th, td { padding: 9px 10px; text-align: left; border-bottom: 1px solid #f0f2f5;
-           vertical-align: middle; }
-  th { color: #86909c; font-weight: 500; background: #fafbfc; white-space: nowrap; }
-  td img { width: 46px; height: 46px; object-fit: cover; border-radius: 6px;
-           background: #f2f3f5; }
-  .badge { padding: 2px 7px; border-radius: 4px; font-size: 11px; }
-  .badge.new { background: #e8f3ff; color: #165dff; }
-  .badge.best { background: #fff3e8; color: #ff7d00; }
-  .badge.on_sale { background: #e8ffea; color: #00b42a; }
-  .badge.out_of_stock { background: #ffece8; color: #f53f3f; }
-  .badge.success { background: #e8ffea; color: #00b42a; }
-  .badge.failed { background: #ffece8; color: #f53f3f; }
-  .badge.running { background: #e8f3ff; color: #165dff; }
-  .price { color: #f53f3f; font-weight: 600; }
-  .price-old { color: #c9cdd4; text-decoration: line-through; font-size: 12px; }
-  .pager { display: flex; gap: 6px; align-items: center; margin-top: 14px;
-           justify-content: flex-end; font-size: 13px; }
-  .pager button { padding: 4px 10px; border: 1px solid #c9cdd4; border-radius: 5px;
-                  background: #fff; cursor: pointer; }
-  .pager button:disabled { opacity: .4; cursor: not-allowed; }
-  .empty { text-align: center; color: #c9cdd4; padding: 40px; }
-  .title-cell { max-width: 320px; }
-  .title-cell a { color: #1f2329; text-decoration: none; }
-  .title-cell a:hover { color: #165dff; }
-  .link { color: #165dff; text-decoration: none; }
+  :root{
+    --bg:#0a0d12; --panel:#11161f; --panel2:#0d1117; --line:#1f2733;
+    --txt:#c9d4e0; --mut:#5b6878; --accent:#2ee6c5; --accent2:#38bdf8;
+    --green:#3ddc84; --red:#ff5d6c; --amber:#ffb454;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:-apple-system,"PingFang SC","Segoe UI",sans-serif;
+    background:var(--bg);color:var(--txt);-webkit-font-smoothing:antialiased;}
+  body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
+    background:
+      radial-gradient(620px circle at 12% 0%,rgba(46,230,197,.07),transparent 60%),
+      radial-gradient(680px circle at 92% 8%,rgba(56,189,248,.06),transparent 55%);}
+  #app{position:relative;z-index:1;min-height:100vh;}
+  .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;}
+  a{color:var(--accent2);text-decoration:none;}
+
+  /* ===== 登录 ===== */
+  .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;}
+  .login-card{width:380px;background:var(--panel);border:1px solid var(--line);
+    border-radius:14px;padding:38px 34px;box-shadow:0 24px 80px rgba(0,0,0,.6);}
+  .login-card .brand{font-size:22px;font-weight:700;letter-spacing:.5px;}
+  .login-card .brand b{color:var(--accent);}
+  .login-card .sub{color:var(--mut);font-size:12px;margin:6px 0 26px;}
+  .field{margin-bottom:14px;}
+  .field label{display:block;font-size:11px;color:var(--mut);margin-bottom:6px;
+    text-transform:uppercase;letter-spacing:1px;}
+  .field input{width:100%;padding:11px 13px;background:var(--panel2);
+    border:1px solid var(--line);border-radius:8px;color:var(--txt);font-size:14px;}
+  .field input:focus{outline:none;border-color:var(--accent);
+    box-shadow:0 0 0 3px rgba(46,230,197,.12);}
+  .login-btn{width:100%;margin-top:8px;padding:11px;border:none;border-radius:8px;
+    background:linear-gradient(120deg,var(--accent),var(--accent2));
+    color:#04121a;font-weight:700;font-size:14px;cursor:pointer;letter-spacing:.5px;}
+  .login-btn:hover{filter:brightness(1.08);}
+  .login-err{color:var(--red);font-size:12px;margin-top:12px;min-height:16px;}
+  .login-hint{color:var(--mut);font-size:11px;margin-top:18px;text-align:center;}
+
+  /* ===== 顶栏 ===== */
+  .topbar{display:flex;align-items:center;gap:16px;padding:13px 22px;
+    background:rgba(13,17,23,.85);border-bottom:1px solid var(--line);
+    backdrop-filter:blur(8px);flex-wrap:wrap;}
+  .logo{font-size:16px;font-weight:700;letter-spacing:.4px;}
+  .logo .sp{color:var(--accent);}
+  .logo small{color:var(--mut);font-weight:400;font-size:11px;margin-left:6px;}
+  select{padding:7px 11px;background:var(--panel);border:1px solid var(--line);
+    border-radius:7px;color:var(--txt);font-size:13px;}
+  select:focus{outline:none;border-color:var(--accent);}
+  .site-url{color:var(--mut);font-size:11px;}
+  .spacer{flex:1;}
+  .pulse{display:inline-block;width:7px;height:7px;border-radius:50%;
+    background:var(--green);box-shadow:0 0 8px var(--green);margin-right:5px;}
+  .updated{color:var(--mut);font-size:11px;}
+  .btn{padding:7px 13px;border:1px solid var(--line);border-radius:7px;
+    background:var(--panel);color:var(--txt);font-size:12px;cursor:pointer;}
+  .btn:hover{border-color:var(--accent);color:var(--accent);}
+  .btn.solid{background:linear-gradient(120deg,var(--accent),var(--accent2));
+    color:#04121a;font-weight:700;border:none;}
+  .btn:disabled{opacity:.4;cursor:not-allowed;}
+
+  /* ===== Tab ===== */
+  .tabs{display:flex;gap:2px;padding:0 22px;background:var(--panel2);
+    border-bottom:1px solid var(--line);}
+  .tab{padding:13px 18px;cursor:pointer;font-size:13px;color:var(--mut);
+    border-bottom:2px solid transparent;}
+  .tab:hover{color:var(--txt);}
+  .tab.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:600;}
+  .main{padding:20px 22px;}
+
+  /* ===== 指标卡 ===== */
+  .cards{display:grid;grid-template-columns:repeat(6,1fr);gap:13px;}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;
+    padding:15px 16px;position:relative;overflow:hidden;}
+  .card::after{content:"";position:absolute;left:0;top:0;width:100%;height:2px;
+    background:linear-gradient(90deg,var(--accent),transparent);opacity:.7;}
+  .card .label{color:var(--mut);font-size:11px;text-transform:uppercase;
+    letter-spacing:.8px;}
+  .card .value{font-size:25px;font-weight:700;margin-top:9px;}
+  .card .value.mono{letter-spacing:-.5px;}
+  .card .sub{font-size:10px;color:var(--mut);margin-top:5px;}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:11px;
+    padding:17px;margin-top:15px;}
+  .panel h3{font-size:13px;font-weight:600;margin-bottom:13px;color:var(--txt);}
+  .panel h3 .tag{color:var(--mut);font-weight:400;font-size:11px;}
+  #chart{width:100%;height:350px;}
+
+  /* ===== 筛选 ===== */
+  .filterbar{display:flex;gap:8px;align-items:center;margin-bottom:13px;flex-wrap:wrap;}
+  .pill{padding:6px 13px;border-radius:15px;background:var(--panel2);
+    border:1px solid var(--line);cursor:pointer;font-size:12px;color:var(--mut);}
+  .pill:hover{color:var(--txt);}
+  .pill.active{background:rgba(46,230,197,.13);color:var(--accent);
+    border-color:var(--accent);}
+  input[type=text],input[type=number]{padding:6px 10px;background:var(--panel2);
+    border:1px solid var(--line);border-radius:7px;font-size:12px;color:var(--txt);}
+  input:focus{outline:none;border-color:var(--accent);}
+
+  /* ===== 表格 ===== */
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  th,td{padding:9px 10px;text-align:left;border-bottom:1px solid var(--line);
+    vertical-align:middle;}
+  th{color:var(--mut);font-weight:500;font-size:11px;text-transform:uppercase;
+    letter-spacing:.5px;white-space:nowrap;}
+  tbody tr:hover{background:rgba(46,230,197,.04);}
+  td img{width:44px;height:44px;object-fit:cover;border-radius:6px;
+    background:var(--panel2);}
+  .badge{padding:2px 7px;border-radius:4px;font-size:10.5px;font-weight:600;}
+  .badge.new{background:rgba(56,189,248,.15);color:var(--accent2);}
+  .badge.best{background:rgba(255,180,84,.15);color:var(--amber);}
+  .badge.on_sale,.badge.success{background:rgba(61,220,132,.14);color:var(--green);}
+  .badge.out_of_stock,.badge.failed{background:rgba(255,93,108,.14);color:var(--red);}
+  .badge.running,.badge.queued{background:rgba(56,189,248,.14);color:var(--accent2);}
+  .price{color:var(--accent);font-weight:700;}
+  .price-old{color:var(--mut);text-decoration:line-through;font-size:11px;}
+  .title-cell{max-width:300px;}
+  .title-cell a{color:var(--txt);}
+  .title-cell a:hover{color:var(--accent);}
+  .pager{display:flex;gap:6px;align-items:center;margin-top:13px;
+    justify-content:flex-end;font-size:12px;color:var(--mut);}
+  .pager button{padding:4px 10px;border:1px solid var(--line);border-radius:5px;
+    background:var(--panel2);color:var(--txt);cursor:pointer;}
+  .pager button:disabled{opacity:.35;cursor:not-allowed;}
+  .empty{text-align:center;color:var(--mut);padding:38px;font-size:13px;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:13px;}
 </style>
 </head>
 <body>
 <div id="app">
-  <!-- 顶栏 -->
-  <div class="topbar">
-    <div class="logo">smart-crawler <small>遨森标杆数据采集平台</small></div>
-    <select v-model="currentSite" @change="onSiteChange">
-      <option v-for="s in sites" :key="s.site" :value="s.site">
-        {{ s.brand }} | {{ s.country }}
-      </option>
-    </select>
-    <span class="site-url" v-if="site">{{ site.url }}</span>
-    <div class="spacer"></div>
-    <span class="updated" v-if="site && site.last_crawled">
-      最后更新 {{ fmt(site.last_crawled) }}</span>
-    <span class="updated" v-else>未采集</span>
-    <button class="btn ghost" @click="exportExcel">⬇ 数据导出</button>
+
+  <!-- ========== 登录 ========== -->
+  <div v-if="!token" class="login-wrap">
+    <div class="login-card">
+      <div class="brand"><span class="sp">🕷</span> smart<b>·</b>crawler</div>
+      <div class="sub">遨森标杆数据采集平台 · Benchmark Intelligence</div>
+      <div class="field"><label>账号</label>
+        <input type="text" v-model="loginForm.username" @keyup.enter="doLogin"
+               placeholder="username" autofocus /></div>
+      <div class="field"><label>密码</label>
+        <input type="password" v-model="loginForm.password" @keyup.enter="doLogin"
+               placeholder="password" /></div>
+      <button class="login-btn" @click="doLogin" :disabled="logging">
+        {{ logging ? '登录中…' : '登 录' }}</button>
+      <div class="login-err">{{ loginErr }}</div>
+      <div class="login-hint">授权访问 · Aosom Competitive Intelligence</div>
+    </div>
   </div>
 
-  <!-- Tab -->
+  <!-- ========== 主体 ========== -->
+  <template v-else>
+  <div class="topbar">
+    <div class="logo"><span class="sp">🕷</span> smart-crawler
+      <small>BENCHMARK CRAWLER</small></div>
+    <select v-model="currentSite" @change="loadAll">
+      <option v-for="s in sites" :key="s.site" :value="s.site">
+        {{ s.brand }} · {{ s.country }}{{ s.sku_count? '  ('+s.sku_count+')':'' }}
+      </option>
+    </select>
+    <span class="site-url mono" v-if="site">{{ site.url }}</span>
+    <div class="spacer"></div>
+    <span class="updated"><span class="pulse"></span>{{ user.display_name }}</span>
+    <span class="updated mono" v-if="site && site.last_crawled">
+      ⟳ {{ fmt(site.last_crawled) }}</span>
+    <button class="btn" @click="exportExcel">⬇ 导出 Excel</button>
+    <button class="btn" @click="logout">退出</button>
+  </div>
+
   <div class="tabs">
     <div v-for="t in tabList" :key="t.k" class="tab"
-         :class="{active: tab===t.k}" @click="switchTab(t.k)">{{ t.label }}</div>
+         :class="{active:tab===t.k}" @click="switchTab(t.k)">{{ t.label }}</div>
   </div>
 
   <div class="main">
-    <!-- ===== 总体分析 ===== -->
+    <!-- 总体分析 -->
     <div v-show="tab==='overview'">
       <div class="cards">
         <div class="card"><div class="label">在售 SKU</div>
-          <div class="value">{{ num(ov.cards.sku_count) }}</div>
+          <div class="value mono">{{ num(ov.cards.sku_count) }}</div>
           <div class="sub">站点全部在售 SKU</div></div>
         <div class="card"><div class="label">新增产品</div>
-          <div class="value">{{ num(ov.cards.new_product_count) }}</div>
+          <div class="value mono">{{ num(ov.cards.new_product_count) }}</div>
           <div class="sub">New Arrivals</div></div>
         <div class="card"><div class="label">30 天销量</div>
-          <div class="value">{{ num(ov.cards.thirty_day_sales) }}</div>
+          <div class="value mono">{{ num(ov.cards.thirty_day_sales) }}</div>
           <div class="sub">评论增量倒推 · 预估</div></div>
         <div class="card"><div class="label">30 天收入</div>
-          <div class="value">{{ money(ov.cards.thirty_day_revenue) }}</div>
+          <div class="value mono">{{ money(ov.cards.thirty_day_revenue) }}</div>
           <div class="sub">销量 × 售价 · 预估</div></div>
         <div class="card"><div class="label">30 天流量</div>
-          <div class="value">—</div>
+          <div class="value mono">—</div>
           <div class="sub">需第三方数据接入</div></div>
-        <div class="card"><div class="label">30 天转化率</div>
-          <div class="value">—</div>
+        <div class="card"><div class="label">转化率</div>
+          <div class="value mono">—</div>
           <div class="sub">需第三方数据接入</div></div>
       </div>
       <div class="panel">
-        <h3>趋势分析（SKU 数 / 新品 / 预估销量 / 预估营收）</h3>
+        <h3>趋势分析 <span class="tag">SKU / 新品 / 预估销量 / 预估营收</span></h3>
         <div id="chart"></div>
         <div class="empty" v-if="ov.trends.length<=1">
-          趋势图需多日采集数据积累；目前仅 {{ ov.trends.length }} 个采集日。
-        </div>
+          趋势图需多日采集数据积累 · 当前 {{ ov.trends.length }} 个采集日</div>
       </div>
     </div>
 
-    <!-- ===== 产品分析 ===== -->
+    <!-- 产品分析 -->
     <div v-show="tab==='products'">
       <div class="panel">
         <div class="filterbar">
-          <span class="pill" :class="{active:pTab==='all'}"
-                @click="setPTab('all')">所有产品 ({{ counts.all }})</span>
+          <span class="pill" :class="{active:pTab==='all'}" @click="setPTab('all')">
+            所有产品 {{ counts.all }}</span>
           <span class="pill" :class="{active:pTab==='bestseller'}"
-                @click="setPTab('bestseller')">畅销产品 ({{ counts.bestseller }})</span>
-          <span class="pill" :class="{active:pTab==='new'}"
-                @click="setPTab('new')">最新产品 ({{ counts.new }})</span>
+            @click="setPTab('bestseller')">畅销 {{ counts.bestseller }}</span>
+          <span class="pill" :class="{active:pTab==='new'}" @click="setPTab('new')">
+            最新 {{ counts.new }}</span>
           <input type="text" v-model="search" placeholder="搜索标题 / SKU"
-                 @keyup.enter="loadProducts(1)" style="width:200px" />
-          <input type="number" v-model.number="minP" placeholder="最低价" style="width:80px"/>
-          <input type="number" v-model.number="maxP" placeholder="最高价" style="width:80px"/>
-          <button class="btn" @click="loadProducts(1)">筛选</button>
+            @keyup.enter="loadProducts(1)" style="width:190px" />
+          <input type="number" v-model.number="minP" placeholder="最低价" style="width:74px"/>
+          <input type="number" v-model.number="maxP" placeholder="最高价" style="width:74px"/>
+          <button class="btn solid" @click="loadProducts(1)">筛选</button>
         </div>
         <table>
           <thead><tr>
-            <th>NO.</th><th>图片</th><th>产品标题</th><th>SKU</th><th>属性</th>
+            <th>#</th><th>图片</th><th>产品标题</th><th>SKU</th><th>属性</th>
             <th>标签</th><th>售价</th><th>原价</th><th>30天销量</th><th>30天营收</th>
-            <th>评分</th><th>评论数</th><th>状态</th><th>品类</th>
+            <th>评分</th><th>评论</th><th>状态</th><th>品类</th>
           </tr></thead>
           <tbody>
             <tr v-for="(p,i) in products" :key="p.id">
-              <td>{{ (page-1)*pageSize + i + 1 }}</td>
-              <td><img :src="p.image" loading="lazy"
-                       referrerpolicy="no-referrer" /></td>
-              <td class="title-cell">
-                <a :href="p.product_url" target="_blank">{{ p.title }}</a></td>
-              <td>{{ p.sku }}</td>
+              <td class="mono">{{ (page-1)*pageSize+i+1 }}</td>
+              <td><img :src="p.image" loading="lazy" referrerpolicy="no-referrer"/></td>
+              <td class="title-cell"><a :href="p.product_url" target="_blank">
+                {{ p.title }}</a></td>
+              <td class="mono">{{ p.sku }}</td>
               <td>{{ attrText(p.attributes) }}</td>
               <td><span v-if="p.label" class="badge"
-                   :class="p.is_new?'new':'best'">{{ p.label }}</span></td>
+                :class="p.is_new?'new':'best'">{{ p.label }}</span></td>
               <td><span class="price">{{ money(p.sale_price) }}</span></td>
               <td><span v-if="p.original_price>p.sale_price" class="price-old">
-                   {{ money(p.original_price) }}</span></td>
-              <td>{{ p.thirty_day_sales ?? '—' }}</td>
-              <td>{{ p.thirty_day_revenue ? money(p.thirty_day_revenue) : '—' }}</td>
-              <td>{{ p.ratings ?? '—' }}</td>
-              <td>{{ p.review_count ?? '—' }}</td>
+                {{ money(p.original_price) }}</span></td>
+              <td class="mono">{{ p.thirty_day_sales ?? '—' }}</td>
+              <td class="mono">{{ p.thirty_day_revenue?money(p.thirty_day_revenue):'—' }}</td>
+              <td class="mono">{{ p.ratings ?? '—' }}</td>
+              <td class="mono">{{ p.review_count ?? '—' }}</td>
               <td><span class="badge" :class="p.status">{{ statusText(p.status) }}</span></td>
               <td>{{ p.category_path || '—' }}</td>
             </tr>
           </tbody>
         </table>
-        <div class="empty" v-if="!products.length">暂无数据，请先采集该站点。</div>
+        <div class="empty" v-if="!products.length">暂无数据 · 请先采集该站点</div>
         <div class="pager">
-          <span>共 {{ total }} 条</span>
+          <span class="mono">共 {{ total }} 条</span>
           <select v-model.number="pageSize" @change="loadProducts(1)">
-            <option :value="10">10</option><option :value="20">20</option>
-            <option :value="50">50</option><option :value="100">100</option>
-          </select>
-          <button :disabled="page<=1" @click="loadProducts(page-1)">上一页</button>
-          <span>{{ page }} / {{ Math.max(1, Math.ceil(total/pageSize)) }}</span>
+            <option :value="20">20</option><option :value="50">50</option>
+            <option :value="100">100</option></select>
+          <button :disabled="page<=1" @click="loadProducts(page-1)">‹ 上一页</button>
+          <span class="mono">{{ page }} / {{ Math.max(1,Math.ceil(total/pageSize)) }}</span>
           <button :disabled="page>=Math.ceil(total/pageSize)"
-                  @click="loadProducts(page+1)">下一页</button>
+            @click="loadProducts(page+1)">下一页 ›</button>
         </div>
       </div>
     </div>
 
-    <!-- ===== 销售促销 ===== -->
+    <!-- 销售促销 -->
     <div v-show="tab==='promotions'">
       <div class="panel">
-        <h3>促销活动 —— 售价低于原价的在售商品</h3>
+        <h3>促销活动 <span class="tag">售价低于原价的在售商品</span></h3>
         <table>
           <thead><tr>
-            <th>NO.</th><th>SKU</th><th>产品标题</th><th>图片</th><th>类型</th>
+            <th>#</th><th>SKU</th><th>产品标题</th><th>图片</th><th>类型</th>
             <th>折扣</th><th>原价</th><th>活动价</th><th>检测时间</th>
           </tr></thead>
           <tbody>
             <tr v-for="(p,i) in promotions" :key="p.id">
-              <td>{{ i+1 }}</td><td>{{ p.sku }}</td>
+              <td class="mono">{{ i+1 }}</td><td class="mono">{{ p.sku }}</td>
               <td class="title-cell">{{ p.product_title }}</td>
               <td><img :src="p.product_image" loading="lazy"
-                       referrerpolicy="no-referrer" /></td>
+                referrerpolicy="no-referrer"/></td>
               <td>{{ p.promotion_type }}</td>
-              <td>-{{ p.discount_percent }}%</td>
+              <td><span class="badge best">-{{ p.discount_percent }}%</span></td>
               <td><span class="price-old">{{ money(p.original_price) }}</span></td>
               <td><span class="price">{{ money(p.promotion_price) }}</span></td>
-              <td>{{ fmt(p.detected_time) }}</td>
+              <td class="mono">{{ fmt(p.detected_time) }}</td>
             </tr>
           </tbody>
         </table>
-        <div class="empty" v-if="!promotions.length">
-          当前站点未检测到价格促销（原价 = 售价）。
-        </div>
+        <div class="empty" v-if="!promotions.length">未检测到价格促销</div>
       </div>
     </div>
 
-    <!-- ===== 采集任务 ===== -->
+    <!-- 采集任务 -->
     <div v-show="tab==='jobs'">
+      <div class="grid2">
+        <div class="card"><div class="label">已配置站点</div>
+          <div class="value mono">{{ sites.length }}</div>
+          <div class="sub">9 品牌 · 12 国</div></div>
+        <div class="card"><div class="label">代理池</div>
+          <div class="value mono">{{ proxy.residential||0 }}+{{ proxy.datacenter||0 }}</div>
+          <div class="sub">住宅 + 数据中心 IP</div></div>
+      </div>
       <div class="panel">
         <h3>采集任务看板
-          <button class="btn" style="float:right" @click="trigger"
-                  :disabled="triggering">▶ 采集当前站点</button>
-          <button class="btn ghost" style="float:right;margin-right:8px"
-                  @click="loadJobs">⟳ 刷新</button>
-        </h3>
+          <button class="btn solid" style="float:right" @click="trigger"
+            :disabled="triggering">▶ 采集当前站点</button>
+          <button class="btn" style="float:right;margin-right:8px"
+            @click="loadJobs">⟳ 刷新</button></h3>
         <table>
           <thead><tr>
             <th>#</th><th>站点</th><th>状态</th><th>商品数</th><th>新品</th>
@@ -242,131 +316,148 @@
           </tr></thead>
           <tbody>
             <tr v-for="j in jobs" :key="j.id">
-              <td>{{ j.id }}</td><td>{{ j.site }}</td>
+              <td class="mono">{{ j.id }}</td><td class="mono">{{ j.site }}</td>
               <td><span class="badge" :class="j.status">{{ j.status }}</span></td>
-              <td>{{ j.products_count }}</td><td>{{ j.new_count }}</td>
-              <td>{{ j.promotion_count }}</td>
-              <td>{{ j.success_rate!=null ? j.success_rate+'%' : '—' }}</td>
-              <td>{{ j.duration_sec ?? '—' }}</td>
-              <td>{{ fmt(j.started_at) }}</td>
+              <td class="mono">{{ j.products_count }}</td>
+              <td class="mono">{{ j.new_count }}</td>
+              <td class="mono">{{ j.promotion_count }}</td>
+              <td class="mono">{{ j.success_rate!=null?j.success_rate+'%':'—' }}</td>
+              <td class="mono">{{ j.duration_sec ?? '—' }}</td>
+              <td class="mono">{{ fmt(j.started_at) }}</td>
             </tr>
           </tbody>
         </table>
-        <div class="empty" v-if="!jobs.length">暂无采集任务记录。</div>
+        <div class="empty" v-if="!jobs.length">暂无采集任务记录</div>
       </div>
     </div>
   </div>
+  </template>
 </div>
 
 <script>
 const { createApp } = Vue;
-const API = "";  // 同源
 createApp({
-  data() {
-    return {
-      sites: [], currentSite: "", tab: "overview", pTab: "all",
-      tabList: [
-        {k:"overview", label:"总体分析"},
-        {k:"products", label:"产品分析"},
-        {k:"promotions", label:"销售促销"},
-        {k:"jobs", label:"采集任务"},
-      ],
-      ov: { cards:{}, trends:[] },
-      products: [], total: 0, page: 1, pageSize: 20,
-      counts: { all:0, bestseller:0, new:0 },
-      search: "", minP: null, maxP: null,
-      promotions: [], jobs: [], triggering: false, chart: null,
-    };
-  },
-  computed: {
-    site() { return this.sites.find(s => s.site === this.currentSite); },
-  },
-  async mounted() {
-    await this.loadSites();
-    if (this.sites.length) {
-      this.currentSite = this.sites.find(s => s.sku_count > 0)?.site
-                         || this.sites[0].site;
-      await this.loadAll();
-    }
-  },
-  methods: {
-    num(v){ return (v ?? 0).toLocaleString(); },
-    money(v){ return v==null ? "—" : "$" + Number(v).toLocaleString(
-      undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); },
-    fmt(v){ return v ? v.replace("T"," ").slice(0,16) : "—"; },
-    attrText(a){ return a ? Object.entries(a).map(([k,x])=>k+":"+x).join(" / ") : "—"; },
-    statusText(s){ return {on_sale:"在售",out_of_stock:"缺货",
-      discontinued:"下架"}[s] || s; },
-    async loadSites(){
-      this.sites = await (await fetch(API+"/api/sites")).json();
+  data(){return{
+    token: localStorage.getItem("sc_token")||"",
+    user: JSON.parse(localStorage.getItem("sc_user")||"{}"),
+    loginForm:{username:"",password:""}, logging:false, loginErr:"",
+    sites:[], currentSite:"", tab:"overview", pTab:"all",
+    tabList:[{k:"overview",label:"总体分析"},{k:"products",label:"产品分析"},
+      {k:"promotions",label:"销售促销"},{k:"jobs",label:"采集任务"}],
+    ov:{cards:{},trends:[]}, products:[], total:0, page:1, pageSize:20,
+    counts:{all:0,bestseller:0,new:0}, search:"", minP:null, maxP:null,
+    promotions:[], jobs:[], proxy:{}, triggering:false, chart:null,
+  };},
+  computed:{ site(){ return this.sites.find(s=>s.site===this.currentSite); } },
+  async mounted(){ if(this.token) await this.boot(); },
+  methods:{
+    num(v){return (v??0).toLocaleString();},
+    money(v){return v==null?"—":"$"+Number(v).toLocaleString(undefined,
+      {minimumFractionDigits:2,maximumFractionDigits:2});},
+    fmt(v){return v?v.replace("T"," ").slice(0,16):"—";},
+    attrText(a){return a?Object.entries(a).map(([k,x])=>k+":"+x).join(" / "):"—";},
+    statusText(s){return{on_sale:"在售",out_of_stock:"缺货",
+      discontinued:"下架"}[s]||s;},
+    async api(path,opts){
+      const o=opts||{}; o.headers=Object.assign({"Authorization":"Bearer "+this.token},
+        o.headers||{});
+      const r=await fetch(path,o);
+      if(r.status===401){ this.logout(); throw new Error("登录已过期"); }
+      return r.json();
     },
-    async onSiteChange(){ await this.loadAll(); },
+    async doLogin(){
+      this.logging=true; this.loginErr="";
+      try{
+        const r=await fetch("/api/login",{method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify(this.loginForm)});
+        if(!r.ok){ this.loginErr="账号或密码错误"; return; }
+        const d=await r.json();
+        this.token=d.token; this.user={display_name:d.display_name,role:d.role};
+        localStorage.setItem("sc_token",d.token);
+        localStorage.setItem("sc_user",JSON.stringify(this.user));
+        await this.boot();
+      }catch(e){ this.loginErr="登录失败："+e.message; }
+      finally{ this.logging=false; }
+    },
+    logout(){ this.token=""; localStorage.removeItem("sc_token");
+      localStorage.removeItem("sc_user"); },
+    async boot(){
+      this.sites=await this.api("/api/sites");
+      if(this.sites.length){
+        this.currentSite=(this.sites.find(s=>s.sku_count>0)||this.sites[0]).site;
+        await this.loadAll();
+      }
+    },
     async loadAll(){
-      await Promise.all([this.loadOverview(), this.loadCounts(),
-        this.loadProducts(1), this.loadPromotions(), this.loadJobs()]);
+      await Promise.all([this.loadOverview(),this.loadCounts(),
+        this.loadProducts(1),this.loadPromotions(),this.loadJobs(),
+        this.loadProxy()]);
     },
-    async switchTab(k){
-      this.tab = k;
-      if (k==="overview") this.$nextTick(this.renderChart);
-    },
+    switchTab(k){ this.tab=k; if(k==='overview') this.$nextTick(this.renderChart); },
     async loadOverview(){
-      this.ov = await (await fetch(
-        API+`/api/sites/${this.currentSite}/overview`)).json();
+      this.ov=await this.api(`/api/sites/${this.currentSite}/overview`);
       this.$nextTick(this.renderChart);
     },
     async loadCounts(){
-      for (const t of ["all","bestseller","new"]) {
-        const r = await (await fetch(API+`/api/products?site=${this.currentSite}`
-          +`&tab=${t}&page_size=1`)).json();
-        this.counts[t] = r.total;
+      for(const t of["all","bestseller","new"]){
+        const r=await this.api(`/api/products?site=${this.currentSite}`+
+          `&tab=${t}&page_size=1`);
+        this.counts[t]=r.total;
       }
     },
     setPTab(t){ this.pTab=t; this.loadProducts(1); },
     async loadProducts(p){
-      this.page = p;
-      let u = API+`/api/products?site=${this.currentSite}&tab=${this.pTab}`
-        +`&page=${p}&page_size=${this.pageSize}`;
-      if (this.search) u += `&search=${encodeURIComponent(this.search)}`;
-      if (this.minP!=null) u += `&min_price=${this.minP}`;
-      if (this.maxP!=null) u += `&max_price=${this.maxP}`;
-      const r = await (await fetch(u)).json();
-      this.products = r.items; this.total = r.total;
+      this.page=p;
+      let u=`/api/products?site=${this.currentSite}&tab=${this.pTab}`+
+        `&page=${p}&page_size=${this.pageSize}`;
+      if(this.search) u+=`&search=${encodeURIComponent(this.search)}`;
+      if(this.minP!=null) u+=`&min_price=${this.minP}`;
+      if(this.maxP!=null) u+=`&max_price=${this.maxP}`;
+      const r=await this.api(u);
+      this.products=r.items; this.total=r.total;
     },
     async loadPromotions(){
-      const r = await (await fetch(
-        API+`/api/promotions?site=${this.currentSite}`)).json();
-      this.promotions = r.items;
+      const r=await this.api(`/api/promotions?site=${this.currentSite}`);
+      this.promotions=r.items;
     },
-    async loadJobs(){
-      this.jobs = await (await fetch(API+"/api/jobs")).json();
-    },
+    async loadJobs(){ this.jobs=await this.api("/api/jobs"); },
+    async loadProxy(){ try{ this.proxy=await this.api("/api/proxy-status"); }
+      catch(e){ this.proxy={}; } },
     async trigger(){
-      this.triggering = true;
-      await fetch(API+`/api/jobs/trigger?site=${this.currentSite}`,
-        {method:"POST"});
-      setTimeout(()=>{ this.triggering=false; this.loadJobs(); }, 1500);
+      this.triggering=true;
+      await this.api(`/api/jobs/trigger?site=${this.currentSite}`,{method:"POST"});
+      setTimeout(()=>{ this.triggering=false; this.loadJobs(); },1500);
       alert("采集任务已加入后台队列，稍后点「刷新」查看结果。");
     },
     exportExcel(){
-      window.open(API+`/api/export/products?site=${this.currentSite}`,"_blank");
+      window.open(`/api/export/products?site=${this.currentSite}`+
+        `&token=${encodeURIComponent(this.token)}`,"_blank");
     },
     renderChart(){
-      const el = document.getElementById("chart");
-      if (!el || this.ov.trends.length===0) return;
-      if (!this.chart) this.chart = echarts.init(el);
-      const t = this.ov.trends;
+      const el=document.getElementById("chart");
+      if(!el||!this.ov.trends||!this.ov.trends.length) return;
+      if(!this.chart) this.chart=echarts.init(el,null,{renderer:"canvas"});
+      const t=this.ov.trends;
       this.chart.setOption({
-        tooltip:{trigger:"axis"},
-        legend:{data:["SKU数","新品","预估销量","预估营收"]},
-        grid:{left:50,right:50,top:40,bottom:40},
-        xAxis:{type:"category",data:t.map(x=>x.date)},
-        yAxis:[{type:"value"},{type:"value"}],
+        backgroundColor:"transparent",
+        tooltip:{trigger:"axis",backgroundColor:"#11161f",borderColor:"#1f2733",
+          textStyle:{color:"#c9d4e0"}},
+        legend:{data:["SKU数","新品","预估销量","预估营收"],
+          textStyle:{color:"#5b6878"}},
+        grid:{left:55,right:55,top:42,bottom:36},
+        xAxis:{type:"category",data:t.map(x=>x.date),
+          axisLine:{lineStyle:{color:"#1f2733"}},axisLabel:{color:"#5b6878"}},
+        yAxis:[{type:"value",splitLine:{lineStyle:{color:"#161b22"}},
+          axisLabel:{color:"#5b6878"}},
+          {type:"value",splitLine:{show:false},axisLabel:{color:"#5b6878"}}],
+        color:["#2ee6c5","#38bdf8","#ffb454","#ff5d6c"],
         series:[
           {name:"SKU数",type:"line",smooth:true,data:t.map(x=>x.sku_count)},
           {name:"新品",type:"line",smooth:true,data:t.map(x=>x.new_product_count)},
           {name:"预估销量",type:"line",smooth:true,data:t.map(x=>x.estimated_sales)},
           {name:"预估营收",type:"line",smooth:true,yAxisIndex:1,
-           data:t.map(x=>x.estimated_revenue)},
+            data:t.map(x=>x.estimated_revenue)},
         ],
       });
     },

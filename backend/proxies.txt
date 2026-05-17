@@ -1,0 +1,13 @@
+# 代理池配置 —— app/proxy.py 读取，按 tier 轮换。
+# 每行一个代理 URL；用 [residential] / [datacenter] 分段。
+# 留空则全部站点直连（当前 46 站中除 Vidaxl 外均可直连）。
+#
+# 对接 static-ip-manager：在持有 AT&T 静态块的美国机器上起 3proxy/squid，
+# 把各出口 IP 的代理 URL 逐行填入 [residential] 段即可。
+
+[residential]
+# http://user:pass@108.95.61.130:8080
+# http://user:pass@108.95.61.131:8080
+
+[datacenter]
+# http://dc-proxy-host:3128

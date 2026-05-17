@@ -1,0 +1,32 @@
+# smart-crawler —— NAS 一键部署
+# 用法： docker compose up -d   →   http://<NAS-IP>:8077
+services:
+  smart-crawler:
+    build: .
+    image: smart-crawler:latest
+    container_name: smart-crawler
+    restart: unless-stopped
+    ports:
+      - "8077:8077"
+    volumes:
+      - ./data:/app/data            # SQLite 数据持久化
+      - ./backend/sites.yaml:/app/backend/sites.yaml:ro
+      - ./backend/proxies.txt:/app/backend/proxies.txt:ro
+    environment:
+      - SC_SECRET=${SC_SECRET:-smart-crawler-secret-2026-aosom}
+      - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
+      - HOMARY_LIMIT=${HOMARY_LIMIT:-500}
+      - COSTWAY_PAGES_PER_CAT=${COSTWAY_PAGES_PER_CAT:-3}
+
+  # Cloudflare Tunnel —— 把 smartcrawler.io 接到本容器（需填 TUNNEL_TOKEN）
+  # 在 Cloudflare Zero Trust 创建 Tunnel 后，把 token 写入 .env 再启用本段
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: smart-crawler-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN:-}
+    depends_on:
+      - smart-crawler
+    profiles: ["tunnel"]            # docker compose --profile tunnel up -d 才启用

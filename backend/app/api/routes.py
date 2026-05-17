@@ -4,19 +4,57 @@ from __future__ import annotations
 import io
 from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import (APIRouter, BackgroundTasks, Depends, Header, HTTPException,
+                     Query)
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..analytics import recompute
+from ..auth import make_token, verify_password, verify_token
 from ..db import get_db
 from ..export import export_workbook
 from ..models import (Category, CrawlJob, PriceHistory, Product, Promotion,
-                      Site, Trend)
+                      Site, Trend, User)
+from ..proxy import pool_status
 from ..runner import run_brand, run_site
 
-router = APIRouter(prefix="/api")
+
+# ---------- 鉴权依赖 ----------
+def require_user(authorization: str = Header(default="")) -> str:
+    """校验 Bearer Token，返回用户名；失败 401。"""
+    token = authorization[7:] if authorization.startswith("Bearer ") else authorization
+    username = verify_token(token)
+    if not username:
+        raise HTTPException(401, "未登录或登录已过期")
+    return username
+
+
+# 公开路由（登录，不需鉴权）
+public_router = APIRouter(prefix="/api")
+# 数据路由（全部需登录）
+router = APIRouter(prefix="/api", dependencies=[Depends(require_user)])
+
+
+@public_router.post("/login")
+def login(payload: dict, db: Session = Depends(get_db)):
+    """账号登录 —— 返回 Token。"""
+    username = (payload or {}).get("username", "").strip()
+    password = (payload or {}).get("password", "")
+    user = db.query(User).filter(User.username == username).first()
+    if not user or not verify_password(password, user.password_hash):
+        raise HTTPException(401, "账号或密码错误")
+    user.last_login = datetime.utcnow()
+    db.commit()
+    return {"token": make_token(username), "username": username,
+            "display_name": user.display_name, "role": user.role}
+
+
+@router.get("/me")
+def me(user: str = Depends(require_user), db: Session = Depends(get_db)):
+    u = db.query(User).filter(User.username == user).first()
+    return {"username": user, "display_name": u.display_name if u else user,
+            "role": u.role if u else "viewer"}
 
 
 # ---------- 序列化 ----------
@@ -223,6 +261,12 @@ def trigger(background: BackgroundTasks, site: str | None = None,
             "queued_at": datetime.utcnow().isoformat()}
 
 
+@router.get("/proxy-status")
+def proxy_status():
+    """代理池状态 —— C-010。"""
+    return pool_status()
+
+
 @router.get("/scheduler")
 def scheduler_jobs():
     """定时采集任务列表 —— C-001。"""
@@ -233,9 +277,12 @@ def scheduler_jobs():
         return []
 
 
-# ---------- Excel 导出（API-006）----------
-@router.get("/export/products")
-def export_products(site: str | None = None, db: Session = Depends(get_db)):
+# ---------- Excel 导出（API-006，Token 走 query 参数以支持浏览器直接下载）----------
+@public_router.get("/export/products")
+def export_products(token: str, site: str | None = None,
+                    db: Session = Depends(get_db)):
+    if not verify_token(token):
+        raise HTTPException(401, "未登录或登录已过期")
     data = export_workbook(db, site)
     fname = f"smart-crawler_{site or 'all'}_{datetime.now():%Y%m%d}.xlsx"
     return StreamingResponse(
