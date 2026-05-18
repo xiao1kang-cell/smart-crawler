@@ -41,6 +41,10 @@ _TOOLS = [
      "description": "口碑分析汇总：情感分布 + 痛点分类占比"},
     {"name": "competitor_landscape",
      "description": "Google Shopping 某关键词下各商家出现占有率"},
+    {"name": "amazon_voc_report",
+     "description": "按 Amazon ASIN 取评论 + AI 口碑分析（情感/痛点/卖点/Listing 建议）"},
+    {"name": "fetch_amazon_reviews",
+     "description": "按 Amazon ASIN 取原始评论数组（不分析）"},
 ]
 
 

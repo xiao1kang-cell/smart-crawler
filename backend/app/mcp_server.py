@@ -19,7 +19,8 @@ mcp = FastMCP(
     "smart-crawler",
     instructions=(
         "遨森标杆竞品数据采集平台。为 AI Agent 提供跨境电商竞品情报："
-        "竞品商品/价格/促销、消费者口碑评论(VOC)、Google Shopping 竞争格局。"
+        "竞品商品/价格/促销、消费者口碑评论(VOC)、Google Shopping 竞争格局，"
+        "以及按 Amazon ASIN 的评论采集与 AI 口碑分析。"
         "覆盖 9 大家居品牌 46 个独立站 + 21 个评论渠道。所有数据持续采集、结构化。"
     ),
 )
@@ -203,6 +204,30 @@ def competitor_landscape(keyword: str) -> dict:
                 "merchant_share": share}
     finally:
         s.close()
+
+
+@mcp.tool
+def amazon_voc_report(asin: str, market: str = "US", limit: int = 100) -> dict:
+    """取某亚马逊 ASIN 的真实评论并做 AI 口碑分析（整合自 voc-amazon-reviews）。
+    返回情感分布、痛点、卖点、Listing 优化建议、中英文总结。
+    asin: 10 位商品编码；market: US/GB/DE/FR/IT/ES/JP/CA 等；limit: 评论数(1-1000)。"""
+    from .voc_amazon import VocError, amazon_voc_report as _report
+    try:
+        return _report(asin, market=market, limit=limit)
+    except VocError as exc:
+        return {"error": str(exc)}
+
+
+@mcp.tool
+def fetch_amazon_reviews(asin: str, market: str = "US",
+                         limit: int = 100) -> dict:
+    """只取某亚马逊 ASIN 的原始评论数组（不做分析）。
+    适合 Agent 自己接分析管线。返回 {reviews, meta}。"""
+    from .voc_amazon import VocError, fetch_amazon_reviews as _fetch
+    try:
+        return _fetch(asin, market=market, limit=limit)
+    except VocError as exc:
+        return {"error": str(exc)}
 
 
 if __name__ == "__main__":

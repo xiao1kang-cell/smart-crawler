@@ -45,6 +45,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://router.flatkey.ai/v1}
       - LLM_MODEL=${LLM_MODEL:-gpt-5-mini}
+      - VOC_API_KEY=${VOC_API_KEY:-}      # Amazon VOC 工具用 —— apps.voc.ai/openapi
     depends_on:
       postgres:
         condition: service_healthy
