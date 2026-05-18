@@ -102,7 +102,7 @@ def _seed_sites() -> None:
 def _seed_users() -> None:
     """初始化管理员账号 —— 用户名/密码由环境变量驱动，杜绝弱口令。
 
-    ADMIN_USERNAME（默认 aosen）、ADMIN_PASSWORD。设了 ADMIN_PASSWORD 时
+    ADMIN_USERNAME（默认 admin）、ADMIN_PASSWORD。设了 ADMIN_PASSWORD 时
     每次启动都同步到账号，使改密对已建账号生效；未设则首次随机生成并打日志。
     """
     import os
@@ -111,7 +111,7 @@ def _seed_users() -> None:
     from .auth import hash_password
     from .models import User
 
-    username = os.environ.get("ADMIN_USERNAME", "aosen")
+    username = os.environ.get("ADMIN_USERNAME", "admin")
     password = os.environ.get("ADMIN_PASSWORD")
 
     with session_scope() as s:
@@ -127,7 +127,7 @@ def _seed_users() -> None:
             username=username,
             password_hash=hash_password(password),
             role="admin",
-            display_name="Aosom 管理员",
+            display_name="管理员",
         ))
 
 
