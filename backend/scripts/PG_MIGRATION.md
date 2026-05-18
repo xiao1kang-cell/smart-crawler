@@ -10,7 +10,7 @@
 - `smart-crawler` 服务已通过 `DATABASE_URL` 连 postgres，并 `depends_on` 它。
 - 默认凭据（可在 `.env` 覆盖）：
   - `POSTGRES_USER=smart_crawler`
-  - `POSTGRES_PASSWORD=smart-crawler-pg-2026-aosom`
+  - `POSTGRES_PASSWORD=change-me-strong-password`
   - `POSTGRES_DB=smart_crawler`
 
 > 生产环境建议在 `.env` 里改掉默认密码。

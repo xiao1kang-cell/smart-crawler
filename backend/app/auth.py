@@ -6,7 +6,8 @@ import hmac
 import os
 import time
 
-SECRET = os.environ.get("SC_SECRET", "smart-crawler-secret-2026-aosom")
+# 生产必须经环境变量注入 SC_SECRET；下面只是开发兜底，绝不可用于生产
+SECRET = os.environ.get("SC_SECRET", "dev-only-insecure-change-via-env")
 TOKEN_TTL = 7 * 24 * 3600          # Token 有效期 7 天
 _ITER = 100_000
 
