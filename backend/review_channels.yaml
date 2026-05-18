@@ -31,4 +31,4 @@ channels:
   # Trusted.ro（RO）评论走 AJAX，采集器待补
 
 settings:
-  max_pages: 10          # 每渠道最多翻页数（每页 ~20 条）
+  max_pages: 20          # 每渠道最多翻页数（trustpilot ~20/页 / reviews_io 100/页）

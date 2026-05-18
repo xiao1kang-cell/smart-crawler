@@ -1,7 +1,7 @@
 """Google Shopping 采集器 —— 模块四（规格 §4.4）。
 
-Google Shopping 的 udm=28 统一购物结果页，用 Scrapling StealthyFetcher 渲染。
-实测我方 IP 直连可达（200，Google 不封消费级 IP）。
+Google Shopping 的 udm=28 统一购物结果页，用 patchright（stealth 修补版
+Playwright）渲染。实测我方 IP 直连可达（200，Google 不封消费级 IP）。
 
 ⚠ 已知局限：Google Shopping 商品卡的 CSS 类名是动态混淆的（bCOlv/IZE3Td…），
 盲解析不稳。生产环境建议把 _extract 换成 SERP API（SerpApi 商用 或自托管
@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import re
 import urllib.parse
+
+from selectolax.parser import HTMLParser
 
 from ..proxy import get_proxy
 
@@ -30,46 +32,48 @@ class GoogleShoppingCrawler:
 
     def crawl(self) -> list[dict]:
         try:
-            from scrapling.fetchers import StealthyFetcher
+            from patchright.sync_api import sync_playwright
         except Exception as exc:
-            self.notes.append(f"Scrapling 未安装: {exc}")
+            self.notes.append(f"patchright 未安装: {exc}")
             return []
 
         url = ("https://www.google.com/search?udm=28&q="
                + urllib.parse.quote(self.keyword))
         try:
-            kw = dict(headless=True, network_idle=False, timeout=60000)
-            if self.proxy:
-                kw["proxy"] = self.proxy
-            page = StealthyFetcher.fetch(url, **kw)
+            with sync_playwright() as p:
+                launch_kw = {"headless": True}
+                if self.proxy:
+                    launch_kw["proxy"] = {"server": self.proxy}
+                browser = p.chromium.launch(**launch_kw)
+                try:
+                    page = browser.new_page()
+                    page.goto(url, timeout=60000, wait_until="domcontentloaded")
+                    page.wait_for_timeout(2500)
+                    page.mouse.wheel(0, 6000)
+                    page.wait_for_timeout(1500)
+                    html = page.content()
+                finally:
+                    browser.close()
         except Exception as exc:
             self.notes.append(f"抓取异常: {exc}")
             return []
-        if getattr(page, "status", None) != 200:
-            self.notes.append(f"HTTP {page.status}")
-            return []
 
-        results = self._extract(page)
+        results = self._extract(html)
         self.notes.append(f"关键词「{self.keyword}」采集 {len(results)} 个商品")
         return results
 
-    def _extract(self, page) -> list[dict]:
+    def _extract(self, html: str) -> list[dict]:
+        tree = HTMLParser(html)
         cards = []
         for sel in ('div[role="listitem"]', ".njFjte", ".MtXiu"):
-            try:
-                found = page.css(sel)
-            except Exception:
-                found = []
+            found = tree.css(sel)
             if found:
                 cards = found
                 break
 
         results, pos = [], 0
         for c in cards:
-            try:
-                text = c.text or ""
-            except Exception:
-                text = ""
+            text = c.text(separator="\n") or ""
             pm = _PRICE_RE.search(text)
             if not pm:                              # 无价格 → 非商品卡
                 continue
@@ -77,11 +81,9 @@ class GoogleShoppingCrawler:
             if pos > self.max_results:
                 break
             price = float(pm.group(1).replace(",", ""))
-            # 标题：取卡内最长的非价格文本行
             lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
             title = max((ln for ln in lines if not _PRICE_RE.match(ln)),
                         key=len, default=None)
-            # 链接 / 图片 / 商家
             link = self._first_attr(c, "a", "href")
             img = self._first_attr(c, "img", "src")
             merchant = self._merchant(lines)
@@ -102,15 +104,11 @@ class GoogleShoppingCrawler:
 
     @staticmethod
     def _first_attr(card, tag: str, attr: str):
-        try:
-            el = card.css_first(tag)
-            return el.attrib.get(attr) if el else None
-        except Exception:
-            return None
+        el = card.css_first(tag)
+        return (el.attributes.get(attr) if el is not None else None)
 
     @staticmethod
     def _merchant(lines: list[str]) -> str | None:
-        # 商家名通常是不含价格、较短、可能含"·"分隔的行
         for ln in lines:
             if 2 < len(ln) < 40 and not _PRICE_RE.search(ln) \
                     and not re.search(r"rating|review|\d{3,}", ln, re.I):

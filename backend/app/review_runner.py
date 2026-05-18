@@ -39,12 +39,16 @@ def _get_crawler(channel: dict, max_pages: int):
     raise ValueError(f"评论平台采集器未实现: {platform}")
 
 
-def run_review_channel(site_name: str) -> dict:
-    """采集单个评论渠道。"""
+def run_review_channel(site_name: str, platform: str | None = None) -> dict:
+    """采集单个评论渠道。platform 可选，用于 site 同时存在多平台时消歧。"""
     channels, settings = load_channels()
-    channel = next((c for c in channels if c["site"] == site_name), None)
-    if channel is None:
-        raise ValueError(f"评论渠道不存在: {site_name}")
+    matches = [c for c in channels if c["site"] == site_name
+               and (platform is None or c.get("platform") == platform)]
+    if not matches:
+        raise ValueError(
+            f"评论渠道不存在: {site_name}"
+            + (f" / {platform}" if platform else ""))
+    channel = matches[0]
     crawler = _get_crawler(channel, settings.get("max_pages", 10))
     reviews = crawler.crawl()
     stats = _upsert_reviews(reviews)
@@ -59,7 +63,7 @@ def run_review_platform(platform: str) -> list[dict]:
     out = []
     for n in names:
         try:
-            out.append(run_review_channel(n))
+            out.append(run_review_channel(n, platform=platform))
         except Exception as exc:
             out.append({"site": n, "status": "failed", "error": str(exc)})
     return out
