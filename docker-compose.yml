@@ -8,7 +8,7 @@ services:
     restart: unless-stopped
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-smart_crawler}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-smart-crawler-pg-2026-aosom}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change-me}
       - POSTGRES_DB=${POSTGRES_DB:-smart_crawler}
     volumes:
       - ./data/pgdata:/var/lib/postgresql/data   # 数据卷持久化
@@ -34,11 +34,11 @@ services:
       - ./backend/proxies.txt:/app/backend/proxies.txt:ro
     environment:
       # 连接 postgres 服务；服务名 postgres 即容器网络内的主机名
-      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-smart-crawler-pg-2026-aosom}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
-      - SC_SECRET=${SC_SECRET:-smart-crawler-secret-2026-aosom}
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
+      - SC_SECRET=${SC_SECRET:-change-me}
       # 管理员账号 —— 弱口令 aosen/admin 已废弃，密码经环境变量注入
       - ADMIN_USERNAME=${ADMIN_USERNAME:-aosen}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-aosenSC#2026Kp9q}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-change-me}
       - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
       - HOMARY_LIMIT=${HOMARY_LIMIT:-500}
       - COSTWAY_PAGES_PER_CAT=${COSTWAY_PAGES_PER_CAT:-3}
