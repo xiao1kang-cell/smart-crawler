@@ -1,0 +1,73 @@
+{
+  "name": "smart-crawler",
+  "version": "1.0.0",
+  "description": "Cross-border e-commerce intelligence + Reddit community analysis. Crawl competitor products/prices/promotions, VOC reviews, Google Shopping landscape, and Reddit subreddit playbooks — all via MCP tools.",
+  "homepage": "https://smartcrawler.io",
+  "repository": "https://github.com/mguozhen/smart-crawler",
+  "license": "MIT",
+  "keywords": ["reddit", "ecommerce", "competitor-analysis", "voc", "playbook", "mcp", "web-scraping"],
+  "tools": [
+    {
+      "name": "reddit_subreddit_playbook",
+      "description": "Generate a full growth playbook for top N contributors of any subreddit. Pipeline: find contributors → fetch post/comment history → LLM analysis → structured playbook (growth timeline, content formula, 5-step replicable path).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subreddit": { "type": "string", "description": "Subreddit name without r/" },
+          "top_n":     { "type": "integer", "default": 3, "description": "Number of top contributors to analyze" }
+        },
+        "required": ["subreddit"]
+      }
+    },
+    {
+      "name": "reddit_top_contributors",
+      "description": "Find top N contributors in a subreddit ranked by post count × score. Returns username, karma, account age, and post stats.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subreddit": { "type": "string" },
+          "top_n":     { "type": "integer", "default": 3 }
+        },
+        "required": ["subreddit"]
+      }
+    },
+    {
+      "name": "reddit_user_activity",
+      "description": "Fetch complete post + comment history for a Reddit user. Returns profile stats, top posts, monthly activity timeline. Includes deleted posts via Arctic Shift archive.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "username":      { "type": "string" },
+          "subreddit":     { "type": "string", "description": "Filter to specific subreddit (optional)" },
+          "post_limit":    { "type": "integer", "default": 100 },
+          "comment_limit": { "type": "integer", "default": 100 }
+        },
+        "required": ["username"]
+      }
+    },
+    {
+      "name": "search_competitor_products",
+      "description": "Search competitor product catalog. Filter by brand (SONGMICS/Costway/Homary/Vidaxl), country, keyword, category, price range, or promotion status."
+    },
+    {
+      "name": "get_voc_reviews",
+      "description": "Fetch consumer VOC reviews from Trustpilot/Reviews.io/Google Maps. Filter by platform, sentiment, rating."
+    },
+    {
+      "name": "amazon_voc_report",
+      "description": "Fetch Amazon reviews for an ASIN and generate AI VOC analysis: sentiment, pain points, highlights, listing optimization suggestions."
+    },
+    {
+      "name": "competitor_landscape",
+      "description": "Google Shopping competitive landscape for a keyword — merchant share rankings."
+    },
+    {
+      "name": "list_data_sources",
+      "description": "List all available data sources: 46 competitor sites + review platforms + Google Shopping."
+    }
+  ],
+  "server": {
+    "transport": "http",
+    "url": "https://smartcrawler.io/mcp"
+  }
+}

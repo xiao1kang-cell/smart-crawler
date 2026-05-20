@@ -1,0 +1,1331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reddit Intelligence Demo — smart-crawler</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0f0f13;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh}
+a{color:inherit;text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* hero */
+.hero{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);
+       padding:48px 32px 32px;text-align:center;border-bottom:1px solid #1f3a5f}
+.hero-logo{display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:16px}
+.logo-icon{width:40px;height:40px;background:linear-gradient(135deg,#ff6b35,#f7b731);
+           border-radius:10px;display:flex;align-items:center;justify-content:center;
+           font-size:20px;font-weight:700}
+.hero h1{font-size:2rem;font-weight:800;letter-spacing:-0.5px}
+.hero h1 span{background:linear-gradient(90deg,#ff6b35,#f7b731);
+               -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{color:#8a9bb5;margin-top:8px;font-size:0.95rem}
+.hero-meta{color:#566;font-size:0.82rem;margin-top:12px}
+
+/* summary strip */
+.summary{display:flex;justify-content:center;gap:32px;padding:20px 32px;
+          background:#13131a;border-bottom:1px solid #1e1e2e;flex-wrap:wrap}
+.summary-stat{text-align:center}
+.summary-stat .val{font-size:1.8rem;font-weight:700;
+                    background:linear-gradient(90deg,#4ecdc4,#45b7d1);
+                    -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.summary-stat .lbl{font-size:0.78rem;color:#667;margin-top:2px}
+
+/* grid */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(680px,1fr));
+       gap:24px;padding:32px;max-width:1600px;margin:0 auto}
+
+/* card */
+.sub-card{background:#16161f;border:1px solid #222;border-radius:16px;overflow:hidden;
+           box-shadow:0 4px 20px rgba(0,0,0,.4)}
+.sub-header{display:flex;align-items:center;gap:10px;padding:14px 20px}
+.sub-icon{font-weight:800;font-size:1.1rem;opacity:.7}
+.sub-name{font-size:1.15rem;font-weight:700;letter-spacing:.5px}
+.sub-count{margin-left:auto;font-size:0.78rem;background:rgba(0,0,0,.25);
+            padding:3px 10px;border-radius:20px}
+.sub-body{display:grid;grid-template-columns:1fr 260px;gap:0}
+.contributors-list{padding:16px;border-right:1px solid #1e1e2e}
+.chart-wrap{padding:16px 12px;display:flex;align-items:center}
+
+/* contributor */
+.contributor{background:#1c1c28;border-radius:12px;padding:14px;margin-bottom:10px}
+.contributor:last-child{margin-bottom:0}
+.contributor-header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.avatar{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;
+         justify-content:center;font-weight:700;font-size:1rem;flex-shrink:0}
+.contributor-meta{flex:1}
+.username{font-size:0.9rem;font-weight:600;color:#e0e0e0}
+.rank-label{font-size:0.75rem;margin-top:2px;font-weight:600}
+
+.stats-grid{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end}
+.stat{}
+.stat-label{font-size:0.7rem;color:#667;display:block;margin-bottom:3px}
+.stat-val{font-size:0.92rem;font-weight:600}
+.bar-wrap{background:#2a2a38;border-radius:4px;height:5px;margin-top:5px;overflow:hidden}
+.bar-fill{height:100%;border-radius:4px;transition:width .5s ease}
+
+/* badge */
+.badge{font-size:0.72rem;padding:3px 9px;border-radius:20px;font-weight:600;white-space:nowrap}
+.badge-gold{background:#3d2e00;color:#f4c430}
+.badge-blue{background:#0a2a4a;color:#4ecdc4}
+.badge-gray{background:#1e1e2e;color:#667}
+
+.error-note{padding:20px;color:#e57373;font-size:0.9rem}
+
+/* cta */
+.cta{background:linear-gradient(135deg,#1a1a2e,#0f3460);
+      border:1px solid #1f3a5f;border-radius:16px;
+      padding:32px;margin:0 32px 32px;text-align:center}
+.cta h2{font-size:1.4rem;font-weight:700;margin-bottom:12px}
+.cta h2 span{color:#f7b731}
+.cta p{color:#8a9bb5;margin-bottom:20px;line-height:1.6}
+.code-block{background:#0d0d14;border:1px solid #1e1e3a;border-radius:10px;
+             padding:16px 20px;text-align:left;font-family:'Fira Code',monospace;
+             font-size:0.82rem;color:#82aaff;line-height:1.8;max-width:700px;margin:0 auto}
+.code-block .comment{color:#546}
+.code-block .kw{color:#c792ea}
+.code-block .str{color:#c3e88d}
+.pill-row{display:flex;justify-content:center;gap:12px;margin-top:20px;flex-wrap:wrap}
+.pill{padding:8px 20px;border-radius:24px;font-size:0.82rem;font-weight:600;cursor:pointer}
+.pill-orange{background:linear-gradient(90deg,#ff6b35,#f7b731);color:#000}
+.pill-outline{border:1px solid #2a3a5a;color:#8a9bb5}
+
+/* footer */
+.footer{text-align:center;padding:24px;color:#3a4a5a;font-size:0.8rem;border-top:1px solid #1e1e2e}
+
+@media(max-width:800px){
+  .sub-body{grid-template-columns:1fr}
+  .chart-wrap{border-top:1px solid #1e1e2e;border-right:none}
+  .grid{grid-template-columns:1fr;padding:16px}
+  .stats-grid{grid-template-columns:1fr 1fr}
+}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="hero-logo">
+    <div class="logo-icon">SC</div>
+    <div>
+      <div style="font-size:0.75rem;color:#4ecdc4;letter-spacing:2px;text-transform:uppercase">smart-crawler</div>
+      <h1>Reddit <span>Intelligence</span></h1>
+    </div>
+  </div>
+  <p>从 subreddit 自动发现顶级贡献者 · 提炼成长路径 · 生成可复制 Playbook</p>
+  <div class="hero-meta">Demo · 采集于 2026-05-19 22:30 · 数据来源：Reddit JSON API + Arctic Shift</div>
+</div>
+
+<div class="summary">
+  <div class="summary-stat"><div class="val">10</div><div class="lbl">Subreddits</div></div>
+  <div class="summary-stat"><div class="val">30</div><div class="lbl">贡献者档案</div></div>
+  <div class="summary-stat"><div class="val">0</div><div class="lbl">API Key 需求</div></div>
+  <div class="summary-stat"><div class="val">3</div><div class="lbl">MCP Tools</div></div>
+  <div class="summary-stat"><div class="val">~2min</div><div class="lbl">Full Playbook 耗时</div></div>
+</div>
+
+<div class="grid">
+
+<div class="sub-card">
+  <div class="sub-header" style="background:#ff6b35">
+    <span class="sub-icon">r/</span>
+    <span class="sub-name">entrepreneur</span>
+    <span class="sub-count">3 contributors</span>
+  </div>
+  <div class="sub-body">
+    <div class="contributors-list">
+      
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#f4c430">A</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/an_onanist" target="_blank">u/an_onanist</a>
+      <div class="rank-label" style="color:#f4c430">🥇 #1</div>
+    </div>
+    <span class="badge badge-gold">8y 0m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">123.2k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">15.5k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">1</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#b0b8c1">H</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/HappyHippo95" target="_blank">u/HappyHippo95</a>
+      <div class="rank-label" style="color:#b0b8c1">🥈 #2</div>
+    </div>
+    <span class="badge badge-gray">未知</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">0</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:0%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">11.8k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:76%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">3</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#cd7f32">J</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/johnstevens456" target="_blank">u/johnstevens456</a>
+      <div class="rank-label" style="color:#cd7f32">🥉 #3</div>
+    </div>
+    <span class="badge badge-gold">10y 8m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">31.0k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:25%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">11.4k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:73%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">3</span>
+    </div>
+  </div>
+</div>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="chart_entrepreneur" height="180"></canvas>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var ctx = document.getElementById('chart_entrepreneur').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ["u/an_onanist", "u/HappyHippo95", "u/johnstevens4"],
+      datasets: [
+        {label:'Total Karma', data:[123196, 0, 31017], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"], borderRadius:6},
+        {label:'Post Score',  data:[15492, 11816, 11374], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"].map(c=>c+'88'), borderRadius:6}
+      ]
+    },
+    options: {
+      responsive:true,
+      plugins:{legend:{labels:{color:'#ccc',font:{size:11}}}},
+      scales:{
+        x:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}},
+        y:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}}
+      }
+    }
+  });
+})();
+</script>
+
+<div class="sub-card">
+  <div class="sub-header" style="background:#4ecdc4">
+    <span class="sub-icon">r/</span>
+    <span class="sub-name">ecommerce</span>
+    <span class="sub-count">3 contributors</span>
+  </div>
+  <div class="sub-body">
+    <div class="contributors-list">
+      
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#f4c430">R</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/RealOGMilkBone" target="_blank">u/RealOGMilkBone</a>
+      <div class="rank-label" style="color:#f4c430">🥇 #1</div>
+    </div>
+    <span class="badge badge-blue">2y 4m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">4.9k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:16%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">4.7k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">2</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#b0b8c1">A</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/Apprehensive_Pay6141" target="_blank">u/Apprehensive_Pay6141</a>
+      <div class="rank-label" style="color:#b0b8c1">🥈 #2</div>
+    </div>
+    <span class="badge badge-gray">1y 5m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">30.6k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">2.1k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:44%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">4</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#cd7f32">R</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/ReggieMilligan" target="_blank">u/ReggieMilligan</a>
+      <div class="rank-label" style="color:#cd7f32">🥉 #3</div>
+    </div>
+    <span class="badge badge-gold">9y 0m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">6.8k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:22%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">658</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:14%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">4</span>
+    </div>
+  </div>
+</div>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="chart_ecommerce" height="180"></canvas>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var ctx = document.getElementById('chart_ecommerce').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ["u/RealOGMilkBo", "u/Apprehensive", "u/ReggieMillig"],
+      datasets: [
+        {label:'Total Karma', data:[4911, 30555, 6822], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"], borderRadius:6},
+        {label:'Post Score',  data:[4713, 2057, 658], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"].map(c=>c+'88'), borderRadius:6}
+      ]
+    },
+    options: {
+      responsive:true,
+      plugins:{legend:{labels:{color:'#ccc',font:{size:11}}}},
+      scales:{
+        x:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}},
+        y:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}}
+      }
+    }
+  });
+})();
+</script>
+
+<div class="sub-card">
+  <div class="sub-header" style="background:#45b7d1">
+    <span class="sub-icon">r/</span>
+    <span class="sub-name">AmazonFBA</span>
+    <span class="sub-count">3 contributors</span>
+  </div>
+  <div class="sub-body">
+    <div class="contributors-list">
+      
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#f4c430">S</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/SlyGuyxD" target="_blank">u/SlyGuyxD</a>
+      <div class="rank-label" style="color:#f4c430">🥇 #1</div>
+    </div>
+    <span class="badge badge-gold">8y 2m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">3.9k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">2.4k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">12</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#b0b8c1">W</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/Working_Attention_66" target="_blank">u/Working_Attention_66</a>
+      <div class="rank-label" style="color:#b0b8c1">🥈 #2</div>
+    </div>
+    <span class="badge badge-blue">3y 2m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">932</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:24%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">1.1k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:46%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">13</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#cd7f32">D</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/Davydi" target="_blank">u/Davydi</a>
+      <div class="rank-label" style="color:#cd7f32">🥉 #3</div>
+    </div>
+    <span class="badge badge-gold">5y 8m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">614</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:16%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">598</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:25%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">7</span>
+    </div>
+  </div>
+</div>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="chart_AmazonFBA" height="180"></canvas>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var ctx = document.getElementById('chart_AmazonFBA').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ["u/SlyGuyxD", "u/Working_Atte", "u/Davydi"],
+      datasets: [
+        {label:'Total Karma', data:[3917, 932, 614], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"], borderRadius:6},
+        {label:'Post Score',  data:[2436, 1127, 598], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"].map(c=>c+'88'), borderRadius:6}
+      ]
+    },
+    options: {
+      responsive:true,
+      plugins:{legend:{labels:{color:'#ccc',font:{size:11}}}},
+      scales:{
+        x:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}},
+        y:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}}
+      }
+    }
+  });
+})();
+</script>
+
+<div class="sub-card">
+  <div class="sub-header" style="background:#96ceb4">
+    <span class="sub-icon">r/</span>
+    <span class="sub-name">dropshipping</span>
+    <span class="sub-count">3 contributors</span>
+  </div>
+  <div class="sub-body">
+    <div class="contributors-list">
+      
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#f4c430">E</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/emmanuella_ella" target="_blank">u/emmanuella_ella</a>
+      <div class="rank-label" style="color:#f4c430">🥇 #1</div>
+    </div>
+    <span class="badge badge-gray">4m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">798</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:6%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">2.1k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:89%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">10</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#b0b8c1">T</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/Tragilos" target="_blank">u/Tragilos</a>
+      <div class="rank-label" style="color:#b0b8c1">🥈 #2</div>
+    </div>
+    <span class="badge badge-gold">11y 7m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">13.3k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">2.3k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">7</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#cd7f32">T</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/ThrowAway_NeedInfo" target="_blank">u/ThrowAway_NeedInfo</a>
+      <div class="rank-label" style="color:#cd7f32">🥉 #3</div>
+    </div>
+    <span class="badge badge-gray">1y 9m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">785</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:6%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">1.6k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:70%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">7</span>
+    </div>
+  </div>
+</div>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="chart_dropshipping" height="180"></canvas>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var ctx = document.getElementById('chart_dropshipping').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ["u/emmanuella_e", "u/Tragilos", "u/ThrowAway_Ne"],
+      datasets: [
+        {label:'Total Karma', data:[798, 13263, 785], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"], borderRadius:6},
+        {label:'Post Score',  data:[2098, 2345, 1646], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"].map(c=>c+'88'), borderRadius:6}
+      ]
+    },
+    options: {
+      responsive:true,
+      plugins:{legend:{labels:{color:'#ccc',font:{size:11}}}},
+      scales:{
+        x:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}},
+        y:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}}
+      }
+    }
+  });
+})();
+</script>
+
+<div class="sub-card">
+  <div class="sub-header" style="background:#ffeaa7">
+    <span class="sub-icon">r/</span>
+    <span class="sub-name">smallbusiness</span>
+    <span class="sub-count">3 contributors</span>
+  </div>
+  <div class="sub-body">
+    <div class="contributors-list">
+      
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#f4c430">B</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/Background-Shirt2415" target="_blank">u/Background-Shirt2415</a>
+      <div class="rank-label" style="color:#f4c430">🥇 #1</div>
+    </div>
+    <span class="badge badge-gray">未知</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">0</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:0%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">20.4k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">2</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#b0b8c1">C</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/Cheap-Front-7722" target="_blank">u/Cheap-Front-7722</a>
+      <div class="rank-label" style="color:#b0b8c1">🥈 #2</div>
+    </div>
+    <span class="badge badge-gray">4m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">1.4k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:56%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">3.4k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:17%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">4</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#cd7f32">C</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/Candid-Primary2891" target="_blank">u/Candid-Primary2891</a>
+      <div class="rank-label" style="color:#cd7f32">🥉 #3</div>
+    </div>
+    <span class="badge badge-blue">4y 7m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">2.5k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">2.7k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:13%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">2</span>
+    </div>
+  </div>
+</div>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="chart_smallbusiness" height="180"></canvas>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var ctx = document.getElementById('chart_smallbusiness').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ["u/Background-S", "u/Cheap-Front-", "u/Candid-Prima"],
+      datasets: [
+        {label:'Total Karma', data:[0, 1425, 2546], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"], borderRadius:6},
+        {label:'Post Score',  data:[20426, 3384, 2693], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"].map(c=>c+'88'), borderRadius:6}
+      ]
+    },
+    options: {
+      responsive:true,
+      plugins:{legend:{labels:{color:'#ccc',font:{size:11}}}},
+      scales:{
+        x:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}},
+        y:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}}
+      }
+    }
+  });
+})();
+</script>
+
+<div class="sub-card">
+  <div class="sub-header" style="background:#dda0dd">
+    <span class="sub-icon">r/</span>
+    <span class="sub-name">startups</span>
+    <span class="sub-count">3 contributors</span>
+  </div>
+  <div class="sub-body">
+    <div class="contributors-list">
+      
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#f4c430">H</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/Hot-Conversation-437" target="_blank">u/Hot-Conversation-437</a>
+      <div class="rank-label" style="color:#f4c430">🥇 #1</div>
+    </div>
+    <span class="badge badge-gray">未知</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">0</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:0%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">2.1k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">7</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#b0b8c1">F</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/findur20" target="_blank">u/findur20</a>
+      <div class="rank-label" style="color:#b0b8c1">🥈 #2</div>
+    </div>
+    <span class="badge badge-blue">3y 4m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">808</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:22%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">1.8k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:83%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">6</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#cd7f32">W</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/wilschroter" target="_blank">u/wilschroter</a>
+      <div class="rank-label" style="color:#cd7f32">🥉 #3</div>
+    </div>
+    <span class="badge badge-gold">13y 11m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">3.6k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">1.9k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:92%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">3</span>
+    </div>
+  </div>
+</div>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="chart_startups" height="180"></canvas>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var ctx = document.getElementById('chart_startups').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ["u/Hot-Conversa", "u/findur20", "u/wilschroter"],
+      datasets: [
+        {label:'Total Karma', data:[0, 808, 3620], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"], borderRadius:6},
+        {label:'Post Score',  data:[2110, 1757, 1941], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"].map(c=>c+'88'), borderRadius:6}
+      ]
+    },
+    options: {
+      responsive:true,
+      plugins:{legend:{labels:{color:'#ccc',font:{size:11}}}},
+      scales:{
+        x:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}},
+        y:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}}
+      }
+    }
+  });
+})();
+</script>
+
+<div class="sub-card">
+  <div class="sub-header" style="background:#98d8c8">
+    <span class="sub-icon">r/</span>
+    <span class="sub-name">marketing</span>
+    <span class="sub-count">3 contributors</span>
+  </div>
+  <div class="sub-body">
+    <div class="contributors-list">
+      
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#f4c430">B</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/biz_booster" target="_blank">u/biz_booster</a>
+      <div class="rank-label" style="color:#f4c430">🥇 #1</div>
+    </div>
+    <span class="badge badge-gold">7y 5m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">41.4k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:97%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">14.5k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">15</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#b0b8c1">P</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/polygraph-net" target="_blank">u/polygraph-net</a>
+      <div class="rank-label" style="color:#b0b8c1">🥈 #2</div>
+    </div>
+    <span class="badge badge-gold">7y 7m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">42.7k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">5.7k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:39%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">7</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#cd7f32">T</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/Torholic" target="_blank">u/Torholic</a>
+      <div class="rank-label" style="color:#cd7f32">🥉 #3</div>
+    </div>
+    <span class="badge badge-gray">未知</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">0</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:0%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">4.5k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:31%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">3</span>
+    </div>
+  </div>
+</div>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="chart_marketing" height="180"></canvas>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var ctx = document.getElementById('chart_marketing').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ["u/biz_booster", "u/polygraph-ne", "u/Torholic"],
+      datasets: [
+        {label:'Total Karma', data:[41428, 42725, 0], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"], borderRadius:6},
+        {label:'Post Score',  data:[14455, 5704, 4525], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"].map(c=>c+'88'), borderRadius:6}
+      ]
+    },
+    options: {
+      responsive:true,
+      plugins:{legend:{labels:{color:'#ccc',font:{size:11}}}},
+      scales:{
+        x:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}},
+        y:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}}
+      }
+    }
+  });
+})();
+</script>
+
+<div class="sub-card">
+  <div class="sub-header" style="background:#f7dc6f">
+    <span class="sub-icon">r/</span>
+    <span class="sub-name">SEO</span>
+    <span class="sub-count">3 contributors</span>
+  </div>
+  <div class="sub-body">
+    <div class="contributors-list">
+      
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#f4c430">W</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/WebLinkr" target="_blank">u/WebLinkr</a>
+      <div class="rank-label" style="color:#f4c430">🥇 #1</div>
+    </div>
+    <span class="badge badge-gold">7y 3m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">49.2k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">4.6k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">27</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#b0b8c1">C</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/Character_Ad_1990" target="_blank">u/Character_Ad_1990</a>
+      <div class="rank-label" style="color:#b0b8c1">🥈 #2</div>
+    </div>
+    <span class="badge badge-gold">5y 4m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">2.0k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:4%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">2.5k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:54%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">5</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#cd7f32">T</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/tetonpassboarder" target="_blank">u/tetonpassboarder</a>
+      <div class="rank-label" style="color:#cd7f32">🥉 #3</div>
+    </div>
+    <span class="badge badge-gold">10y 6m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">9.9k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:20%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">2.8k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:60%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">2</span>
+    </div>
+  </div>
+</div>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="chart_SEO" height="180"></canvas>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var ctx = document.getElementById('chart_SEO').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ["u/WebLinkr", "u/Character_Ad", "u/tetonpassboa"],
+      datasets: [
+        {label:'Total Karma', data:[49248, 1969, 9906], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"], borderRadius:6},
+        {label:'Post Score',  data:[4635, 2522, 2796], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"].map(c=>c+'88'), borderRadius:6}
+      ]
+    },
+    options: {
+      responsive:true,
+      plugins:{legend:{labels:{color:'#ccc',font:{size:11}}}},
+      scales:{
+        x:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}},
+        y:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}}
+      }
+    }
+  });
+})();
+</script>
+
+<div class="sub-card">
+  <div class="sub-header" style="background:#82e0aa">
+    <span class="sub-icon">r/</span>
+    <span class="sub-name">SideProject</span>
+    <span class="sub-count">3 contributors</span>
+  </div>
+  <div class="sub-body">
+    <div class="contributors-list">
+      
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#f4c430">P</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/Pristine-Elevator198" target="_blank">u/Pristine-Elevator198</a>
+      <div class="rank-label" style="color:#f4c430">🥇 #1</div>
+    </div>
+    <span class="badge badge-gray">1y 2m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">197.0k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">20.4k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">8</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#b0b8c1">N</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/nocturnality03" target="_blank">u/nocturnality03</a>
+      <div class="rank-label" style="color:#b0b8c1">🥈 #2</div>
+    </div>
+    <span class="badge badge-blue">4y 6m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">15.5k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:8%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">14.1k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:69%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">4</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#cd7f32">O</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/officer_KD6-3-7" target="_blank">u/officer_KD6-3-7</a>
+      <div class="rank-label" style="color:#cd7f32">🥉 #3</div>
+    </div>
+    <span class="badge badge-gold">6y 5m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">3.8k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:2%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">12.5k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:61%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">2</span>
+    </div>
+  </div>
+</div>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="chart_SideProject" height="180"></canvas>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var ctx = document.getElementById('chart_SideProject').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ["u/Pristine-Ele", "u/nocturnality", "u/officer_KD6-"],
+      datasets: [
+        {label:'Total Karma', data:[196985, 15533, 3797], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"], borderRadius:6},
+        {label:'Post Score',  data:[20371, 14080, 12477], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"].map(c=>c+'88'), borderRadius:6}
+      ]
+    },
+    options: {
+      responsive:true,
+      plugins:{legend:{labels:{color:'#ccc',font:{size:11}}}},
+      scales:{
+        x:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}},
+        y:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}}
+      }
+    }
+  });
+})();
+</script>
+
+<div class="sub-card">
+  <div class="sub-header" style="background:#f1948a">
+    <span class="sub-icon">r/</span>
+    <span class="sub-name">growthhacking</span>
+    <span class="sub-count">3 contributors</span>
+  </div>
+  <div class="sub-body">
+    <div class="contributors-list">
+      
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#f4c430">I</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/IntelligentCan4" target="_blank">u/IntelligentCan4</a>
+      <div class="rank-label" style="color:#f4c430">🥇 #1</div>
+    </div>
+    <span class="badge badge-gray">未知</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">0</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:0%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">1.1k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#f4c430"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">10</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#b0b8c1">E</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/Ecstatic-Tough6503" target="_blank">u/Ecstatic-Tough6503</a>
+      <div class="rank-label" style="color:#b0b8c1">🥈 #2</div>
+    </div>
+    <span class="badge badge-gray">10m</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">25.8k</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:100%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">470</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:41%;background:#b0b8c1"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">9</span>
+    </div>
+  </div>
+</div>
+<div class="contributor">
+  <div class="contributor-header">
+    <div class="avatar" style="background:#cd7f32">D</div>
+    <div class="contributor-meta">
+      <a class="username" href="https://www.reddit.com/u/donaltramp699" target="_blank">u/donaltramp699</a>
+      <div class="rank-label" style="color:#cd7f32">🥉 #3</div>
+    </div>
+    <span class="badge badge-gray">未知</span>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <span class="stat-label">Karma</span>
+      <span class="stat-val">0</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:0%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">帖子得分</span>
+      <span class="stat-val">544</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:48%;background:#cd7f32"></div></div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">发帖数</span>
+      <span class="stat-val">8</span>
+    </div>
+  </div>
+</div>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="chart_growthhacking" height="180"></canvas>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var ctx = document.getElementById('chart_growthhacking').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ["u/IntelligentC", "u/Ecstatic-Tou", "u/donaltramp69"],
+      datasets: [
+        {label:'Total Karma', data:[0, 25763, 0], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"], borderRadius:6},
+        {label:'Post Score',  data:[1140, 470, 544], backgroundColor:["#f4c430", "#b0b8c1", "#cd7f32"].map(c=>c+'88'), borderRadius:6}
+      ]
+    },
+    options: {
+      responsive:true,
+      plugins:{legend:{labels:{color:'#ccc',font:{size:11}}}},
+      scales:{
+        x:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}},
+        y:{ticks:{color:'#aaa'},grid:{color:'#2a2a2a'}}
+      }
+    }
+  });
+})();
+</script>
+</div>
+
+<div class="cta">
+  <h2>一键生成完整 <span>Playbook</span></h2>
+  <p>smart-crawler 提供 3 个 MCP 工具，让 AI Agent 直接调用 Reddit 情报能力。<br>
+     无需 API Key，无需 OAuth，支持历史存档（含已删帖）。</p>
+  <div class="code-block">
+<span class="comment"># MCP Tool 调用示例（任意 Agent / Claude / GPT）</span>
+
+<span class="kw">reddit_subreddit_playbook</span>(<span class="str">"entrepreneur"</span>, top_n=<span class="str">3</span>)
+<span class="comment"># → 自动找 top 3 贡献者 → 抓帖子/评论 → LLM 生成 playbook</span>
+<span class="comment"># → 返回成长时间线 / 内容公式 / 5步可复制路径</span>
+
+<span class="kw">reddit_top_contributors</span>(<span class="str">"AmazonFBA"</span>, top_n=<span class="str">5</span>)
+<span class="comment"># → 返回 karma / 年龄 / 帖子统计</span>
+
+<span class="kw">reddit_user_activity</span>(<span class="str">"username"</span>, subreddit=<span class="str">"SEO"</span>)
+<span class="comment"># → 完整发帖记录 + 月度活跃时间线 + top 5 爆款帖</span>
+  </div>
+  <div class="pill-row">
+    <a class="pill pill-orange" href="https://smartcrawler.io/docs/reddit" target="_blank">查看文档</a>
+    <a class="pill pill-outline" href="https://smartcrawler.io/mcp" target="_blank">MCP Endpoint</a>
+    <a class="pill pill-outline" href="https://github.com/mguozhen/smart-crawler" target="_blank">GitHub</a>
+  </div>
+</div>
+
+<div class="footer">
+  smart-crawler · Reddit Intelligence · 2026-05-19 22:30 ·
+  <a href="https://smartcrawler.io" style="color:#4ecdc4">smartcrawler.io</a>
+</div>
+
+</body>
+</html>

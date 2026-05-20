@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
   "name": "io.github.mguozhen/smart-crawler",
-  "description": "Cross-border e-commerce competitor intelligence engine for AI agents. Covers 46 brand storefronts across 9 home-goods brands plus 21 review channels: structured competitor product/price/promotion data, voice-of-customer reviews with NLP sentiment analysis, and Google Shopping competitive landscape.",
-  "version": "0.1.0",
+  "description": "Cross-border e-commerce competitor intelligence + Reddit community analysis for AI agents. Covers 46 brand storefronts across 9 home-goods brands plus 21 review channels: structured competitor product/price/promotion data, voice-of-customer reviews with NLP sentiment, Google Shopping competitive landscape, Amazon ASIN VOC analysis, and one-shot Reddit subreddit growth playbooks (top contributor discovery + post history + LLM-generated replicable playbooks).",
+  "version": "0.2.0",
   "repository": {
     "url": "https://github.com/mguozhen/smart-crawler",
     "source": "github",

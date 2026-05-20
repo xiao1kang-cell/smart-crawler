@@ -98,7 +98,9 @@ smart-crawler 把竞品数据采集能力直接做成 **MCP 服务器**，AI Age
 - **清单**：项目根 [`server.json`](./server.json)（官方 MCP Registry 格式）
 - **发现层**：`/llms.txt` · `/.well-known/mcp.json` · `/.well-known/ai-plugin.json` · `/agents.json`
 
-### 7 个 MCP 工具
+### 12 个 MCP 工具
+
+**电商竞品情报**
 
 | 工具 | 说明 |
 |------|------|
@@ -109,6 +111,21 @@ smart-crawler 把竞品数据采集能力直接做成 **MCP 服务器**，AI Age
 | `get_voc_reviews` | 取消费者口碑（VOC）评论 + NLP 情感 / 分类标注 |
 | `voc_summary` | 口碑分析汇总：情感分布 + 痛点分类占比 |
 | `competitor_landscape` | Google Shopping 某关键词下各商家出现占有率 |
+
+**亚马逊 VOC**
+
+| 工具 | 说明 |
+|------|------|
+| `amazon_voc_report` | 按 ASIN 抓评论 + AI 口碑分析（情感 / 痛点 / 卖点 / Listing 优化建议） |
+| `fetch_amazon_reviews` | 按 ASIN 取原始评论数组（不做分析，适合接自定义管线） |
+
+**Reddit 社区情报**（详见 [`docs/reddit-intelligence.md`](./docs/reddit-intelligence.md)）
+
+| 工具 | 说明 |
+|------|------|
+| `reddit_top_contributors` | 找 subreddit top N 贡献者（karma + 年龄 + 发帖统计） |
+| `reddit_user_activity` | 用户完整发帖 + 评论历史（含 Arctic Shift 存档已删帖） |
+| `reddit_subreddit_playbook` | 一键生成 top N 贡献者完整 Playbook（成长路径 + 5 步可复制） |
 
 ### 客户端配置示例
 

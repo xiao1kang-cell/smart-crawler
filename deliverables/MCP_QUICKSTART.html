@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>smart-crawler MCP — 5 分钟接入指南</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:#fafafa;color:#1f2937;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-serif;
+     line-height:1.65;padding:0;font-size:15px}
+a{color:#0066cc;text-decoration:none}
+a:hover{text-decoration:underline}
+
+.hero{background:linear-gradient(135deg,#1a1a2e 0%,#0f3460 100%);color:#fff;padding:56px 32px 40px;text-align:center}
+.hero .badge{display:inline-block;padding:5px 14px;background:rgba(78,205,196,.15);
+              border:1px solid #4ecdc4;border-radius:20px;font-size:0.78rem;color:#4ecdc4;margin-bottom:18px;
+              letter-spacing:1.5px;text-transform:uppercase}
+.hero h1{font-size:2.6rem;font-weight:800;letter-spacing:-1px;line-height:1.15}
+.hero h1 .grad{background:linear-gradient(90deg,#ff6b35,#f7b731);
+                -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero .sub{color:#8a9bb5;font-size:1.05rem;margin-top:12px;max-width:600px;margin-left:auto;margin-right:auto}
+.hero .meta{margin-top:14px;font-size:0.78rem;color:#566;letter-spacing:1px}
+
+main{max-width:880px;margin:0 auto;padding:48px 32px 64px;background:#fff;
+      box-shadow:0 0 0 1px #e5e7eb;border-radius:0}
+
+h1{font-size:1.6rem;font-weight:700;margin:36px 0 12px;letter-spacing:-0.3px}
+h2{font-size:1.35rem;font-weight:700;margin:36px 0 14px;padding-bottom:8px;border-bottom:2px solid #f3f4f6;
+   letter-spacing:-0.2px;color:#111827}
+h3{font-size:1.05rem;font-weight:700;margin:24px 0 10px;color:#1f2937}
+p{margin-bottom:12px;color:#374151}
+strong{color:#111827;font-weight:600}
+
+ul{margin:8px 0 12px 0;padding-left:24px}
+li{margin-bottom:4px;color:#374151}
+
+blockquote{background:#fef9e7;border-left:4px solid #f7b731;
+            padding:10px 16px;border-radius:0 6px 6px 0;color:#5a4500;font-style:italic;margin:14px 0}
+
+table{border-collapse:collapse;margin:14px 0 20px;width:100%;font-size:0.92rem;
+       box-shadow:0 1px 3px rgba(0,0,0,.05);border-radius:8px;overflow:hidden}
+thead{background:linear-gradient(135deg,#f9fafb,#f3f4f6)}
+th{text-align:left;padding:10px 14px;border-bottom:1px solid #e5e7eb;font-weight:700;color:#111827;font-size:0.88rem}
+td{padding:10px 14px;border-bottom:1px solid #f3f4f6;vertical-align:top}
+tbody tr:hover{background:#fafbfc}
+tbody tr:last-child td{border-bottom:none}
+
+code{font-family:'Fira Code','SF Mono',monospace;font-size:0.86em;
+      background:#f1f5f9;color:#1e40af;padding:1px 6px;border-radius:4px}
+.codeblock{background:#0d1117;color:#e6edf3;padding:18px 22px;border-radius:10px;
+            overflow-x:auto;margin:12px 0 20px;font-size:0.84rem;line-height:1.7;
+            border:1px solid #1f2937;box-shadow:0 4px 14px rgba(0,0,0,.08)}
+.codeblock code{background:transparent;color:inherit;padding:0;font-size:inherit}
+
+hr{border:none;border-top:1px solid #e5e7eb;margin:28px 0}
+
+footer{text-align:center;padding:32px;color:#6b7280;font-size:0.85rem;background:#f9fafb;border-top:1px solid #e5e7eb}
+footer a{color:#0066cc}
+
+@media(max-width:760px){
+  main{padding:32px 20px}
+  .hero h1{font-size:1.9rem}
+  table{font-size:0.82rem}
+}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="badge">SMART-CRAWLER · MCP</div>
+  <h1>5 分钟接入 <span class="grad">12 个 Agent 工具</span></h1>
+  <p class="sub">把竞品情报 + 亚马逊 VOC + Reddit 社区分析 直接接入到 Claude / Cursor / Cline</p>
+  <div class="meta">更新于 2026-05-20</div>
+</div>
+
+<main>
+<blockquote>任何支持 MCP 协议的 Agent（Claude Desktop / Cursor / Cline / Continue）都能直接调。</blockquote>
+<hr>
+<h2>1. 服务概览</h2>
+<table><thead><tr><th>项目</th><th>值</th></tr></thead><tbody><tr><td><strong>MCP Endpoint</strong></td><td><code>https://smartcrawler.io/mcp/</code> ← 末尾斜杠必须有</td></tr><tr><td><strong>传输</strong></td><td>streamable-http</td></tr><tr><td><strong>鉴权</strong></td><td><code>Authorization: Bearer sck_...</code></td></tr><tr><td><strong>工具数</strong></td><td>12</td></tr><tr><td><strong>官网</strong></td><td>https://smartcrawler.io</td></tr><tr><td><strong>文档</strong></td><td>https://smartcrawler.io/docs</td></tr><tr><td><strong>API Key 申请</strong></td><td>mcp@smartcrawler.io</td></tr></tbody></table>
+<hr>
+<h2>2. 12 个工具</h2>
+<h3>🛒 电商竞品情报（7）</h3>
+<table><thead><tr><th>工具</th><th>一句话</th></tr></thead><tbody><tr><td><code>list_data_sources</code></td><td>列出全部数据源：46 站 + 评论平台 + Google Shopping</td></tr><tr><td><code>search_competitor_products</code></td><td>按品牌 / 国家 / 关键词 / 价格 / 促销搜竞品商品</td></tr><tr><td><code>get_product_detail</code></td><td>单商品完整信息 + 历史价格曲线</td></tr><tr><td><code>list_promotions</code></td><td>当前促销活动 + 折扣率</td></tr><tr><td><code>get_voc_reviews</code></td><td>消费者口碑评论 + NLP 情感 / 分类</td></tr><tr><td><code>voc_summary</code></td><td>口碑分析汇总（情感分布 + 痛点占比）</td></tr><tr><td><code>competitor_landscape</code></td><td>Google Shopping 关键词商家份额</td></tr></tbody></table>
+<h3>📦 亚马逊 VOC（2）</h3>
+<table><thead><tr><th>工具</th><th>一句话</th></tr></thead><tbody><tr><td><code>amazon_voc_report</code></td><td>ASIN 评论抓取 + AI VOC 分析（痛点 / 卖点 / Listing 优化）</td></tr><tr><td><code>fetch_amazon_reviews</code></td><td>ASIN 原始评论数组（不做分析）</td></tr></tbody></table>
+<h3>🤖 Reddit 社区情报（3）</h3>
+<table><thead><tr><th>工具</th><th>一句话</th></tr></thead><tbody><tr><td><code>reddit_top_contributors</code></td><td>找 subreddit top N 贡献者</td></tr><tr><td><code>reddit_user_activity</code></td><td>用户完整发帖 + 评论历史（含已删帖）</td></tr><tr><td><code>reddit_subreddit_playbook</code></td><td>一键生成 top N 完整 Playbook（成长 + 5 步路径）</td></tr></tbody></table>
+<hr>
+<h2>3. 接入方式（按 Agent 选）</h2>
+<h3>Claude Desktop / Claude Code CLI</h3>
+<strong>配置文件位置</strong>：
+<ul><li>macOS: <code>~/Library/Application Support/Claude/claude_desktop_config.json</code></li>
+<li>Windows: <code>%APPDATA%\Claude\claude_desktop_config.json</code></li>
+<li>Claude Code CLI: <code>~/.claude.json</code>（mcpServers 字段）</li></ul>
+<strong>加入这一段</strong>：
+<pre class="codeblock" data-lang="json"><code>{
+  &quot;mcpServers&quot;: {
+    &quot;smart-crawler&quot;: {
+      &quot;type&quot;: &quot;streamable-http&quot;,
+      &quot;url&quot;: &quot;https://smartcrawler.io/mcp/&quot;,
+      &quot;headers&quot;: {
+        &quot;Authorization&quot;: &quot;Bearer sck_你的密钥&quot;
+      }
+    }
+  }
+}
+</code></pre>
+<p>重启 Claude → 在对话里直接说："找 r/entrepreneur 最有影响力的 3 个人，生成 playbook"</p>
+<hr>
+<h3>Cursor</h3>
+<strong>配置文件</strong>：<code>~/.cursor/mcp.json</code>
+<pre class="codeblock" data-lang="json"><code>{
+  &quot;mcpServers&quot;: {
+    &quot;smart-crawler&quot;: {
+      &quot;url&quot;: &quot;https://smartcrawler.io/mcp/&quot;,
+      &quot;headers&quot;: {
+        &quot;Authorization&quot;: &quot;Bearer sck_你的密钥&quot;
+      }
+    }
+  }
+}
+</code></pre>
+<p>打开 Cursor → Cmd+Shift+J → MCP → 看到 smart-crawler 12 个工具就成功了。</p>
+<hr>
+<h3>Cline (VSCode 插件)</h3>
+<p>VSCode 设置 → 搜 "Cline MCP" → 打开 MCP Servers 配置 → 加：</p>
+<pre class="codeblock" data-lang="json"><code>{
+  &quot;smart-crawler&quot;: {
+    &quot;transport&quot;: {
+      &quot;type&quot;: &quot;streamable-http&quot;,
+      &quot;url&quot;: &quot;https://smartcrawler.io/mcp/&quot;
+    },
+    &quot;headers&quot;: {
+      &quot;Authorization&quot;: &quot;Bearer sck_你的密钥&quot;
+    }
+  }
+}
+</code></pre>
+<hr>
+<h3>命令行测试（curl）</h3>
+<p>不依赖任何 Agent，直接 JSON-RPC 调：</p>
+<pre class="codeblock" data-lang="bash"><code>curl -X POST https://smartcrawler.io/mcp/ \
+  -H &quot;Authorization: Bearer sck_你的密钥&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  -H &quot;Accept: application/json, text/event-stream&quot; \
+  -d &#x27;{
+    &quot;jsonrpc&quot;: &quot;2.0&quot;,
+    &quot;id&quot;: 1,
+    &quot;method&quot;: &quot;tools/list&quot;,
+    &quot;params&quot;: {}
+  }&#x27;
+</code></pre>
+<p>返回 12 个工具的清单 = 接入成功。</p>
+<hr>
+<h2>4. 真实用法示例</h2>
+<h3>例 1：找 subreddit KOL（10 秒）</h3>
+<strong>给 Agent 说</strong>：
+<blockquote>"用 smart-crawler 找 r/AmazonFBA 的 top 3 贡献者，告诉我他们都是谁，karma 多少。"</blockquote>
+<p>Agent 调用：
+<pre class="codeblock" data-lang="json"><code>{
+  &quot;tool&quot;: &quot;reddit_top_contributors&quot;,
+  &quot;arguments&quot;: { &quot;subreddit&quot;: &quot;AmazonFBA&quot;, &quot;top_n&quot;: 3 }
+}
+</code></pre></p>
+<p>返回：
+<pre class="codeblock" data-lang="json"><code>{
+  &quot;top_contributors&quot;: [
+    { &quot;username&quot;: &quot;SlyGuyxD&quot;, &quot;posts_in_sub&quot;: 12, &quot;total_karma&quot;: 3917, &quot;reddit_age_days&quot;: 2982 },
+    ...
+  ]
+}
+</code></pre></p>
+<hr>
+<h3>例 2：生成 Reddit 完整 Playbook（3-5 分钟）</h3>
+<blockquote>"帮我生成 r/entrepreneur top 3 贡献者的成长 playbook，重点看他们怎么从 0 做到顶级 KOL 的。"</blockquote>
+<p>Agent 调用 <code>reddit_subreddit_playbook</code> → 返回 Markdown + JSON 双格式，包含：
+<ul><li>每位贡献者的成长时间线（起步期 / 爆发期 / 成熟期）</li>
+<li>内容公式（什么话题 + 什么形式有效）</li>
+<li>爆款帖拆解（为什么这帖爆了）</li>
+<li>5 步可复制路径</li></ul></p>
+<hr>
+<h3>例 3：竞品价格监控</h3>
+<blockquote>"搜一下 SONGMICS 在美国的所有储物柜商品，按当前售价排序，标出在促销的。"</blockquote>
+<p>Agent 调用：
+<pre class="codeblock" data-lang="json"><code>{
+  &quot;tool&quot;: &quot;search_competitor_products&quot;,
+  &quot;arguments&quot;: {
+    &quot;brand&quot;: &quot;SONGMICS&quot;,
+    &quot;country&quot;: &quot;US&quot;,
+    &quot;keyword&quot;: &quot;storage cabinet&quot;,
+    &quot;on_promotion&quot;: true,
+    &quot;limit&quot;: 20
+  }
+}
+</code></pre></p>
+<hr>
+<h3>例 4：亚马逊 ASIN 口碑分析</h3>
+<blockquote>"我们的 ASIN B08XYZ123 在美区，帮我分析评论里的主要痛点和卖点。"</blockquote>
+<p>Agent 调用 <code>amazon_voc_report</code> → 返回情感分布 + 痛点分类 + Listing 优化建议（中英双语）。</p>
+<hr>
+<h2>5. 数据特点</h2>
+<table><thead><tr><th>特性</th><th>说明</th></tr></thead><tbody><tr><td><strong>无需 Reddit API Key</strong></td><td>走公开 JSON + Arctic Shift 历史存档</td></tr><tr><td><strong>含已删帖</strong></td><td>Arctic Shift 是 Reddit 全站镜像</td></tr><tr><td><strong>限流自适应</strong></td><td>1.2 req/s，不会被 Reddit 封</td></tr><tr><td><strong>跨境电商覆盖</strong></td><td>46 站：SONGMICS / Costway / Homary / Vidaxl / Flexispot 等 9 大品牌</td></tr><tr><td><strong>9 国市场</strong></td><td>US / UK / DE / FR / IT / ES / NL / PL / CA</td></tr><tr><td><strong>评论数据</strong></td><td>Trustpilot / Reviews.io / Google Maps</td></tr></tbody></table>
+<hr>
+<h2>6. 申请 API Key</h2>
+<p>发邮件到 <strong>mcp@smartcrawler.io</strong>，附：
+<ul><li>你的姓名 + 公司</li>
+<li>用途简述（哪些工具 / 预估调用量）</li></ul></p>
+<p>我们当天回邮件 + 给 Key。<strong>免费 trial 含</strong>：
+<ul><li>100 次 <code>reddit_top_contributors</code></li>
+<li>30 次 <code>reddit_user_activity</code></li>
+<li>5 次 <code>reddit_subreddit_playbook</code>（含 LLM playbook 生成）</li>
+<li>1000 次电商查询（<code>search_competitor_products</code> / <code>list_promotions</code> 等）</li></ul></p>
+<hr>
+<h2>7. 常见问题</h2>
+<strong>Q：MCP 调用要不要自己装 Python / Node？</strong>  
+A：不需要。endpoint 是远程 HTTP，Agent 直接走 HTTPS 连。
+<strong>Q：为什么 URL 末尾要带斜杠？</strong>  
+A：服务器配的是 <code>/mcp/</code>，没斜杠会 307 重定向到 http（curl 默认会跟错），Agent 框架则可能直接报错。
+<strong>Q：playbook 生成为什么这么慢？</strong>  
+A：30 个用户串行 × 每人 Reddit 限流采集（~10s）+ LLM 分析（~30s），所以单 subreddit top 3 ≈ 3-5 分钟。如果只要数据不要 playbook，用 <code>reddit_user_activity</code> 单独调，10 秒/人。
+<strong>Q：能本地部署吗？</strong>  
+A：可以。GitHub 仓库：https://github.com/mguozhen/smart-crawler  
+   <code>python -m app.mcp_server</code> 起本地 stdio MCP server（见仓库 README）。
+<strong>Q：支持哪些 LLM gateway？</strong>  
+A：<code>reddit_subreddit_playbook</code> 默认走 flatkey.ai，也支持 OpenAI / Anthropic / Azure（在服务端配 <code>LLM_BASE_URL</code> 即可，客户无感知）。
+<hr>
+<h2>8. 资源链接</h2>
+<table><thead><tr><th>资源</th><th>URL</th></tr></thead><tbody><tr><td>官网</td><td>https://smartcrawler.io</td></tr><tr><td>MCP Endpoint</td><td>https://smartcrawler.io/mcp/</td></tr><tr><td>GitHub</td><td>https://github.com/mguozhen/smart-crawler</td></tr><tr><td>文档</td><td>https://smartcrawler.io/docs</td></tr><tr><td>Reddit 功能详解</td><td>https://github.com/mguozhen/smart-crawler/blob/main/docs/reddit-intelligence.md</td></tr><tr><td>Demo 报告（30 位贡献者深度档案）</td><td>见附件 <code>reddit_deep_research.html</code></td></tr><tr><td>申请 API Key</td><td>mcp@smartcrawler.io</td></tr></tbody></table>
+<hr>
+<p>*smart-crawler · MCP Quickstart · 2026-05-20*
+</p>
+</main>
+
+<footer>
+  smart-crawler · <a href="https://smartcrawler.io">smartcrawler.io</a> ·
+  <a href="mailto:mcp@smartcrawler.io">mcp@smartcrawler.io</a> ·
+  <a href="https://github.com/mguozhen/smart-crawler">GitHub</a>
+</footer>
+
+</body>
+</html>

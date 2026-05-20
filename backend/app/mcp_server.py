@@ -230,6 +230,57 @@ def fetch_amazon_reviews(asin: str, market: str = "US",
         return {"error": str(exc)}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Reddit Playbook Tools
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool
+def reddit_top_contributors(subreddit: str, top_n: int = 3) -> dict:
+    """找某 subreddit 的 top N 贡献者（按发帖数 + 总赞数综合排名）。
+    返回用户名、karma、账号年龄、帖子统计。后续可传给 reddit_user_activity 或
+    reddit_subreddit_playbook 做深度分析。
+    示例：reddit_top_contributors("entrepreneur", top_n=3)"""
+    from .crawlers.reddit import get_top_contributors
+    try:
+        return {"subreddit": subreddit,
+                "top_contributors": get_top_contributors(subreddit, top_n=top_n)}
+    except Exception as exc:
+        return {"error": str(exc), "subreddit": subreddit}
+
+
+@mcp.tool
+def reddit_user_activity(username: str, subreddit: str | None = None,
+                          post_limit: int = 100,
+                          comment_limit: int = 100) -> dict:
+    """取一位 Reddit 用户的完整发帖 + 评论活动。
+    subreddit 不填则取全站活动。返回：profile stats / top posts / 月度活跃时间线。
+    示例：reddit_user_activity("user123", subreddit="entrepreneur")"""
+    from .crawlers.reddit import get_user_activity
+    try:
+        return get_user_activity(username, subreddit=subreddit,
+                                 post_limit=min(post_limit, 200),
+                                 comment_limit=min(comment_limit, 200))
+    except Exception as exc:
+        return {"error": str(exc), "username": username}
+
+
+@mcp.tool
+def reddit_subreddit_playbook(subreddit: str, top_n: int = 3) -> dict:
+    """一键生成 subreddit 的 top N 贡献者 playbook。
+
+    完整流程：① 找 top N 贡献者 → ② 抓每人的帖子/评论 → ③ LLM 分析生成 playbook。
+    每位贡献者的 playbook 包含：成长时间线、内容公式、爆款分析、5步可复制路径。
+    返回结构化 JSON + Markdown 格式的完整 playbook 文档。
+
+    注意：每人约 3-5 分钟（Reddit 限流 + LLM 调用），top_n=3 约 10-15 分钟。
+    示例：reddit_subreddit_playbook("entrepreneur", top_n=3)"""
+    from .reddit_playbook import generate_subreddit_playbook
+    try:
+        return generate_subreddit_playbook(subreddit, top_n=top_n)
+    except Exception as exc:
+        return {"error": str(exc), "subreddit": subreddit}
+
+
 if __name__ == "__main__":
     import os
     mcp.run(transport="http", host="0.0.0.0",

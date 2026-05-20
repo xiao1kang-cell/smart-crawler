@@ -1,0 +1,37 @@
+# Smithery MCP Server Configuration
+# https://smithery.ai/docs/config
+
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      openai_api_key:
+        type: string
+        title: "LLM API Key"
+        description: "flatkey.ai or OpenAI API key for Playbook generation (reddit_subreddit_playbook only)"
+      llm_base_url:
+        type: string
+        title: "LLM Gateway URL"
+        description: "OpenAI-compatible gateway base URL"
+        default: "https://app.flatkey.ai/v1"
+      llm_model:
+        type: string
+        title: "LLM Model"
+        default: "gpt-5.4-mini"
+      http_proxy:
+        type: string
+        title: "HTTP Proxy (optional)"
+        description: "e.g. http://user:pass@proxy:port"
+    required: []
+  commandFunction: |
+    (config) => ({
+      command: "python",
+      args: ["-m", "app.mcp_server"],
+      env: {
+        ...(config.openai_api_key && { OPENAI_API_KEY: config.openai_api_key }),
+        ...(config.llm_base_url   && { LLM_BASE_URL:   config.llm_base_url }),
+        ...(config.llm_model      && { LLM_MODEL:       config.llm_model }),
+        ...(config.http_proxy     && { HTTP_PROXY:      config.http_proxy }),
+      }
+    })
