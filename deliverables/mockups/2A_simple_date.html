@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>方案 2A · 简单日期列 — smart-crawler</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+body{background:#fff;color:#1f2937;min-height:100vh;font-size:14px}
+a{color:#7c3aed;text-decoration:none}
+
+/* match real product page style (light theme like client screenshot) */
+.topbar{padding:14px 24px;display:flex;align-items:center;gap:18px;border-bottom:1px solid #e5e7eb}
+.logo-wrap{display:flex;align-items:center;gap:9px}
+.logo{width:30px;height:30px;border-radius:6px;background:radial-gradient(circle at 30% 30%,#a78bfa,#7c3aed);display:flex;align-items:center;justify-content:center}
+.brand{font-weight:700;color:#111827}
+.brand .accent{color:#7c3aed}
+.site-select{padding:7px 16px 7px 14px;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:8px;font-size:0.85rem;color:#374151;display:flex;align-items:center;gap:8px;min-width:240px;justify-content:space-between}
+.site-url{color:#6b7280;font-size:0.82rem}
+.user{margin-left:auto;display:flex;align-items:center;gap:12px;font-size:0.85rem}
+.user .dot{width:8px;height:8px;background:#10b981;border-radius:50%}
+.user .ts{color:#6b7280;font-size:0.78rem}
+.export-btn{padding:8px 16px;background:#fff;border:1px solid #d1d5db;border-radius:8px;font-size:0.85rem;color:#374151;display:flex;align-items:center;gap:6px;cursor:pointer}
+
+/* tabs */
+.tabs{display:flex;gap:0;padding:0 24px;border-bottom:1px solid #e5e7eb}
+.tab{padding:14px 18px;color:#6b7280;font-size:0.92rem;cursor:pointer;position:relative}
+.tab.active{color:#7c3aed;font-weight:600}
+.tab.active::after{content:'';position:absolute;bottom:-1px;left:18px;right:18px;height:2px;background:#7c3aed}
+
+/* filter */
+.filters{padding:18px 24px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.f-chip{padding:5px 14px;border-radius:18px;font-size:0.85rem;cursor:pointer}
+.f-chip.purple{background:linear-gradient(135deg,#ede9fe,#ddd6fe);color:#7c3aed;font-weight:600;padding:5px 16px}
+.f-chip.gray{background:#f3f4f6;color:#6b7280}
+.f-input{background:#f9fafb;border:1px solid #e5e7eb;color:#374151;padding:6px 12px;border-radius:18px;font-size:0.85rem;width:160px;outline:none}
+.f-input:focus{border-color:#c4b5fd}
+.f-spacer{flex:1}
+.btn-filter{padding:6px 20px;background:linear-gradient(135deg,#a78bfa,#7c3aed);color:#fff;border-radius:18px;font-size:0.85rem;font-weight:600;cursor:pointer;border:none}
+
+/* table */
+.table-wrap{padding:0 24px 24px}
+table{width:100%;border-collapse:collapse;font-size:0.88rem}
+thead{position:sticky;top:0;background:#fff;z-index:1}
+th{text-align:left;padding:14px 14px;color:#9ca3af;font-weight:500;font-size:0.85rem;border-bottom:1px solid #e5e7eb;white-space:nowrap}
+td{padding:18px 14px;border-bottom:1px solid #f3f4f6;color:#374151;vertical-align:middle}
+tr:hover{background:#fafbfc}
+
+.idx-col{width:30px;color:#9ca3af}
+.img-col{width:80px}
+.thumb{width:60px;height:60px;background:linear-gradient(135deg,#f3f4f6,#e5e7eb);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:1.5rem;color:#9ca3af}
+.title-col{min-width:260px;max-width:340px}
+.sku-col{font-family:'Fira Code','SF Mono',monospace;color:#6b7280;font-size:0.82rem}
+.attr-col{color:#6b7280;font-size:0.85rem}
+.price-col{color:#7c3aed;font-weight:600}
+.orig-col{color:#9ca3af;text-decoration:line-through}
+.dash{color:#d1d5db}
+.status-tag{display:inline-block;padding:3px 12px;background:#d1fae5;color:#065f46;border-radius:14px;font-size:0.78rem;font-weight:500}
+
+/* NEW: 落库时间 column */
+.ts-col{color:#9ca3af;font-size:0.82rem;white-space:nowrap;cursor:help;position:relative}
+.ts-col.recent{color:#6b7280}
+.ts-col-highlight{background:rgba(247,183,49,.08);border-left:3px solid #f7b731;border-right:3px solid #f7b731}
+
+/* tooltip on hover */
+.tooltip{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);background:#1f2937;color:#fff;padding:8px 12px;border-radius:6px;font-size:0.78rem;white-space:nowrap;z-index:10;box-shadow:0 4px 12px rgba(0,0,0,.15);opacity:0;pointer-events:none;transition:opacity .15s}
+.tooltip::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:5px solid transparent;border-top-color:#1f2937}
+.tooltip .full{color:#ddd6fe;font-weight:600;display:block;margin-bottom:2px}
+.tooltip .rel{color:#9ca3af}
+.ts-col:hover .tooltip{opacity:1}
+.ts-col.show-tooltip .tooltip{opacity:1}
+
+/* highlight banner */
+.highlight-banner{position:fixed;top:130px;right:30px;background:linear-gradient(135deg,#fbbf24,#f59e0b);color:#1f2937;padding:14px 18px;border-radius:11px;max-width:280px;font-size:0.85rem;line-height:1.5;z-index:50;box-shadow:0 8px 24px rgba(251,191,36,.3)}
+.highlight-banner strong{font-weight:800}
+.highlight-banner::after{content:'';position:absolute;top:48%;right:-10px;border:8px solid transparent;border-left-color:#fbbf24}
+
+/* callout */
+.callout{position:fixed;bottom:24px;left:24px;max-width:280px;background:linear-gradient(135deg,#a78bfa,#7c3aed);color:#fff;padding:14px 18px;border-radius:12px;z-index:300;box-shadow:0 6px 24px rgba(124,58,237,.3)}
+.callout-num{display:inline-block;background:rgba(255,255,255,.2);padding:1px 8px;border-radius:10px;font-size:0.72rem;font-weight:700;margin-bottom:5px}
+.callout h3{font-size:0.95rem;font-weight:800;margin-bottom:5px}
+.callout p{font-size:0.8rem;line-height:1.5;opacity:.95}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo-wrap">
+    <div class="logo"></div>
+    <div class="brand">smart<span class="accent">·</span>crawler</div>
+  </div>
+  <div class="site-select">SONGMICS · DE（11624）<span>▾</span></div>
+  <div class="site-url">https://www.songmics.de/</div>
+  <div class="user">
+    <span class="dot"></span>
+    <span>Aosom 管理员</span>
+    <span class="ts">更新 2026-05-21 04:03</span>
+  </div>
+  <div class="export-btn">⬇ 导出 Excel</div>
+</div>
+
+<div class="tabs">
+  <div class="tab">总体分析</div>
+  <div class="tab active">产品分析</div>
+  <div class="tab">销售促销</div>
+  <div class="tab">数据源</div>
+  <div class="tab">采集任务</div>
+  <div class="tab">API 接入</div>
+</div>
+
+<div class="filters">
+  <div class="f-chip purple">所有产品 11624</div>
+  <div class="f-chip gray">畅销 0</div>
+  <div class="f-chip gray">最新 0</div>
+  <input class="f-input" placeholder="搜索标题 / SKU">
+  <input class="f-input" placeholder="最低价" style="width:90px">
+  <input class="f-input" placeholder="最高价" style="width:90px">
+  <button class="btn-filter">筛选</button>
+</div>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th class="idx-col">#</th>
+        <th>图片</th>
+        <th>产品标题</th>
+        <th>SKU</th>
+        <th>属性</th>
+        <th>标签</th>
+        <th>售价</th>
+        <th>原价</th>
+        <th>30天销量</th>
+        <th>30天营收</th>
+        <th>评分</th>
+        <th>评论</th>
+        <th>状态</th>
+        <th>品类</th>
+        <th class="ts-col-highlight" style="color:#f59e0b;font-weight:700">落库时间 ⭐</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="idx-col">1</td>
+        <td class="img-col"><div class="thumb">🧺</div></td>
+        <td class="title-col">Wäschekorb, Wäschesammler, Wäschesortierer</td>
+        <td class="sku-col">BLHB35223BH01</td>
+        <td class="attr-col">Farbe:Tintenschwarz</td>
+        <td class="dash">—</td>
+        <td class="price-col">$56.99</td>
+        <td class="dash">—</td>
+        <td>0</td>
+        <td class="dash">—</td>
+        <td class="dash">—</td>
+        <td class="dash">—</td>
+        <td><span class="status-tag">在售</span></td>
+        <td>Wäschewagen</td>
+        <td class="ts-col show-tooltip" style="background:rgba(247,183,49,.05)">2026-05-21 04:03
+          <div class="tooltip">
+            <span class="full">2026-05-21 04:03:17 UTC</span>
+            <span class="rel">3 小时前 · 首次入库</span>
+          </div>
+        </td>
+      </tr>
+      <tr style="background:#fef3c7">
+        <td class="idx-col">2</td>
+        <td class="img-col"><div class="thumb">🧳</div></td>
+        <td class="title-col">Koffer, Hartschalenkoffer mit TSA-Schloss und Koffergurt, Handgepäck</td>
+        <td class="sku-col">RLPB35001B101</td>
+        <td class="attr-col">Farbe:Tintenschwarz / Größe:36x20x55cm</td>
+        <td class="dash">—</td>
+        <td class="price-col">$49.99</td>
+        <td class="dash">—</td>
+        <td>0</td>
+        <td class="dash">—</td>
+        <td class="dash">—</td>
+        <td class="dash">—</td>
+        <td><span class="status-tag">在售</span></td>
+        <td class="dash">—</td>
+        <td class="ts-col recent" style="background:rgba(247,183,49,.05)">2026-05-21 04:03</td>
+      </tr>
+      <tr>
+        <td class="idx-col">3</td>
+        <td class="img-col"><div class="thumb">🧳</div></td>
+        <td class="title-col">Koffer, Hartschalenkoffer mit TSA-Schloss und Koffergurt, Handgepäck</td>
+        <td class="sku-col">RLPB35003Q101</td>
+        <td class="attr-col">Farbe:Blau / Größe:50x30x75cm</td>
+        <td class="dash">—</td>
+        <td class="price-col">$66.99</td>
+        <td class="dash">—</td>
+        <td>0</td>
+        <td class="dash">—</td>
+        <td class="dash">—</td>
+        <td class="dash">—</td>
+        <td><span class="status-tag">在售</span></td>
+        <td class="dash">—</td>
+        <td class="ts-col recent" style="background:rgba(247,183,49,.05)">2026-05-21 04:03</td>
+      </tr>
+      <tr>
+        <td class="idx-col">4</td>
+        <td class="img-col"><div class="thumb">🧳</div></td>
+        <td class="title-col">Koffer, Hartschalenkoffer mit TSA-Schloss und Koffergurt, Handgepäck</td>
+        <td class="sku-col">RLPB35002C101</td>
+        <td class="attr-col">Farbe:Grün / Größe:45x25x65cm</td>
+        <td class="dash">—</td>
+        <td class="price-col">$59.99</td>
+        <td class="dash">—</td>
+        <td>0</td>
+        <td class="dash">—</td>
+        <td class="dash">—</td>
+        <td class="dash">—</td>
+        <td><span class="status-tag">在售</span></td>
+        <td class="dash">—</td>
+        <td class="ts-col recent" style="background:rgba(247,183,49,.05)">2026-05-21 04:03</td>
+      </tr>
+      <tr>
+        <td class="idx-col">5</td>
+        <td class="img-col"><div class="thumb">🧳</div></td>
+        <td class="title-col">Koffer, Hartschalenkoffer mit TSA-Schloss und Koffergurt, Handgepäck</td>
+        <td class="sku-col">RLPB35003C101</td>
+        <td class="attr-col">Farbe:Grün / Größe:50x30x75cm</td>
+        <td class="dash">—</td>
+        <td class="price-col">$66.99</td>
+        <td class="dash">—</td>
+        <td>0</td>
+        <td class="dash">—</td>
+        <td class="dash">—</td>
+        <td class="dash">—</td>
+        <td><span class="status-tag">在售</span></td>
+        <td class="dash">—</td>
+        <td class="ts-col" style="background:rgba(247,183,49,.05);color:#6b7280">2026-05-20 11:42</td>
+      </tr>
+      <tr>
+        <td class="idx-col">6</td>
+        <td class="img-col"><div class="thumb">🧳</div></td>
+        <td class="title-col">Koffer, Hartschalenkoffer mit TSA-Schloss und Koffergurt, Handgepäck</td>
+        <td class="sku-col">RLPB35003B101</td>
+        <td class="attr-col">Farbe:Tintenschwarz / Größe:50x30x75cm</td>
+        <td class="dash">—</td>
+        <td class="price-col">$66.99</td>
+        <td class="dash">—</td>
+        <td>0</td>
+        <td class="dash">—</td>
+        <td class="dash">—</td>
+        <td class="dash">—</td>
+        <td><span class="status-tag">在售</span></td>
+        <td class="dash">—</td>
+        <td class="ts-col" style="background:rgba(247,183,49,.05);color:#6b7280">2026-05-20 11:42</td>
+      </tr>
+      <tr>
+        <td class="idx-col">7</td>
+        <td class="img-col"><div class="thumb">🧳</div></td>
+        <td class="title-col">Koffer, Hartschalenkoffer mit TSA-Schloss und Koffergurt, Handgepäck</td>
+        <td class="sku-col">RLPB35002Q101</td>
+        <td class="attr-col">Farbe:Blau / Größe:45x25x65cm</td>
+        <td class="dash">—</td>
+        <td class="price-col">$59.99</td>
+        <td class="dash">—</td>
+        <td>0</td>
+        <td class="dash">—</td>
+        <td class="dash">—</td>
+        <td class="dash">—</td>
+        <td><span class="status-tag">在售</span></td>
+        <td class="dash">—</td>
+        <td class="ts-col" style="background:rgba(247,183,49,.05);color:#6b7280">2026-05-19 02:15</td>
+      </tr>
+      <tr>
+        <td class="idx-col">8</td>
+        <td class="img-col"><div class="thumb">🧳</div></td>
+        <td class="title-col">Koffer, Hartschalenkoffer mit TSA-Schloss und Koffergurt, Handgepäck</td>
+        <td class="sku-col">RLPB35001C101</td>
+        <td class="attr-col">Farbe:Grün / Größe:36x20x55cm</td>
+        <td class="dash">—</td>
+        <td class="price-col">$49.99</td>
+        <td class="dash">—</td>
+        <td>0</td>
+        <td class="dash">—</td>
+        <td class="dash">—</td>
+        <td class="dash">—</td>
+        <td><span class="status-tag">在售</span></td>
+        <td class="dash">—</td>
+        <td class="ts-col" style="background:rgba(247,183,49,.05);color:#9ca3af">2026-05-18 02:15</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- highlight pointing at the new column -->
+<div class="highlight-banner">
+  ⭐ <strong>新增列「落库时间」</strong><br>
+  显示每条数据的首次入库时间，精确到分。<br>
+  鼠标悬停看完整时间 + 相对时间。
+</div>
+
+<!-- callout -->
+<div class="callout">
+  <div class="callout-num">方案 2A</div>
+  <h3>简单日期列 · Simple Date</h3>
+  <p>表头加一列 <strong>「落库时间」</strong>，格式 <code style="background:rgba(0,0,0,.2);padding:1px 5px;border-radius:3px">YYYY-MM-DD HH:MM</code>。<br>Hover 显示完整时间戳 + 「3 小时前」相对时间。<br><br><strong>优点</strong>：最简单，符合客户原图诉求<br><strong>缺点</strong>：信息单一，看不出新鲜度</p>
+</div>
+
+</body>
+</html>

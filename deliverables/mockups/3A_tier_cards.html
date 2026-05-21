@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>方案 3A · 采集深度档位卡 — smart-crawler</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+body{background:#fff;color:#1f2937;min-height:100vh;font-size:14px}
+a{color:#7c3aed;text-decoration:none}
+
+.topbar{padding:14px 24px;display:flex;align-items:center;gap:18px;border-bottom:1px solid #e5e7eb}
+.logo{width:30px;height:30px;border-radius:6px;background:radial-gradient(circle at 30% 30%,#a78bfa,#7c3aed)}
+.brand{font-weight:700;color:#111827}
+.brand .accent{color:#7c3aed}
+.crumbs{color:#6b7280;font-size:0.88rem;margin-left:6px}
+.crumbs strong{color:#111827}
+.user{margin-left:auto;display:flex;align-items:center;gap:12px;font-size:0.85rem}
+.user .dot{width:8px;height:8px;background:#10b981;border-radius:50%}
+
+/* page */
+.page{max-width:1280px;margin:0 auto;padding:32px 24px 80px}
+
+/* diagnostic banner */
+.diag{background:linear-gradient(135deg,#fef3c7,#fde68a);border-left:4px solid #f59e0b;border-radius:10px;padding:18px 22px;margin-bottom:32px;display:flex;gap:14px;align-items:flex-start}
+.diag-icon{font-size:1.6rem;line-height:1}
+.diag h3{font-size:1rem;font-weight:800;color:#78350f;margin-bottom:6px}
+.diag p{font-size:0.88rem;color:#78350f;line-height:1.6}
+.diag code{background:rgba(0,0,0,.1);padding:1px 6px;border-radius:4px;font-family:'Fira Code',monospace;font-size:0.82rem}
+
+/* page header */
+.page-head{margin-bottom:24px}
+.page-head h1{font-size:1.5rem;font-weight:800;margin-bottom:6px;display:flex;align-items:center;gap:10px}
+.page-head .badge{background:#ede9fe;color:#7c3aed;padding:2px 10px;border-radius:12px;font-size:0.78rem;font-weight:600}
+.page-head p{color:#6b7280;font-size:0.92rem}
+
+/* selector for which site */
+.site-selector{background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px 18px;margin-bottom:24px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.site-selector strong{font-size:0.88rem;color:#374151}
+.site-chip{padding:5px 13px;background:#fff;border:1px solid #e5e7eb;border-radius:14px;font-size:0.82rem;cursor:pointer;display:flex;align-items:center;gap:5px}
+.site-chip.selected{background:#7c3aed;color:#fff;border-color:#7c3aed;font-weight:600}
+.site-chip .ct{font-size:0.72rem;opacity:.65}
+
+/* tier grid */
+.tier-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-bottom:32px}
+
+.tier-card{background:#fff;border:2px solid #e5e7eb;border-radius:14px;padding:24px 22px;cursor:pointer;position:relative;transition:all .2s}
+.tier-card:hover{border-color:#c4b5fd;transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.06)}
+.tier-card.current{border-color:#9ca3af;background:#f9fafb}
+.tier-card.selected{border-color:#7c3aed;background:linear-gradient(135deg,#faf5ff,#f3e8ff);box-shadow:0 8px 24px rgba(124,58,237,.15)}
+.tier-card.selected::after{content:'✓';position:absolute;top:14px;right:14px;width:26px;height:26px;background:#7c3aed;color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.85rem}
+
+.tier-badge{display:inline-block;padding:3px 10px;border-radius:13px;font-size:0.7rem;font-weight:700;letter-spacing:0.5px;margin-bottom:12px}
+.badge-current{background:#e5e7eb;color:#374151}
+.badge-recommended{background:linear-gradient(90deg,#a78bfa,#7c3aed);color:#fff}
+.badge-deep{background:#fef3c7;color:#92400e}
+.badge-full{background:#fee2e2;color:#991b1b}
+
+.tier-name{font-size:1.3rem;font-weight:800;color:#111827;margin-bottom:4px}
+.tier-limit{font-size:2.2rem;font-weight:800;line-height:1;margin-bottom:6px}
+.tier-limit.c-gray{color:#9ca3af}
+.tier-limit.c-green{background:linear-gradient(135deg,#10b981,#059669);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.tier-limit.c-purple{background:linear-gradient(135deg,#a78bfa,#7c3aed);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.tier-limit.c-orange{background:linear-gradient(135deg,#fb923c,#f59e0b);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.tier-limit.c-red{background:linear-gradient(135deg,#f87171,#dc2626);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.tier-unit{font-size:0.82rem;color:#6b7280;margin-bottom:18px}
+
+.tier-stats{display:flex;flex-direction:column;gap:10px;margin-bottom:18px}
+.tier-stat{display:flex;align-items:center;gap:10px;font-size:0.85rem}
+.tier-stat-ic{width:24px;text-align:center;font-size:0.9rem}
+.tier-stat-lbl{color:#6b7280;flex:1}
+.tier-stat-val{color:#111827;font-weight:600}
+
+/* risk stars */
+.risk{display:flex;gap:1px}
+.star{color:#fbbf24;font-size:0.9rem}
+.star.empty{color:#e5e7eb}
+
+.tier-foot{padding-top:14px;border-top:1px solid #f3f4f6;font-size:0.78rem;color:#6b7280;line-height:1.5}
+.tier-foot strong{color:#374151}
+
+/* footer */
+.page-footer{position:sticky;bottom:0;background:#fff;border-top:1px solid #e5e7eb;padding:16px 24px;margin:32px -24px -80px;display:flex;align-items:center;gap:14px;box-shadow:0 -4px 12px rgba(0,0,0,.04)}
+.selected-info{font-size:0.9rem;color:#374151}
+.selected-info strong{color:#7c3aed;font-weight:700}
+.btn-secondary{padding:10px 18px;background:#fff;border:1px solid #d1d5db;color:#374151;border-radius:8px;font-size:0.88rem;cursor:pointer}
+.btn-primary{padding:10px 22px;background:linear-gradient(135deg,#a78bfa,#7c3aed);color:#fff;font-weight:700;border-radius:8px;font-size:0.88rem;cursor:pointer;border:none;margin-left:auto;display:flex;align-items:center;gap:6px}
+
+/* callout */
+.callout{position:fixed;bottom:90px;left:24px;max-width:280px;background:linear-gradient(135deg,#a78bfa,#7c3aed);color:#fff;padding:14px 18px;border-radius:12px;z-index:300;box-shadow:0 6px 24px rgba(124,58,237,.3)}
+.callout-num{display:inline-block;background:rgba(255,255,255,.2);padding:1px 8px;border-radius:10px;font-size:0.72rem;font-weight:700;margin-bottom:5px}
+.callout h3{font-size:0.95rem;font-weight:800;margin-bottom:5px}
+.callout p{font-size:0.8rem;line-height:1.5;opacity:.95}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div style="display:flex;align-items:center;gap:9px">
+    <div class="logo"></div>
+    <div class="brand">smart<span class="accent">·</span>crawler</div>
+  </div>
+  <div class="crumbs">/ 设置 / <strong>采集深度</strong></div>
+  <div class="user">
+    <span class="dot"></span>
+    <span>Aosom 管理员</span>
+  </div>
+</div>
+
+<div class="page">
+  <!-- diagnostic banner -->
+  <div class="diag">
+    <div class="diag-icon">⚠️</div>
+    <div>
+      <h3>诊断结果：Vidaxl 全 12 站只有 198-200 条，是我们设的上限，不是站点限制</h3>
+      <p>当前配置：<code>backend/sites.yaml</code> 每个 vidaxl 站点 <code>max_products: 200</code>。Vidaxl 单站实际有 ~25 万 SKU——<strong>我们目前覆盖率 0.08%</strong>。当初设 200 是 MVP 阶段验证通路，没要求全量。<strong>现在客户要扩量，选个档位即可。</strong></p>
+    </div>
+  </div>
+
+  <!-- page header -->
+  <div class="page-head">
+    <h1>采集深度配置 <span class="badge">应用到 Vidaxl 全 12 站</span></h1>
+    <p>选择每个站点的最大采集数量，影响下次采集的耗时、风控风险和数据完整度。</p>
+  </div>
+
+  <!-- site selector -->
+  <div class="site-selector">
+    <strong>应用到：</strong>
+    <div class="site-chip selected">Vidaxl 全部 ✓ <span class="ct">12 站</span></div>
+    <div class="site-chip">Flexispot 全部 <span class="ct">9 站</span></div>
+    <div class="site-chip">Homary 全部 <span class="ct">5 站</span></div>
+    <div class="site-chip">所有 9 个有上限的品牌</div>
+    <div class="site-chip" style="color:#6b7280">+ 自定义...</div>
+  </div>
+
+  <!-- tier cards -->
+  <div class="tier-grid">
+
+    <div class="tier-card current">
+      <span class="tier-badge badge-current">当前配置</span>
+      <div class="tier-name">Baseline</div>
+      <div class="tier-limit c-gray">200</div>
+      <div class="tier-unit">SKU / 站</div>
+      <div class="tier-stats">
+        <div class="tier-stat"><span class="tier-stat-ic">⏱️</span><span class="tier-stat-lbl">单站耗时</span><span class="tier-stat-val">~5 分钟</span></div>
+        <div class="tier-stat"><span class="tier-stat-ic">🛡️</span><span class="tier-stat-lbl">封号风险</span><span class="risk"><span class="star">★</span><span class="star empty">★</span><span class="star empty">★</span><span class="star empty">★</span><span class="star empty">★</span></span></div>
+        <div class="tier-stat"><span class="tier-stat-ic">💾</span><span class="tier-stat-lbl">库占用</span><span class="tier-stat-val">baseline</span></div>
+        <div class="tier-stat"><span class="tier-stat-ic">📊</span><span class="tier-stat-lbl">覆盖率</span><span class="tier-stat-val" style="color:#dc2626">0.08%</span></div>
+      </div>
+      <div class="tier-foot">
+        <strong>适合</strong>：MVP 验证、Demo 演示<br>
+        <strong>缺点</strong>：客户认为数据不完整
+      </div>
+    </div>
+
+    <div class="tier-card selected">
+      <span class="tier-badge badge-recommended">推荐</span>
+      <div class="tier-name">扩展</div>
+      <div class="tier-limit c-green">2,000</div>
+      <div class="tier-unit">SKU / 站 · 10× 提升</div>
+      <div class="tier-stats">
+        <div class="tier-stat"><span class="tier-stat-ic">⏱️</span><span class="tier-stat-lbl">单站耗时</span><span class="tier-stat-val">~30 分钟</span></div>
+        <div class="tier-stat"><span class="tier-stat-ic">🛡️</span><span class="tier-stat-lbl">封号风险</span><span class="risk"><span class="star">★</span><span class="star">★</span><span class="star empty">★</span><span class="star empty">★</span><span class="star empty">★</span></span></div>
+        <div class="tier-stat"><span class="tier-stat-ic">💾</span><span class="tier-stat-lbl">库占用</span><span class="tier-stat-val">~50 MB / 站</span></div>
+        <div class="tier-stat"><span class="tier-stat-ic">📊</span><span class="tier-stat-lbl">覆盖率</span><span class="tier-stat-val" style="color:#f59e0b">~0.8%</span></div>
+      </div>
+      <div class="tier-foot">
+        <strong>适合</strong>：日常分析、价格监控<br>
+        <strong>建议</strong>：先跑这档观察 2 周
+      </div>
+    </div>
+
+    <div class="tier-card">
+      <span class="tier-badge badge-deep">深度</span>
+      <div class="tier-name">Deep</div>
+      <div class="tier-limit c-orange">10,000</div>
+      <div class="tier-unit">SKU / 站 · 50×</div>
+      <div class="tier-stats">
+        <div class="tier-stat"><span class="tier-stat-ic">⏱️</span><span class="tier-stat-lbl">单站耗时</span><span class="tier-stat-val">~2 小时</span></div>
+        <div class="tier-stat"><span class="tier-stat-ic">🛡️</span><span class="tier-stat-lbl">封号风险</span><span class="risk"><span class="star">★</span><span class="star">★</span><span class="star">★</span><span class="star empty">★</span><span class="star empty">★</span></span></div>
+        <div class="tier-stat"><span class="tier-stat-ic">💾</span><span class="tier-stat-lbl">库占用</span><span class="tier-stat-val">~250 MB / 站</span></div>
+        <div class="tier-stat"><span class="tier-stat-ic">📊</span><span class="tier-stat-lbl">覆盖率</span><span class="tier-stat-val">~4%</span></div>
+      </div>
+      <div class="tier-foot">
+        <strong>需要</strong>：轮换代理池<br>
+        <strong>调度</strong>：分时段错峰
+      </div>
+    </div>
+
+    <div class="tier-card">
+      <span class="tier-badge badge-full">全量</span>
+      <div class="tier-name">Full</div>
+      <div class="tier-limit c-red">∞</div>
+      <div class="tier-unit">单站 ~25 万 SKU · 200×</div>
+      <div class="tier-stats">
+        <div class="tier-stat"><span class="tier-stat-ic">⏱️</span><span class="tier-stat-lbl">单站耗时</span><span class="tier-stat-val">~6-12 小时</span></div>
+        <div class="tier-stat"><span class="tier-stat-ic">🛡️</span><span class="tier-stat-lbl">封号风险</span><span class="risk"><span class="star">★</span><span class="star">★</span><span class="star">★</span><span class="star">★</span><span class="star">★</span></span></div>
+        <div class="tier-stat"><span class="tier-stat-ic">💾</span><span class="tier-stat-lbl">库占用</span><span class="tier-stat-val">~6 GB / 站</span></div>
+        <div class="tier-stat"><span class="tier-stat-ic">📊</span><span class="tier-stat-lbl">覆盖率</span><span class="tier-stat-val" style="color:#10b981">100%</span></div>
+      </div>
+      <div class="tier-foot">
+        <strong>必须</strong>：住宅代理 + 错峰调度<br>
+        <strong>建议</strong>：仅在客户明确需要时开
+      </div>
+    </div>
+
+  </div>
+
+  <!-- additional options -->
+  <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:18px 22px">
+    <h3 style="font-size:0.95rem;font-weight:700;margin-bottom:12px">高级选项</h3>
+    <div style="display:flex;flex-direction:column;gap:10px;font-size:0.88rem">
+      <label style="display:flex;align-items:center;gap:10px">
+        <input type="checkbox" checked style="accent-color:#7c3aed">
+        立即触发一次全量重采集（覆盖现有 200 条）
+      </label>
+      <label style="display:flex;align-items:center;gap:10px">
+        <input type="checkbox" checked style="accent-color:#7c3aed">
+        分品类优先采集（先抓客户关注的「家居 / 储物」品类）
+      </label>
+      <label style="display:flex;align-items:center;gap:10px">
+        <input type="checkbox" style="accent-color:#7c3aed">
+        采集完成后邮件通知 boyuan@solvea.cx
+      </label>
+    </div>
+  </div>
+</div>
+
+<!-- footer -->
+<div class="page-footer">
+  <div class="selected-info">
+    已选 <strong>扩展档 · 2,000 SKU/站</strong> · 应用到 <strong>Vidaxl 12 站</strong> · 预计总耗时 <strong>~6 小时</strong>
+  </div>
+  <button class="btn-secondary">取消</button>
+  <button class="btn-primary">▶ 应用并立即重采集 · 12 站</button>
+</div>
+
+<!-- callout -->
+<div class="callout">
+  <div class="callout-num">方案 3A</div>
+  <h3>档位选择卡 · Tier Cards</h3>
+  <p>一个设置页，<strong>4 张大卡片单选</strong>。每张卡片清晰显示：估算时间 / 风险星级 / 库存占用 / 数据覆盖率。<br><br><strong>优点</strong>：简单直接，让客户在 trade-off 中做决策<br><strong>缺点</strong>：全站统一档位，灵活度低</p>
+</div>
+
+</body>
+</html>

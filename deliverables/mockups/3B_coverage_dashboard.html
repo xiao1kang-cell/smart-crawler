@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>方案 3B · 数据覆盖率仪表盘 — smart-crawler</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+body{background:#fff;color:#1f2937;min-height:100vh;font-size:14px}
+a{color:#7c3aed;text-decoration:none}
+
+.topbar{padding:14px 24px;display:flex;align-items:center;gap:18px;border-bottom:1px solid #e5e7eb}
+.logo{width:30px;height:30px;border-radius:6px;background:radial-gradient(circle at 30% 30%,#a78bfa,#7c3aed)}
+.brand{font-weight:700;color:#111827}
+.brand .accent{color:#7c3aed}
+
+.tabs{display:flex;gap:0;padding:0 24px;border-bottom:1px solid #e5e7eb}
+.tab{padding:14px 18px;color:#6b7280;font-size:0.92rem;cursor:pointer;position:relative}
+.tab.active{color:#7c3aed;font-weight:600}
+.tab.active::after{content:'';position:absolute;bottom:-1px;left:18px;right:18px;height:2px;background:#7c3aed}
+.tab.new{display:flex;align-items:center;gap:6px}
+.tab.new::before{content:'NEW';background:linear-gradient(90deg,#a78bfa,#7c3aed);color:#fff;padding:1px 6px;border-radius:6px;font-size:0.6rem;font-weight:700}
+
+.page{max-width:1320px;margin:0 auto;padding:28px 24px 80px}
+
+/* hero stats */
+.hero{background:linear-gradient(135deg,#1f2937,#0f1729);color:#fff;border-radius:16px;padding:28px 32px;margin-bottom:24px;display:flex;align-items:center;gap:32px;position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;top:-80px;right:-80px;width:240px;height:240px;background:radial-gradient(circle,rgba(124,58,237,.3),transparent 70%);border-radius:50%}
+.hero-num{font-size:4.5rem;font-weight:900;line-height:1;background:linear-gradient(135deg,#fbbf24,#ef4444);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-2px;z-index:1}
+.hero-content{flex:1;z-index:1}
+.hero-content h1{font-size:1.4rem;font-weight:700;margin-bottom:6px}
+.hero-content p{color:#9ca3af;font-size:0.95rem;line-height:1.5}
+.hero-cta{padding:11px 22px;background:linear-gradient(135deg,#a78bfa,#7c3aed);color:#fff;font-weight:700;border-radius:10px;font-size:0.9rem;cursor:pointer;border:none;z-index:1}
+
+/* summary cards */
+.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:32px}
+.sum-card{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:18px 20px}
+.sum-lbl{font-size:0.78rem;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.sum-val{font-size:1.6rem;font-weight:800;color:#111827;line-height:1;margin-bottom:4px}
+.sum-trend{font-size:0.78rem;color:#10b981;display:flex;align-items:center;gap:4px}
+.sum-trend.down{color:#dc2626}
+
+/* coverage list */
+.section-head{display:flex;align-items:center;gap:14px;margin-bottom:14px}
+.section-head h2{font-size:1.15rem;font-weight:700}
+.section-head .filter{margin-left:auto;display:flex;gap:8px}
+.f-chip{padding:5px 12px;background:#f3f4f6;border-radius:14px;font-size:0.82rem;color:#6b7280;cursor:pointer}
+.f-chip.active{background:#7c3aed;color:#fff;font-weight:600}
+
+.coverage-list{background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden}
+.cov-row{display:grid;grid-template-columns:200px 100px 110px 1fr 100px 130px;align-items:center;gap:14px;padding:14px 22px;border-bottom:1px solid #f3f4f6;transition:background .15s}
+.cov-row:hover{background:#fafbfc}
+.cov-row:last-child{border-bottom:none}
+.cov-row.header{background:#f9fafb;font-size:0.78rem;color:#6b7280;text-transform:uppercase;letter-spacing:1px;font-weight:600;padding:10px 22px}
+.cov-row.critical{background:rgba(254,226,226,.5);border-left:3px solid #dc2626;padding-left:19px}
+.cov-row.warning{background:rgba(254,243,199,.4)}
+.cov-row.healthy{}
+
+.cov-site{display:flex;align-items:center;gap:9px}
+.brand-logo{width:30px;height:30px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.75rem;color:#fff;flex-shrink:0}
+.bg-vidaxl{background:linear-gradient(135deg,#f97316,#ea580c)}
+.bg-songmics{background:linear-gradient(135deg,#3b82f6,#1d4ed8)}
+.bg-costway{background:linear-gradient(135deg,#10b981,#059669)}
+.bg-homary{background:linear-gradient(135deg,#a855f7,#7c3aed)}
+.bg-flex{background:linear-gradient(135deg,#ec4899,#db2777)}
+.bg-vh{background:linear-gradient(135deg,#0891b2,#0e7490)}
+
+.cov-site-info{flex:1}
+.cov-site-name{font-size:0.9rem;font-weight:600;color:#111827}
+.cov-site-url{font-size:0.74rem;color:#9ca3af}
+
+.cov-current{font-family:'Fira Code',monospace;font-size:0.86rem;font-weight:600;color:#374151}
+.cov-est{font-family:'Fira Code',monospace;font-size:0.86rem;color:#6b7280}
+
+.cov-bar-wrap{position:relative}
+.cov-bar{height:8px;background:#f3f4f6;border-radius:4px;overflow:hidden}
+.cov-fill{height:100%;border-radius:4px;transition:width .3s}
+.cov-fill.healthy{background:linear-gradient(90deg,#10b981,#059669)}
+.cov-fill.warn{background:linear-gradient(90deg,#fbbf24,#f59e0b)}
+.cov-fill.critical{background:linear-gradient(90deg,#fb7185,#dc2626)}
+.cov-pct{position:absolute;top:-2px;right:0;font-size:0.78rem;font-weight:700}
+.cov-pct.healthy{color:#059669}
+.cov-pct.warn{color:#d97706}
+.cov-pct.critical{color:#dc2626}
+
+.cov-status{font-size:0.78rem;font-weight:600}
+.cov-status.healthy{color:#059669}
+.cov-status.warn{color:#d97706}
+.cov-status.critical{color:#dc2626}
+
+.btn-expand{padding:6px 12px;background:#7c3aed;color:#fff;border-radius:7px;font-size:0.78rem;font-weight:600;cursor:pointer;border:none;display:flex;align-items:center;gap:5px;justify-content:center;width:120px}
+.btn-expand.gray{background:#e5e7eb;color:#6b7280}
+.btn-expand:hover{opacity:.9}
+
+/* dropdown options on expand button */
+.tier-dropdown{position:absolute;background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:6px;box-shadow:0 8px 20px rgba(0,0,0,.1);font-size:0.82rem;width:170px;z-index:10}
+.td-item{padding:7px 11px;border-radius:5px;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
+.td-item:hover{background:#f3f4f6}
+.td-item.recommended{background:linear-gradient(135deg,#faf5ff,#f3e8ff);color:#7c3aed;font-weight:600}
+.td-item .ct{font-size:0.7rem;color:#9ca3af}
+
+/* callout */
+.callout{position:fixed;bottom:24px;left:24px;max-width:300px;background:linear-gradient(135deg,#ef4444,#dc2626);color:#fff;padding:14px 18px;border-radius:12px;z-index:300;box-shadow:0 6px 24px rgba(239,68,68,.3)}
+.callout-num{display:inline-block;background:rgba(255,255,255,.2);padding:1px 8px;border-radius:10px;font-size:0.72rem;font-weight:700;margin-bottom:5px}
+.callout h3{font-size:0.95rem;font-weight:800;margin-bottom:5px}
+.callout p{font-size:0.8rem;line-height:1.5;opacity:.95}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div style="display:flex;align-items:center;gap:9px">
+    <div class="logo"></div>
+    <div class="brand">smart<span class="accent">·</span>crawler</div>
+  </div>
+  <div style="color:#6b7280;font-size:0.88rem">/ <strong style="color:#111827">数据覆盖率</strong></div>
+  <div style="margin-left:auto;font-size:0.85rem;color:#6b7280">最后扫描: 2026-05-21 04:03</div>
+</div>
+
+<div class="tabs">
+  <div class="tab">总体分析</div>
+  <div class="tab">产品分析</div>
+  <div class="tab">销售促销</div>
+  <div class="tab">数据源</div>
+  <div class="tab new active">数据覆盖率</div>
+  <div class="tab">采集任务</div>
+</div>
+
+<div class="page">
+
+  <!-- hero -->
+  <div class="hero">
+    <div class="hero-num">12.4%</div>
+    <div class="hero-content">
+      <h1>整体数据覆盖率</h1>
+      <p>当前已采集 <strong style="color:#fff">78,396</strong> SKU / 估算全站 <strong style="color:#fff">~631,000</strong> SKU<br>
+         <strong style="color:#fb7185">⚠ Vidaxl 全部 12 站覆盖率仅 0.08%</strong> — 见下方红色高亮行</p>
+    </div>
+    <button class="hero-cta">⚡ 一键扩量低覆盖站</button>
+  </div>
+
+  <!-- summary -->
+  <div class="summary">
+    <div class="sum-card">
+      <div class="sum-lbl">已采集 SKU</div>
+      <div class="sum-val">78,396</div>
+      <div class="sum-trend">↑ +1,234 本周</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-lbl">健康站点（>50%）</div>
+      <div class="sum-val" style="color:#059669">7</div>
+      <div class="sum-trend">SONGMICS / Costway 等</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-lbl">警告站点（10-50%）</div>
+      <div class="sum-val" style="color:#d97706">12</div>
+      <div class="sum-trend">Flexispot / Homary 等</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-lbl">关键站点（<5%）</div>
+      <div class="sum-val" style="color:#dc2626">14</div>
+      <div class="sum-trend down">↓ Vidaxl 12 站全部</div>
+    </div>
+  </div>
+
+  <!-- coverage table -->
+  <div class="section-head">
+    <h2>📊 站点覆盖率详情</h2>
+    <div class="filter">
+      <div class="f-chip">所有 46</div>
+      <div class="f-chip active">关键 14</div>
+      <div class="f-chip">警告 12</div>
+      <div class="f-chip">健康 20</div>
+      <div class="f-chip" style="background:#fee2e2;color:#991b1b">仅看 Vidaxl 12</div>
+    </div>
+  </div>
+
+  <div class="coverage-list">
+    <div class="cov-row header">
+      <div>站点</div>
+      <div>当前 SKU</div>
+      <div>估算全量</div>
+      <div>覆盖率</div>
+      <div>状态</div>
+      <div></div>
+    </div>
+
+    <!-- Vidaxl rows (critical, all 12) -->
+    <div class="cov-row critical">
+      <div class="cov-site">
+        <div class="brand-logo bg-vidaxl">VX</div>
+        <div class="cov-site-info">
+          <div class="cov-site-name">Vidaxl · DE</div>
+          <div class="cov-site-url">vidaxl.de</div>
+        </div>
+      </div>
+      <div class="cov-current">200</div>
+      <div class="cov-est">~250,000</div>
+      <div class="cov-bar-wrap">
+        <div class="cov-bar"><div class="cov-fill critical" style="width:0.5%"></div></div>
+        <span class="cov-pct critical">0.08%</span>
+      </div>
+      <div class="cov-status critical">⚠ 关键</div>
+      <div><button class="btn-expand">扩量到 2K ▾</button></div>
+    </div>
+
+    <div class="cov-row critical">
+      <div class="cov-site">
+        <div class="brand-logo bg-vidaxl">VX</div>
+        <div class="cov-site-info">
+          <div class="cov-site-name">Vidaxl · FR</div>
+          <div class="cov-site-url">vidaxl.fr</div>
+        </div>
+      </div>
+      <div class="cov-current">198</div>
+      <div class="cov-est">~230,000</div>
+      <div class="cov-bar-wrap">
+        <div class="cov-bar"><div class="cov-fill critical" style="width:0.5%"></div></div>
+        <span class="cov-pct critical">0.09%</span>
+      </div>
+      <div class="cov-status critical">⚠ 关键</div>
+      <div style="position:relative">
+        <button class="btn-expand">扩量到 2K ▾</button>
+        <!-- show dropdown for visual -->
+        <div class="tier-dropdown" style="top:36px;right:0">
+          <div class="td-item"><span>维持 200</span><span class="ct">当前</span></div>
+          <div class="td-item recommended"><span>扩量到 2K</span><span class="ct">~30min</span></div>
+          <div class="td-item"><span>深度 10K</span><span class="ct">~2h</span></div>
+          <div class="td-item"><span>全量</span><span class="ct">~8h</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cov-row critical">
+      <div class="cov-site">
+        <div class="brand-logo bg-vidaxl">VX</div>
+        <div class="cov-site-info">
+          <div class="cov-site-name">Vidaxl · UK</div>
+          <div class="cov-site-url">vidaxl.co.uk</div>
+        </div>
+      </div>
+      <div class="cov-current">198</div>
+      <div class="cov-est">~220,000</div>
+      <div class="cov-bar-wrap">
+        <div class="cov-bar"><div class="cov-fill critical" style="width:0.5%"></div></div>
+        <span class="cov-pct critical">0.09%</span>
+      </div>
+      <div class="cov-status critical">⚠ 关键</div>
+      <div><button class="btn-expand">扩量到 2K ▾</button></div>
+    </div>
+
+    <div class="cov-row critical">
+      <div class="cov-site">
+        <div class="brand-logo bg-vidaxl">VX</div>
+        <div class="cov-site-info">
+          <div class="cov-site-name">Vidaxl · ES / IT / NL / PT / RO / PL / IE</div>
+          <div class="cov-site-url">+9 个 Vidaxl 站点折叠 ▾</div>
+        </div>
+      </div>
+      <div class="cov-current">~199</div>
+      <div class="cov-est">~150-250k</div>
+      <div class="cov-bar-wrap">
+        <div class="cov-bar"><div class="cov-fill critical" style="width:0.5%"></div></div>
+        <span class="cov-pct critical">~0.1%</span>
+      </div>
+      <div class="cov-status critical">⚠ 关键 ×9</div>
+      <div><button class="btn-expand">批量扩量 ▾</button></div>
+    </div>
+
+    <!-- warning rows -->
+    <div class="cov-row warning">
+      <div class="cov-site">
+        <div class="brand-logo bg-flex">FL</div>
+        <div class="cov-site-info">
+          <div class="cov-site-name">Flexispot · CA</div>
+          <div class="cov-site-url">flexispot.ca</div>
+        </div>
+      </div>
+      <div class="cov-current">109</div>
+      <div class="cov-est">~800</div>
+      <div class="cov-bar-wrap">
+        <div class="cov-bar"><div class="cov-fill warn" style="width:13.6%"></div></div>
+        <span class="cov-pct warn">13.6%</span>
+      </div>
+      <div class="cov-status warn">⚠ 警告</div>
+      <div><button class="btn-expand">扩量 ▾</button></div>
+    </div>
+
+    <div class="cov-row warning">
+      <div class="cov-site">
+        <div class="brand-logo bg-flex">FL</div>
+        <div class="cov-site-info">
+          <div class="cov-site-name">Flexispot · UK</div>
+          <div class="cov-site-url">flexispot.co.uk</div>
+        </div>
+      </div>
+      <div class="cov-current">246</div>
+      <div class="cov-est">~1,200</div>
+      <div class="cov-bar-wrap">
+        <div class="cov-bar"><div class="cov-fill warn" style="width:20.5%"></div></div>
+        <span class="cov-pct warn">20.5%</span>
+      </div>
+      <div class="cov-status warn">⚠ 警告</div>
+      <div><button class="btn-expand">扩量 ▾</button></div>
+    </div>
+
+    <div class="cov-row warning">
+      <div class="cov-site">
+        <div class="brand-logo bg-homary">HM</div>
+        <div class="cov-site-info">
+          <div class="cov-site-name">Homary · US</div>
+          <div class="cov-site-url">homary.com</div>
+        </div>
+      </div>
+      <div class="cov-current">486</div>
+      <div class="cov-est">~4,200</div>
+      <div class="cov-bar-wrap">
+        <div class="cov-bar"><div class="cov-fill warn" style="width:11.6%"></div></div>
+        <span class="cov-pct warn">11.6%</span>
+      </div>
+      <div class="cov-status warn">⚠ 警告</div>
+      <div><button class="btn-expand">扩量 ▾</button></div>
+    </div>
+
+    <!-- healthy rows -->
+    <div class="cov-row healthy">
+      <div class="cov-site">
+        <div class="brand-logo bg-songmics">SM</div>
+        <div class="cov-site-info">
+          <div class="cov-site-name">SONGMICS · DE</div>
+          <div class="cov-site-url">songmics.de</div>
+        </div>
+      </div>
+      <div class="cov-current">11,624</div>
+      <div class="cov-est">~12,000</div>
+      <div class="cov-bar-wrap">
+        <div class="cov-bar"><div class="cov-fill healthy" style="width:96.9%"></div></div>
+        <span class="cov-pct healthy">96.9%</span>
+      </div>
+      <div class="cov-status healthy">✅ 健康</div>
+      <div><button class="btn-expand gray">已最大</button></div>
+    </div>
+
+    <div class="cov-row healthy">
+      <div class="cov-site">
+        <div class="brand-logo bg-costway">CW</div>
+        <div class="cov-site-info">
+          <div class="cov-site-name">Costway · CA</div>
+          <div class="cov-site-url">costway.ca</div>
+        </div>
+      </div>
+      <div class="cov-current">1,607</div>
+      <div class="cov-est">~1,650</div>
+      <div class="cov-bar-wrap">
+        <div class="cov-bar"><div class="cov-fill healthy" style="width:97.4%"></div></div>
+        <span class="cov-pct healthy">97.4%</span>
+      </div>
+      <div class="cov-status healthy">✅ 健康</div>
+      <div><button class="btn-expand gray">已最大</button></div>
+    </div>
+
+    <div class="cov-row healthy">
+      <div class="cov-site">
+        <div class="brand-logo bg-vh">VH</div>
+        <div class="cov-site-info">
+          <div class="cov-site-name">VonHaus · UK</div>
+          <div class="cov-site-url">vonhaus.com</div>
+        </div>
+      </div>
+      <div class="cov-current">594</div>
+      <div class="cov-est">~620</div>
+      <div class="cov-bar-wrap">
+        <div class="cov-bar"><div class="cov-fill healthy" style="width:95.8%"></div></div>
+        <span class="cov-pct healthy">95.8%</span>
+      </div>
+      <div class="cov-status healthy">✅ 健康</div>
+      <div><button class="btn-expand gray">已最大</button></div>
+    </div>
+
+  </div>
+
+  <div style="margin-top:14px;font-size:0.85rem;color:#6b7280;text-align:center">
+    显示前 10 个 · <a href="#">查看全部 46 个站点 →</a>
+  </div>
+</div>
+
+<!-- callout -->
+<div class="callout">
+  <div class="callout-num">方案 3B</div>
+  <h3>覆盖率仪表盘 · Coverage Dashboard</h3>
+  <p>独立 tab，把<strong>「数据完整度」</strong>升级成产品的核心指标。每个站点一条进度条，<strong>覆盖率 0.08% 红色高亮触目惊心</strong>，让客户先看到问题，再决定扩量。每行可单独选档位。<br><br><strong>优点</strong>：教育客户 + 精细控制<br><strong>缺点</strong>：实现成本最高</p>
+</div>
+
+</body>
+</html>

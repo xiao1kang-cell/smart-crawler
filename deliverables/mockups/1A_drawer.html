@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>方案 A · 侧抽屉式批量下载 — smart-crawler</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+body{background:#0c0c12;color:#e0e0e0;min-height:100vh;font-size:14px}
+a{color:inherit;text-decoration:none}
+
+/* top bar */
+.topbar{background:#13131c;border-bottom:1px solid #1f1f2e;padding:12px 24px;display:flex;align-items:center;gap:16px}
+.logo{width:30px;height:30px;background:linear-gradient(135deg,#ff6b35,#f7b731);border-radius:7px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;color:#000}
+.brand{font-weight:700;font-size:1rem}
+.crumbs{color:#667;font-size:0.85rem;margin-left:8px}
+.crumbs span{color:#ccc}
+.search{flex:1;max-width:340px;margin-left:auto}
+.search input{width:100%;background:#0c0c14;border:1px solid #2a2a3e;color:#ccc;padding:7px 12px;border-radius:6px;font-size:0.85rem}
+.user-chip{display:flex;align-items:center;gap:8px;padding:5px 12px;background:#1a1a26;border-radius:18px;font-size:0.85rem}
+.user-chip .ava{width:22px;height:22px;border-radius:50%;background:#4ecdc4;display:flex;align-items:center;justify-content:center;font-weight:700;color:#000;font-size:0.7rem}
+
+/* filters */
+.filters{padding:18px 24px;background:#0e0e18;border-bottom:1px solid #1a1a2a;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.f-chip{background:#1a1a26;border:1px solid #2a2a3e;padding:6px 14px 6px 12px;border-radius:18px;font-size:0.82rem;display:flex;align-items:center;gap:6px;cursor:pointer}
+.f-chip.active{background:#1a3a4a;border-color:#4ecdc4;color:#4ecdc4}
+.f-chip .x{opacity:.6}
+.f-chip .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.f-add{color:#667;border-style:dashed}
+.f-spacer{flex:1}
+.btn-download{padding:8px 18px;background:linear-gradient(90deg,#ff6b35,#f7b731);color:#000;font-weight:700;border-radius:8px;font-size:0.85rem;cursor:pointer;display:inline-flex;align-items:center;gap:8px;animation:pulse-glow 2.4s infinite}
+@keyframes pulse-glow{0%,100%{box-shadow:0 0 0 0 rgba(247,183,49,.4)}50%{box-shadow:0 0 0 6px rgba(247,183,49,0)}}
+
+/* layout */
+.main{display:flex;height:calc(100vh - 110px)}
+.sidebar{width:200px;background:#0e0e18;border-right:1px solid #1a1a2a;padding:16px 12px}
+.sb-item{padding:8px 12px;border-radius:6px;font-size:0.85rem;color:#888;cursor:pointer;margin-bottom:2px;display:flex;align-items:center;gap:8px}
+.sb-item.active{background:#1a1a26;color:#4ecdc4}
+.sb-item .num{margin-left:auto;font-size:0.72rem;color:#566}
+
+.content{flex:1;padding:18px 24px;overflow-y:auto}
+.content-header{display:flex;align-items:center;gap:14px;margin-bottom:14px}
+.content-title{font-size:1.1rem;font-weight:700}
+.content-count{font-size:0.82rem;color:#667;background:#1a1a26;padding:3px 12px;border-radius:14px}
+
+/* product table */
+table{width:100%;border-collapse:collapse;background:#13131c;border:1px solid #1e1e2e;border-radius:10px;overflow:hidden;font-size:0.85rem}
+th{text-align:left;padding:10px 14px;background:#1a1a26;color:#aaa;font-weight:600;font-size:0.78rem;border-bottom:1px solid #1e1e2e}
+td{padding:10px 14px;border-bottom:1px solid #16161f;color:#ccc}
+tr:last-child td{border-bottom:none}
+tr:hover{background:#16161f}
+.sku{color:#82aaff;font-family:'Fira Code',monospace;font-size:0.78rem}
+.price{color:#4ecdc4;font-weight:600}
+.promo{background:#3a1f00;color:#f7b731;padding:2px 7px;border-radius:10px;font-size:0.72rem}
+.brand-tag{font-size:0.74rem;color:#aaa;background:#1a1a26;padding:2px 7px;border-radius:10px}
+
+/* DRAWER */
+.drawer-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);opacity:1;transition:opacity .2s;z-index:90}
+.drawer{position:fixed;top:0;right:0;width:480px;height:100vh;background:#0e0e18;border-left:1px solid #1f3a5f;z-index:100;transform:translateX(0);transition:transform .25s ease;display:flex;flex-direction:column;box-shadow:-12px 0 40px rgba(0,0,0,.5)}
+.drawer-header{padding:18px 22px;border-bottom:1px solid #1a1a2a;display:flex;align-items:center;gap:10px}
+.drawer-header h2{font-size:1.05rem;font-weight:700;flex:1}
+.drawer-header .close{cursor:pointer;color:#667;font-size:1.2rem;width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:6px}
+.drawer-header .close:hover{background:#1a1a26;color:#fff}
+
+.drawer-body{flex:1;overflow-y:auto;padding:18px 22px}
+.section{margin-bottom:22px}
+.section-label{font-size:0.74rem;color:#566;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:9px;display:flex;align-items:center;gap:8px}
+.section-label .num{background:#1a1a26;color:#ccc;padding:1px 7px;border-radius:8px;letter-spacing:0;text-transform:none}
+
+/* category tree */
+.tree{background:#13131c;border:1px solid #1e1e2e;border-radius:8px;padding:10px;max-height:240px;overflow-y:auto}
+.tree-node{padding:5px 8px;display:flex;align-items:center;gap:8px;border-radius:5px;cursor:pointer;font-size:0.85rem}
+.tree-node:hover{background:#1a1a26}
+.tree-node.checked{color:#4ecdc4}
+.tree-node .chevron{font-size:0.7rem;color:#566;width:10px}
+.tree-node input[type=checkbox]{accent-color:#4ecdc4;cursor:pointer}
+.tree-children{margin-left:18px}
+.tree-children .tree-node{font-size:0.82rem;color:#aaa}
+.tree-cnt{margin-left:auto;font-size:0.72rem;color:#566}
+
+/* formats */
+.format-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.fmt-card{background:#13131c;border:1px solid #1e1e2e;border-radius:8px;padding:11px 14px;cursor:pointer;transition:all .15s;display:flex;align-items:center;gap:10px}
+.fmt-card:hover{border-color:#2a3a5a}
+.fmt-card.active{border-color:#4ecdc4;background:#0e1a22}
+.fmt-icon{width:30px;height:30px;border-radius:6px;background:#1a1a26;display:flex;align-items:center;justify-content:center;font-size:0.85rem;font-weight:700}
+.fmt-card.active .fmt-icon{background:#0a2a4a;color:#4ecdc4}
+.fmt-name{font-weight:600;font-size:0.85rem}
+.fmt-desc{font-size:0.7rem;color:#667}
+
+/* options */
+.opt-row{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:#13131c;border:1px solid #1e1e2e;border-radius:8px;margin-bottom:7px;font-size:0.85rem}
+.toggle{width:34px;height:18px;background:#2a2a3e;border-radius:10px;position:relative;cursor:pointer}
+.toggle::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;background:#888;border-radius:50%;transition:.2s}
+.toggle.on{background:#0a4a3a}
+.toggle.on::after{left:18px;background:#4ecdc4}
+.opt-label .hint{font-size:0.72rem;color:#566;margin-top:2px}
+
+/* summary */
+.summary{background:linear-gradient(135deg,#0f1a2e,#0a1520);border:1px solid #1f3a5f;border-radius:10px;padding:14px 18px}
+.summary-row{display:flex;justify-content:space-between;padding:5px 0;font-size:0.85rem;color:#aaa}
+.summary-row strong{color:#cdd6f4}
+.summary-row.total{margin-top:7px;padding-top:9px;border-top:1px solid #1f3a5f;font-size:0.95rem;color:#fff}
+.summary-row.total strong{color:#f7b731}
+
+.drawer-footer{padding:14px 22px;border-top:1px solid #1a1a2a;display:flex;gap:10px}
+.btn-primary{flex:1;padding:11px 16px;background:linear-gradient(90deg,#ff6b35,#f7b731);color:#000;font-weight:700;border-radius:8px;font-size:0.9rem;cursor:pointer;border:none}
+.btn-secondary{padding:11px 18px;background:#1a1a26;color:#aaa;border-radius:8px;font-size:0.9rem;cursor:pointer;border:1px solid #2a2a3e}
+
+/* tour callout */
+.callout{position:fixed;top:50%;left:24px;transform:translateY(-50%);max-width:280px;background:linear-gradient(135deg,#f7b731,#ff6b35);color:#000;padding:14px 18px;border-radius:12px;z-index:200;box-shadow:0 8px 30px rgba(247,183,49,.4)}
+.callout h3{font-size:0.95rem;font-weight:800;margin-bottom:6px}
+.callout p{font-size:0.82rem;line-height:1.5}
+.callout::after{content:'';position:absolute;top:50%;right:-10px;transform:translateY(-50%);border:8px solid transparent;border-left-color:#ff6b35}
+.callout-num{display:inline-block;background:rgba(0,0,0,.2);padding:1px 8px;border-radius:10px;font-size:0.72rem;font-weight:700;margin-bottom:6px}
+</style>
+</head>
+<body>
+
+<!-- TOP -->
+<div class="topbar">
+  <div class="logo">SC</div>
+  <div class="brand">smart-crawler</div>
+  <div class="crumbs">/ 产品分析 / <span>Costway US</span></div>
+  <div class="search"><input placeholder="🔍 搜索 SKU / 标题 / 类目..."></div>
+  <div class="user-chip"><div class="ava">B</div>Boyuan</div>
+</div>
+
+<!-- FILTERS BAR -->
+<div class="filters">
+  <div class="f-chip active"><span class="dot"></span>Costway · US <span class="x">×</span></div>
+  <div class="f-chip">$50 - $500</div>
+  <div class="f-chip">在售 + 促销</div>
+  <div class="f-chip f-add">+ 加筛选</div>
+  <div class="f-spacer"></div>
+  <span style="font-size:0.85rem;color:#667">1,056 个商品匹配</span>
+  <div class="btn-download" onclick="">📦 批量下载</div>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+  <div class="sidebar">
+    <div class="sb-item">🏠 总览</div>
+    <div class="sb-item active">📦 产品分析<span class="num">1,056</span></div>
+    <div class="sb-item">💰 销售促销</div>
+    <div class="sb-item">⭐ 评论 VOC</div>
+    <div class="sb-item">🤖 Reddit</div>
+    <div style="height:1px;background:#1a1a2a;margin:14px 6px"></div>
+    <div class="sb-item">📥 下载历史<span class="num">12</span></div>
+    <div class="sb-item">⚙️ 设置</div>
+  </div>
+
+  <div class="content">
+    <div class="content-header">
+      <div class="content-title">Costway US · 产品列表</div>
+      <div class="content-count">1,056 SKU · 925 在促销</div>
+    </div>
+
+    <table>
+      <thead><tr><th width="40"><input type="checkbox" style="accent-color:#4ecdc4"></th><th>SKU</th><th>商品标题</th><th>品类</th><th>售价</th><th>原价</th><th>状态</th></tr></thead>
+      <tbody>
+        <tr><td><input type="checkbox" style="accent-color:#4ecdc4" checked></td><td class="sku">CW-A1234</td><td>5-Tier Storage Shelf with Wheels</td><td>家居 / 储物</td><td class="price">$89.99</td><td>$129.99</td><td><span class="promo">-31%</span></td></tr>
+        <tr><td><input type="checkbox" style="accent-color:#4ecdc4" checked></td><td class="sku">CW-B2345</td><td>Outdoor Patio Loveseat</td><td>家居 / 户外</td><td class="price">$249.00</td><td>$399.00</td><td><span class="promo">-38%</span></td></tr>
+        <tr><td><input type="checkbox" style="accent-color:#4ecdc4"></td><td class="sku">CW-C3456</td><td>Adjustable Standing Desk</td><td>办公 / 桌椅</td><td class="price">$179.99</td><td>$249.99</td><td><span class="promo">-28%</span></td></tr>
+        <tr><td><input type="checkbox" style="accent-color:#4ecdc4"></td><td class="sku">CW-D4567</td><td>Foldable Treadmill</td><td>运动 / 健身</td><td class="price">$329.99</td><td>$329.99</td><td>-</td></tr>
+        <tr><td><input type="checkbox" style="accent-color:#4ecdc4"></td><td class="sku">CW-E5678</td><td>Kids Trampoline 12FT</td><td>玩具 / 户外</td><td class="price">$199.00</td><td>$299.00</td><td><span class="promo">-33%</span></td></tr>
+        <tr><td><input type="checkbox" style="accent-color:#4ecdc4"></td><td class="sku">CW-F6789</td><td>3-Piece Wicker Patio Set</td><td>家居 / 户外</td><td class="price">$459.00</td><td>$699.00</td><td><span class="promo">-34%</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- DRAWER (always open in mockup) -->
+<div class="drawer-backdrop"></div>
+<div class="drawer">
+  <div class="drawer-header">
+    <h2>📦 批量下载 · 按品类</h2>
+    <span style="font-size:0.78rem;color:#667;background:#1a1a26;padding:2px 9px;border-radius:10px">Costway US</span>
+    <div class="close">×</div>
+  </div>
+
+  <div class="drawer-body">
+
+    <div class="section">
+      <div class="section-label">① 选择品类 <span class="num">已选 4 个</span></div>
+      <div class="tree">
+        <div class="tree-node checked"><span class="chevron">▾</span><input type="checkbox" checked> 家居 <span class="tree-cnt">421</span></div>
+        <div class="tree-children">
+          <div class="tree-node checked"><input type="checkbox" checked> 储物收纳 <span class="tree-cnt">98</span></div>
+          <div class="tree-node checked"><input type="checkbox" checked> 户外家具 <span class="tree-cnt">147</span></div>
+          <div class="tree-node"><input type="checkbox"> 客厅家具 <span class="tree-cnt">82</span></div>
+          <div class="tree-node"><input type="checkbox"> 卧室家具 <span class="tree-cnt">94</span></div>
+        </div>
+        <div class="tree-node checked"><span class="chevron">▾</span><input type="checkbox" checked> 办公 <span class="tree-cnt">218</span></div>
+        <div class="tree-children">
+          <div class="tree-node checked"><input type="checkbox" checked> 办公桌椅 <span class="tree-cnt">156</span></div>
+          <div class="tree-node"><input type="checkbox"> 文件收纳 <span class="tree-cnt">62</span></div>
+        </div>
+        <div class="tree-node"><span class="chevron">▸</span><input type="checkbox"> 运动健身 <span class="tree-cnt">134</span></div>
+        <div class="tree-node"><span class="chevron">▸</span><input type="checkbox"> 玩具母婴 <span class="tree-cnt">187</span></div>
+        <div class="tree-node"><span class="chevron">▸</span><input type="checkbox"> 厨房用品 <span class="tree-cnt">96</span></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">② 文件格式</div>
+      <div class="format-grid">
+        <div class="fmt-card active">
+          <div class="fmt-icon">📊</div>
+          <div><div class="fmt-name">Excel</div><div class="fmt-desc">含图表 + 价格曲线</div></div>
+        </div>
+        <div class="fmt-card">
+          <div class="fmt-icon">📄</div>
+          <div><div class="fmt-name">CSV</div><div class="fmt-desc">UTF-8 · 纯数据</div></div>
+        </div>
+        <div class="fmt-card">
+          <div class="fmt-icon">{}</div>
+          <div><div class="fmt-name">JSON</div><div class="fmt-desc">原始结构化</div></div>
+        </div>
+        <div class="fmt-card">
+          <div class="fmt-icon">📦</div>
+          <div><div class="fmt-name">ZIP</div><div class="fmt-desc">分品类多文件</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">③ 附加内容</div>
+      <div class="opt-row">
+        <div class="opt-label">包含历史价格曲线<div class="hint">最近 90 天，每 SKU 一行价格序列</div></div>
+        <div class="toggle on"></div>
+      </div>
+      <div class="opt-row">
+        <div class="opt-label">包含评论数据 (VOC)<div class="hint">Trustpilot + Reviews.io，最多 10 条/SKU</div></div>
+        <div class="toggle on"></div>
+      </div>
+      <div class="opt-row">
+        <div class="opt-label">包含商品图片 URL<div class="hint">外链，不下载图片本体</div></div>
+        <div class="toggle"></div>
+      </div>
+      <div class="opt-row">
+        <div class="opt-label">按品类拆分子表<div class="hint">每个品类一个 Sheet</div></div>
+        <div class="toggle on"></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">④ 下载预览</div>
+      <div class="summary">
+        <div class="summary-row"><span>选中品类</span><strong>4 个</strong></div>
+        <div class="summary-row"><span>商品总数</span><strong>739 SKU</strong></div>
+        <div class="summary-row"><span>促销商品</span><strong>612 个</strong></div>
+        <div class="summary-row"><span>价格序列</span><strong>66,510 条</strong></div>
+        <div class="summary-row"><span>评论条数</span><strong>~4,200 条</strong></div>
+        <div class="summary-row total"><span>预计文件大小</span><strong>~3.8 MB</strong></div>
+        <div class="summary-row" style="color:#667;font-size:0.78rem"><span>预计耗时</span><span>15-30 秒</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="drawer-footer">
+    <button class="btn-secondary">取消</button>
+    <button class="btn-primary">⬇ 开始下载 · 739 SKU</button>
+  </div>
+</div>
+
+<!-- callout for first-time users -->
+<div class="callout">
+  <div class="callout-num">方案 A</div>
+  <h3>侧抽屉式 · Slide-out Drawer</h3>
+  <p>在产品列表页 <strong>右上角按钮触发</strong>，3 步配置：选品类 → 选格式 → 选附加项。<br><br>
+  <strong>优点</strong>：不离开当前上下文（站点筛选自动继承）<br>
+  <strong>缺点</strong>：抽屉宽度受限，深品类树需要滚动</p>
+</div>
+
+</body>
+</html>

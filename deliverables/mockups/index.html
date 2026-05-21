@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>客户三件套抽卡 · smart-crawler · 2026-05-21</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+body{background:#fafafa;color:#1f2937;font-size:15px;line-height:1.6}
+a{color:#7c3aed;text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* hero */
+.hero{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);color:#fff;padding:60px 32px 50px;text-align:center}
+.hero-badge{display:inline-block;padding:5px 14px;background:rgba(247,183,49,.18);border:1px solid #f7b731;border-radius:20px;font-size:0.78rem;color:#f7b731;margin-bottom:20px;letter-spacing:1.5px;text-transform:uppercase}
+.hero h1{font-size:2.7rem;font-weight:800;letter-spacing:-1px;line-height:1.1;margin-bottom:14px}
+.hero h1 .grad{background:linear-gradient(90deg,#ff6b35,#f7b731,#4ecdc4);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{color:#a5b4cb;font-size:1.05rem;max-width:680px;margin:0 auto}
+.hero-meta{margin-top:18px;font-size:0.82rem;color:#566}
+
+/* main */
+main{max-width:1280px;margin:0 auto;padding:48px 24px 64px}
+
+/* track */
+.track{background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:32px;margin-bottom:24px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.track-head{display:flex;align-items:flex-start;gap:18px;margin-bottom:24px;padding-bottom:20px;border-bottom:2px solid #f3f4f6}
+.track-num{width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:1.4rem;font-weight:800;color:#fff;flex-shrink:0}
+.t1{background:linear-gradient(135deg,#ff6b35,#f7b731)}
+.t2{background:linear-gradient(135deg,#10b981,#059669)}
+.t3{background:linear-gradient(135deg,#ef4444,#dc2626)}
+.track-text{flex:1}
+.track-text h2{font-size:1.5rem;font-weight:800;margin-bottom:5px}
+.track-text .scenario{font-size:0.92rem;color:#6b7280;margin-bottom:6px;font-style:italic}
+.track-text p{color:#374151;font-size:0.95rem}
+
+/* card grid */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-bottom:22px}
+.cards.three{grid-template-columns:repeat(3,1fr)}
+.cards.four{grid-template-columns:repeat(4,1fr)}
+
+.card{background:#fafbfc;border:2px solid #e5e7eb;border-radius:12px;padding:18px 18px 14px;cursor:pointer;transition:all .2s;display:flex;flex-direction:column;text-decoration:none;color:inherit;position:relative}
+.card:hover{border-color:#7c3aed;transform:translateY(-3px);box-shadow:0 8px 24px rgba(124,58,237,.08);text-decoration:none}
+.card-tag{display:inline-block;padding:2px 9px;border-radius:11px;font-size:0.7rem;font-weight:700;letter-spacing:0.5px;margin-bottom:10px;width:fit-content}
+.tag-1{background:linear-gradient(90deg,#ffe9d6,#fff3c2);color:#9a5b00}
+.tag-2{background:linear-gradient(90deg,#d1fae5,#a7f3d0);color:#065f46}
+.tag-3{background:linear-gradient(90deg,#fee2e2,#fecaca);color:#991b1b}
+.tag-recommend{position:absolute;top:-9px;right:14px;background:linear-gradient(90deg,#a78bfa,#7c3aed);color:#fff;padding:3px 11px;border-radius:11px;font-size:0.68rem;font-weight:700;letter-spacing:0.5px}
+
+.card-icon{font-size:2rem;margin-bottom:8px;line-height:1}
+.card h3{font-size:1.05rem;font-weight:800;color:#111827;margin-bottom:5px}
+.card .sub{font-size:0.78rem;color:#6b7280;margin-bottom:10px;font-family:'Fira Code','SF Mono',monospace}
+.card p{font-size:0.85rem;color:#4b5563;line-height:1.55;flex:1}
+.card .open{margin-top:12px;padding-top:10px;border-top:1px solid #f3f4f6;font-size:0.82rem;color:#7c3aed;font-weight:600;display:flex;align-items:center;justify-content:space-between}
+
+/* compare table */
+.compare{background:#f9fafb;border-radius:10px;padding:16px;margin-bottom:18px;overflow-x:auto}
+.compare table{width:100%;border-collapse:collapse;font-size:0.86rem}
+.compare th{background:#fff;text-align:left;padding:8px 12px;color:#6b7280;font-weight:600;font-size:0.78rem;letter-spacing:0.5px;text-transform:uppercase;border-bottom:1px solid #e5e7eb}
+.compare td{padding:9px 12px;border-bottom:1px solid #f3f4f6;color:#374151}
+.compare td:first-child{font-weight:600;color:#111827}
+.recommend{background:linear-gradient(90deg,rgba(124,58,237,.05),transparent)}
+
+/* vote/select form */
+.vote{background:linear-gradient(135deg,#faf5ff,#f3e8ff);border:1px solid #c4b5fd;border-radius:11px;padding:18px 22px}
+.vote h4{font-size:0.9rem;font-weight:700;color:#5b21b6;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.vote-options{display:flex;flex-wrap:wrap;gap:8px}
+.vote-opt{padding:7px 14px;background:#fff;border:1px solid #c4b5fd;color:#5b21b6;border-radius:18px;font-size:0.85rem;cursor:pointer;font-weight:500;display:flex;align-items:center;gap:6px;user-select:none}
+.vote-opt:hover{background:#ede9fe}
+.vote-opt input{accent-color:#7c3aed;cursor:pointer}
+.vote-opt.selected{background:#7c3aed;color:#fff;border-color:#7c3aed}
+
+/* diagnosis box */
+.diag-box{background:linear-gradient(135deg,#fef3c7,#fde68a);border:1px solid #fbbf24;border-radius:12px;padding:22px 26px;margin-bottom:24px}
+.diag-box h3{font-size:1.1rem;font-weight:800;color:#78350f;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.diag-box p{font-size:0.92rem;color:#78350f;line-height:1.7}
+.diag-box code{background:rgba(0,0,0,.1);padding:1px 6px;border-radius:4px;font-family:'Fira Code',monospace;font-size:0.86rem}
+.diag-box .conclusion{margin-top:10px;padding:12px 16px;background:rgba(255,255,255,.55);border-radius:8px;font-size:0.88rem}
+
+/* submit */
+.submit{background:#fff;border:2px solid #7c3aed;border-radius:14px;padding:28px 32px;margin-top:32px;text-align:center}
+.submit h2{font-size:1.4rem;font-weight:800;margin-bottom:10px;background:linear-gradient(90deg,#a78bfa,#7c3aed);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.submit p{color:#6b7280;font-size:0.92rem;margin-bottom:18px}
+.submit-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.btn-primary{padding:12px 28px;background:linear-gradient(135deg,#a78bfa,#7c3aed);color:#fff;font-weight:700;border-radius:24px;font-size:0.95rem;border:none;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:8px}
+.btn-secondary{padding:12px 24px;background:#fff;border:2px solid #e5e7eb;color:#374151;border-radius:24px;font-size:0.9rem;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:8px}
+
+footer{text-align:center;padding:32px 24px;color:#9ca3af;font-size:0.85rem;background:#fff;border-top:1px solid #e5e7eb}
+footer a{color:#7c3aed}
+
+@media(max-width:760px){
+  .hero h1{font-size:1.9rem}
+  .cards,.cards.three,.cards.four{grid-template-columns:1fr}
+  main{padding:24px 16px 40px}
+  .track{padding:22px}
+}
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-badge">smart-crawler · 客户反馈三件套</div>
+  <h1>三轨 <span class="grad">抽卡决策页</span></h1>
+  <p>客户在 5/20-21 提出 3 个需求/反馈，我们一次性出 <strong style="color:#fff">10 张交互方案 + 1 份数据诊断</strong>，你在这一个页面里挑完所有偏好。</p>
+  <div class="hero-meta">2026-05-21 · 不写代码，只做产品设计 · 决策完成后进入实现</div>
+</div>
+
+<main>
+
+<!-- ============ 抽卡集 1 ============ -->
+<section class="track">
+  <div class="track-head">
+    <div class="track-num t1">1</div>
+    <div class="track-text">
+      <h2>批量按品类下载</h2>
+      <div class="scenario">客户原话：「客户希望增加一个按照品类下载的能力」</div>
+      <p>4 种交互模式，覆盖<strong>日常运营 / 新手向导 / 探索式浏览 / 工程师脚本</strong>四种使用场景。</p>
+    </div>
+  </div>
+
+  <div class="cards four">
+
+    <a class="card" href="1A_drawer.html" target="_blank">
+      <span class="tag-recommend">⭐ 推荐 MVP</span>
+      <span class="card-tag tag-1">方案 1A</span>
+      <div class="card-icon">📦</div>
+      <h3>侧抽屉式</h3>
+      <div class="sub">Slide-out Drawer</div>
+      <p>产品列表右上角按钮触发，右侧滑出 480px 抽屉。<strong>保留筛选上下文</strong>，4 步配置最快出包。</p>
+      <div class="open">打开预览 →</div>
+    </a>
+
+    <a class="card" href="1B_wizard.html" target="_blank">
+      <span class="card-tag tag-1">方案 1B</span>
+      <div class="card-icon">🧙</div>
+      <h3>全屏向导</h3>
+      <div class="sub">Full-screen Wizard</div>
+      <p>5 步进度条 + 三栏布局（品牌/品类/购物车）。<strong>流程化、新手友好</strong>，适合跨站大批量。</p>
+      <div class="open">打开预览 →</div>
+    </a>
+
+    <a class="card" href="1C_catalog.html" target="_blank">
+      <span class="card-tag tag-1">方案 1C</span>
+      <div class="card-icon">🛍️</div>
+      <h3>品类目录</h3>
+      <div class="sub">Catalog Browser</div>
+      <p>像逛超市一样浏览品类卡片，每卡片显示<strong>商品数 / 价格区间 / 促销占比</strong>。探索性最强。</p>
+      <div class="open">打开预览 →</div>
+    </a>
+
+    <a class="card" href="1D_composer.html" target="_blank">
+      <span class="card-tag tag-1">方案 1D</span>
+      <div class="card-icon">⚡</div>
+      <h3>YAML Composer</h3>
+      <div class="sub">Power User</div>
+      <p>YAML 编辑器 + Live Preview + 模板库 + Cron 调度。<strong>可版本化、脚本化</strong>，工程师专属。</p>
+      <div class="open">打开预览 →</div>
+    </a>
+
+  </div>
+
+  <div class="compare">
+    <table>
+      <thead><tr><th>对比维度</th><th>1A 抽屉</th><th>1B 向导</th><th>1C 目录</th><th>1D Composer</th></tr></thead>
+      <tbody>
+        <tr><td>学习成本</td><td>低</td><td>极低</td><td>低</td><td>高</td></tr>
+        <tr><td>灵活度</td><td>中</td><td>中</td><td>低</td><td>极高</td></tr>
+        <tr><td>上下文保留</td><td>✅ 自动继承</td><td>❌</td><td>❌</td><td>✅ 可重用</td></tr>
+        <tr><td>探索性</td><td>低</td><td>低</td><td>✅ 最强</td><td>低</td></tr>
+        <tr class="recommend"><td>实现成本</td><td>中（推荐 MVP）</td><td>高</td><td>中</td><td>高</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="vote">
+    <h4>🗳️ 你倾向哪一个？</h4>
+    <div class="vote-options">
+      <label class="vote-opt"><input type="radio" name="track1"> 1A · 抽屉</label>
+      <label class="vote-opt"><input type="radio" name="track1"> 1B · 向导</label>
+      <label class="vote-opt"><input type="radio" name="track1"> 1C · 目录</label>
+      <label class="vote-opt"><input type="radio" name="track1"> 1D · Composer</label>
+      <label class="vote-opt"><input type="radio" name="track1"> 1A + 1D 都要</label>
+      <label class="vote-opt"><input type="radio" name="track1"> 都不要</label>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 抽卡集 2 ============ -->
+<section class="track">
+  <div class="track-head">
+    <div class="track-num t2">2</div>
+    <div class="track-text">
+      <h2>产品列表「落库时间」列</h2>
+      <div class="scenario">客户原话：「再帮忙加一个入库时间」（screenshot 红框在产品表最右）</div>
+      <p>数据字段在 DB 里都有现成的（<code>Product.created_time</code> / <code>updated_time</code>），<strong>只是前端怎么呈现的选择</strong>。从最简单到最丰富 3 种。</p>
+    </div>
+  </div>
+
+  <div class="cards three">
+
+    <a class="card" href="2A_simple_date.html" target="_blank">
+      <span class="tag-recommend">⭐ 推荐 MVP</span>
+      <span class="card-tag tag-2">方案 2A</span>
+      <div class="card-icon">📅</div>
+      <h3>简单日期列</h3>
+      <div class="sub">Simple Date Column</div>
+      <p>最右加一列「<strong>落库时间</strong>」，格式 <code style="font-size:0.78rem">YYYY-MM-DD HH:MM</code>。<br>Hover 显示完整时间 + 相对时间。<br><strong>符合客户原图诉求，最低成本。</strong></p>
+      <div class="open">打开预览 →</div>
+    </a>
+
+    <a class="card" href="2B_freshness_pills.html" target="_blank">
+      <span class="card-tag tag-2">方案 2B</span>
+      <div class="card-icon">💊</div>
+      <h3>双标签 Pill</h3>
+      <div class="sub">Freshness Pills</div>
+      <p>列名升级成「<strong>数据新鲜度</strong>」，双 pill：<br>● 上：首抓 ● 下：最近<br>颜色编码：绿/黄/红一眼看出 <strong>死库存</strong>。</p>
+      <div class="open">打开预览 →</div>
+    </a>
+
+    <a class="card" href="2C_timeline_panel.html" target="_blank">
+      <span class="card-tag tag-2">方案 2C</span>
+      <div class="card-icon">📜</div>
+      <h3>时间轴侧栏</h3>
+      <div class="sub">Timeline Panel</div>
+      <p>列里只显示紧凑时间 + 圆点。<br>点击行 → 右侧滑出时间轴，<strong>串起价格变动 / 促销 / 评论增长</strong>，把时间升级成数据生命周期。</p>
+      <div class="open">打开预览 →</div>
+    </a>
+
+  </div>
+
+  <div class="vote">
+    <h4>🗳️ 你倾向哪一个？</h4>
+    <div class="vote-options">
+      <label class="vote-opt"><input type="radio" name="track2"> 2A · 简单（MVP 推荐）</label>
+      <label class="vote-opt"><input type="radio" name="track2"> 2B · 新鲜度 pill</label>
+      <label class="vote-opt"><input type="radio" name="track2"> 2C · 时间轴</label>
+      <label class="vote-opt"><input type="radio" name="track2"> 先 2A 后续升级 2B</label>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 抽卡集 3 ============ -->
+<section class="track">
+  <div class="track-head">
+    <div class="track-num t3">3</div>
+    <div class="track-text">
+      <h2>Vidaxl 数据量问题 · 决策</h2>
+      <div class="scenario">客户原话：「Vidaxl 全部站点只有 198-200，是我们只抓 200 还是对方限我们 200？」</div>
+      <p>先看诊断结论，再选 UI 方案 + 扩量档位。</p>
+    </div>
+  </div>
+
+  <!-- diagnostic -->
+  <div class="diag-box">
+    <h3>⚠️ 诊断结论</h3>
+    <p><strong>100% 是我们这边设的上限，不是 Vidaxl 限制我们</strong>。证据：</p>
+    <p style="margin-top:8px">
+      • <code>backend/sites.yaml</code> Vidaxl 全 12 行写死 <code>max_products: 200</code><br>
+      • <code>backend/app/crawlers/vidaxl.py:28</code> <code>STOREFRONT_LIMIT = 200</code> 默认值<br>
+      • <code>vidaxl.py:145</code> 抓到 200 就 break
+    </p>
+    <p style="margin-top:8px">为什么当初设 200：Vidaxl 单站 ~25 万 SKU，全量爬几小时 + 大带宽 + 高风控风险；MVP 阶段验证通路够了。<strong>SONGMICS / Costway 没限</strong>（DE 11624 / Costway CA 1607）是因为 Shopify / API 路径一次性能拉完。</p>
+
+    <div class="conclusion">
+      <strong>核心数据</strong>：Vidaxl 全 12 站平均覆盖率 <strong style="color:#dc2626">~0.08%</strong> · 升到 2K 档 = 10× · 升到全量 = 200×
+    </div>
+  </div>
+
+  <div class="cards three">
+
+    <a class="card" href="3A_tier_cards.html" target="_blank">
+      <span class="card-tag tag-3">方案 3A</span>
+      <div class="card-icon">🎚️</div>
+      <h3>档位选择卡</h3>
+      <div class="sub">Tier Cards</div>
+      <p>独立设置页，<strong>4 张大卡片单选</strong>：200 / 2K / 10K / 全量。每张显示耗时 / 风险 / 库存倍数。最简单直接。</p>
+      <div class="open">打开预览 →</div>
+    </a>
+
+    <a class="card" href="3B_coverage_dashboard.html" target="_blank">
+      <span class="tag-recommend">⭐ 推荐</span>
+      <span class="card-tag tag-3">方案 3B</span>
+      <div class="card-icon">📊</div>
+      <h3>覆盖率仪表盘</h3>
+      <div class="sub">Coverage Dashboard</div>
+      <p>新增「数据覆盖率」一级 tab，<strong>每站点一条进度条</strong>。Vidaxl 0.08% 红色高亮触目惊心，<strong>让客户先看到问题</strong>。</p>
+      <div class="open">打开预览 →</div>
+    </a>
+
+    <a class="card" href="3C_ad_hoc_button.html" target="_blank">
+      <span class="card-tag tag-3">方案 3C</span>
+      <div class="card-icon">⚡</div>
+      <h3>按需采集</h3>
+      <div class="sub">Ad-hoc Button</div>
+      <p>每个站点页加「⚡ 扩量采集这个站」按钮，<strong>看到数据少就一键扩</strong>。后台异步跑，右下角进度条反馈。</p>
+      <div class="open">打开预览 →</div>
+    </a>
+
+  </div>
+
+  <div class="vote">
+    <h4>🗳️ A · 扩量档位（决定爬多少）</h4>
+    <div class="vote-options">
+      <label class="vote-opt"><input type="radio" name="track3a"> 维持 200/站</label>
+      <label class="vote-opt"><input type="radio" name="track3a"> ⭐ 扩到 2,000/站（10×）</label>
+      <label class="vote-opt"><input type="radio" name="track3a"> 深度 10,000/站（50×）</label>
+      <label class="vote-opt"><input type="radio" name="track3a"> 全量爬（200×）</label>
+    </div>
+    <h4 style="margin-top:14px">🗳️ B · UI 呈现方案（决定客户怎么用）</h4>
+    <div class="vote-options">
+      <label class="vote-opt"><input type="radio" name="track3b"> 3A · 档位卡</label>
+      <label class="vote-opt"><input type="radio" name="track3b"> ⭐ 3B · 覆盖率仪表盘</label>
+      <label class="vote-opt"><input type="radio" name="track3b"> 3C · 按需采集</label>
+      <label class="vote-opt"><input type="radio" name="track3b"> 3A + 3B + 3C 都要</label>
+    </div>
+  </div>
+</section>
+
+<!-- SUBMIT -->
+<div class="submit">
+  <h2>选完后告诉 Boyuan</h2>
+  <p>把你的偏好告诉我（钉钉/Slack/邮件），我们就开实现。整套预计 <strong>2-3 天</strong>能上线。</p>
+  <div class="submit-actions">
+    <a class="btn-primary" href="mailto:boyuan@solvea.cx?subject=smart-crawler%20%E6%8A%BD%E5%8D%A1%E5%86%B3%E7%AD%96&body=1.%20%E6%89%B9%E9%87%8F%E4%B8%8B%E8%BD%BD%EF%BC%9A%5B1A%2F1B%2F1C%2F1D%5D%0A2.%20%E8%90%BD%E5%BA%93%E6%97%B6%E9%97%B4%EF%BC%9A%5B2A%2F2B%2F2C%5D%0A3.%20Vidaxl%20%E6%89%A9%E9%87%8F%E6%A1%A3%E4%BD%8D%EF%BC%9A%5B200%2F2K%2F10K%2F%E5%85%A8%E9%87%8F%5D%0A4.%20Vidaxl%20UI%EF%BC%9A%5B3A%2F3B%2F3C%5D">📧 发邮件告诉 Boyuan</a>
+    <a class="btn-secondary" href="https://github.com/mguozhen/smart-crawler/tree/feature/customer-design-cards/deliverables/mockups" target="_blank">📂 看源码 / GitHub</a>
+  </div>
+</div>
+
+</main>
+
+<footer>
+  smart-crawler · 客户三件套抽卡 · 2026-05-21 ·
+  <a href="https://github.com/mguozhen/smart-crawler">GitHub</a> ·
+  <a href="https://smartcrawler.io">smartcrawler.io</a>
+</footer>
+
+<script>
+// simple radio selection visual feedback
+document.querySelectorAll('input[type=radio]').forEach(r=>{
+  r.addEventListener('change', e=>{
+    const name = e.target.name;
+    document.querySelectorAll(`input[name="${name}"]`).forEach(rr=>{
+      rr.closest('.vote-opt').classList.toggle('selected', rr.checked);
+    });
+  });
+});
+</script>
+
+</body>
+</html>

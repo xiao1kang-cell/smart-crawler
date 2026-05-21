@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>方案 1B · 全屏向导式批量下载 — smart-crawler</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+body{background:#0c0c12;color:#e0e0e0;min-height:100vh;font-size:14px;overflow:hidden}
+a{color:inherit;text-decoration:none}
+
+/* background (dimmed page) */
+.bg{position:fixed;inset:0;background:#0c0c12;filter:blur(2px);opacity:.35;z-index:0;padding:20px}
+.bg .top{height:50px;background:#13131c;border-bottom:1px solid #1f1f2e;border-radius:6px;margin-bottom:14px}
+.bg .row{height:46px;background:#13131c;border-radius:6px;margin-bottom:7px}
+
+/* modal */
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50}
+.modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:90vw;max-width:1180px;height:88vh;
+       background:#0e0e18;border:1px solid #1f3a5f;border-radius:16px;z-index:60;display:flex;flex-direction:column;
+       box-shadow:0 24px 80px rgba(0,0,0,.6)}
+
+/* header */
+.m-header{padding:18px 28px;border-bottom:1px solid #1a1a2a;display:flex;align-items:center;gap:14px}
+.m-icon{width:34px;height:34px;background:linear-gradient(135deg,#ff6b35,#f7b731);border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:18px}
+.m-title{font-size:1.15rem;font-weight:700;flex:1}
+.m-close{cursor:pointer;color:#667;font-size:1.4rem;width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:6px}
+
+/* progress bar */
+.steps{display:flex;padding:20px 32px 12px;border-bottom:1px solid #1a1a2a;gap:0}
+.step{flex:1;display:flex;flex-direction:column;align-items:center;position:relative}
+.step:not(:last-child)::after{content:'';position:absolute;top:13px;left:calc(50% + 18px);right:calc(-50% + 18px);height:2px;background:#1f1f2e}
+.step.done:not(:last-child)::after{background:#4ecdc4}
+.step-circle{width:28px;height:28px;border-radius:50%;background:#1f1f2e;color:#667;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.82rem;border:2px solid #1f1f2e;z-index:1;background:#0e0e18}
+.step.done .step-circle{background:#4ecdc4;color:#000;border-color:#4ecdc4}
+.step.active .step-circle{border-color:#f7b731;color:#f7b731;background:#0e0e18}
+.step-label{margin-top:7px;font-size:0.78rem;color:#566}
+.step.active .step-label{color:#f7b731;font-weight:600}
+.step.done .step-label{color:#4ecdc4}
+
+/* body — three columns */
+.m-body{flex:1;display:flex;overflow:hidden}
+.col-left{width:230px;background:#0c0c14;border-right:1px solid #1a1a2a;padding:18px 14px;overflow-y:auto}
+.col-mid{flex:1;padding:20px 28px;overflow-y:auto;border-right:1px solid #1a1a2a}
+.col-right{width:280px;background:#0c0c14;padding:20px 22px;overflow-y:auto}
+
+/* col labels */
+.col-label{font-size:0.74rem;color:#566;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px;font-weight:600}
+
+/* brand list (left) */
+.brand-item{display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:7px;cursor:pointer;margin-bottom:3px;font-size:0.86rem}
+.brand-item:hover{background:#13131c}
+.brand-item.active{background:#0e1a22;color:#4ecdc4;border-left:3px solid #4ecdc4;padding-left:8px}
+.brand-item input[type=checkbox]{accent-color:#4ecdc4;cursor:pointer}
+.brand-cnt{margin-left:auto;font-size:0.72rem;color:#566;background:#1a1a26;padding:1px 7px;border-radius:8px}
+.brand-item.active .brand-cnt{background:#0a2a4a;color:#4ecdc4}
+
+/* category tree (middle) - waterfall */
+.tree-section{margin-bottom:22px}
+.tree-section h4{font-size:0.92rem;font-weight:700;margin-bottom:10px;color:#cdd6f4;display:flex;align-items:center;gap:8px}
+.tree-section .head-cnt{background:#1a1a26;padding:2px 9px;border-radius:10px;font-size:0.7rem;color:#888}
+
+.cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+.cat-tile{background:#13131c;border:1px solid #1e1e2e;border-radius:9px;padding:11px 14px;cursor:pointer;transition:all .15s}
+.cat-tile:hover{border-color:#2a3a5a}
+.cat-tile.checked{background:#0e1a22;border-color:#4ecdc4}
+.cat-tile-head{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+.cat-tile-head input[type=checkbox]{accent-color:#4ecdc4}
+.cat-tile-name{font-weight:600;font-size:0.88rem;flex:1}
+.cat-tile-cnt{font-size:0.74rem;color:#566}
+.cat-tile.checked .cat-tile-cnt{color:#4ecdc4}
+.cat-tile-children{font-size:0.74rem;color:#566;margin-left:22px}
+
+/* selected cart (right) */
+.cart-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.cart-header h3{font-size:0.95rem;font-weight:700}
+.cart-clear{font-size:0.74rem;color:#566;cursor:pointer}
+.cart-item{background:#13131c;border:1px solid #1e1e2e;border-radius:7px;padding:8px 11px;margin-bottom:6px;display:flex;align-items:center;gap:8px;font-size:0.82rem}
+.cart-item .x{margin-left:auto;color:#566;cursor:pointer;width:18px;height:18px;display:flex;align-items:center;justify-content:center;border-radius:4px}
+.cart-item .x:hover{background:#2a1a1a;color:#ff8b8b}
+.cart-item .name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cart-item .ct{font-size:0.7rem;color:#566;background:#1a1a26;padding:1px 6px;border-radius:8px}
+
+/* preview floating panel */
+.preview{position:absolute;bottom:20px;right:20px;width:230px;background:linear-gradient(135deg,#0f1a2e,#0a1520);
+         border:1px solid #1f3a5f;border-radius:11px;padding:14px 16px;box-shadow:0 8px 30px rgba(0,0,0,.4)}
+.preview-row{display:flex;justify-content:space-between;padding:3px 0;font-size:0.8rem;color:#aaa}
+.preview-row strong{color:#cdd6f4}
+.preview-total{margin-top:8px;padding-top:8px;border-top:1px solid #1f3a5f;font-size:0.88rem;color:#fff}
+.preview-total strong{color:#f7b731;font-size:1.1rem}
+
+/* footer */
+.m-footer{padding:14px 28px;border-top:1px solid #1a1a2a;display:flex;align-items:center;gap:12px;background:#0c0c14}
+.btn-back{padding:10px 22px;background:#1a1a26;color:#aaa;border-radius:8px;font-size:0.88rem;border:1px solid #2a2a3e;cursor:pointer}
+.btn-spacer{flex:1}
+.btn-next{padding:10px 28px;background:linear-gradient(90deg,#ff6b35,#f7b731);color:#000;font-weight:700;border-radius:8px;font-size:0.9rem;cursor:pointer;border:none}
+
+/* callout */
+.callout{position:fixed;bottom:24px;left:24px;max-width:260px;background:linear-gradient(135deg,#f7b731,#ff6b35);color:#000;padding:13px 17px;border-radius:11px;z-index:300;box-shadow:0 6px 24px rgba(247,183,49,.35)}
+.callout-num{display:inline-block;background:rgba(0,0,0,.2);padding:1px 8px;border-radius:10px;font-size:0.7rem;font-weight:700;margin-bottom:5px}
+.callout h3{font-size:0.92rem;font-weight:800;margin-bottom:5px}
+.callout p{font-size:0.78rem;line-height:1.5}
+</style>
+</head>
+<body>
+
+<div class="bg">
+  <div class="top"></div>
+  <div class="row"></div><div class="row"></div><div class="row"></div><div class="row"></div>
+  <div class="row"></div><div class="row"></div><div class="row"></div><div class="row"></div>
+</div>
+
+<div class="modal-backdrop"></div>
+
+<div class="modal">
+  <!-- header -->
+  <div class="m-header">
+    <div class="m-icon">📦</div>
+    <div class="m-title">批量按品类导出向导</div>
+    <span style="font-size:0.78rem;color:#667;background:#1a1a26;padding:3px 11px;border-radius:11px">第 3 / 5 步</span>
+    <div class="m-close">×</div>
+  </div>
+
+  <!-- steps -->
+  <div class="steps">
+    <div class="step done"><div class="step-circle">✓</div><div class="step-label">选品牌</div></div>
+    <div class="step done"><div class="step-circle">✓</div><div class="step-label">选国家</div></div>
+    <div class="step active"><div class="step-circle">3</div><div class="step-label">选品类</div></div>
+    <div class="step"><div class="step-circle">4</div><div class="step-label">选格式</div></div>
+    <div class="step"><div class="step-circle">5</div><div class="step-label">确认</div></div>
+  </div>
+
+  <!-- 3-column body -->
+  <div class="m-body">
+    <!-- LEFT: brand list -->
+    <div class="col-left">
+      <div class="col-label">已选品牌</div>
+      <div class="brand-item active"><input type="checkbox" checked> Costway <span class="brand-cnt">1,056</span></div>
+      <div class="brand-item active"><input type="checkbox" checked> SONGMICS <span class="brand-cnt">11,624</span></div>
+      <div class="brand-item active"><input type="checkbox" checked> Homary <span class="brand-cnt">499</span></div>
+      <div style="margin-top:14px;font-size:0.74rem;color:#566;padding:0 11px">国家筛选：US · DE</div>
+      <hr style="border:none;border-top:1px solid #1a1a2a;margin:18px 0">
+      <div style="font-size:0.78rem;color:#667;line-height:1.6;padding:0 4px">
+        💡 步骤 1-2 已锁定<br>3 个品牌 × 2 个国家 = <strong style="color:#4ecdc4">6 站</strong>
+      </div>
+    </div>
+
+    <!-- MIDDLE: category waterfall -->
+    <div class="col-mid">
+      <div class="tree-section">
+        <h4>🏠 家居 <span class="head-cnt">739 SKU</span></h4>
+        <div class="cat-grid">
+          <div class="cat-tile checked">
+            <div class="cat-tile-head"><input type="checkbox" checked><span class="cat-tile-name">储物收纳</span><span class="cat-tile-cnt">98</span></div>
+            <div class="cat-tile-children">5 个子类</div>
+          </div>
+          <div class="cat-tile checked">
+            <div class="cat-tile-head"><input type="checkbox" checked><span class="cat-tile-name">户外家具</span><span class="cat-tile-cnt">147</span></div>
+            <div class="cat-tile-children">遮阳/餐桌椅/秋千</div>
+          </div>
+          <div class="cat-tile">
+            <div class="cat-tile-head"><input type="checkbox"><span class="cat-tile-name">客厅家具</span><span class="cat-tile-cnt">82</span></div>
+            <div class="cat-tile-children">沙发/茶几/电视柜</div>
+          </div>
+          <div class="cat-tile">
+            <div class="cat-tile-head"><input type="checkbox"><span class="cat-tile-name">卧室家具</span><span class="cat-tile-cnt">94</span></div>
+            <div class="cat-tile-children">床/衣柜/床头柜</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tree-section">
+        <h4>💼 办公 <span class="head-cnt">218 SKU</span></h4>
+        <div class="cat-grid">
+          <div class="cat-tile checked">
+            <div class="cat-tile-head"><input type="checkbox" checked><span class="cat-tile-name">办公桌椅</span><span class="cat-tile-cnt">156</span></div>
+            <div class="cat-tile-children">站立桌/人体工学椅</div>
+          </div>
+          <div class="cat-tile">
+            <div class="cat-tile-head"><input type="checkbox"><span class="cat-tile-name">文件收纳</span><span class="cat-tile-cnt">62</span></div>
+            <div class="cat-tile-children">文件柜/抽屉</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tree-section">
+        <h4>🏃 运动健身 <span class="head-cnt">134 SKU</span></h4>
+        <div class="cat-grid">
+          <div class="cat-tile">
+            <div class="cat-tile-head"><input type="checkbox"><span class="cat-tile-name">健身器械</span><span class="cat-tile-cnt">87</span></div>
+            <div class="cat-tile-children">跑步机/划船机</div>
+          </div>
+          <div class="cat-tile">
+            <div class="cat-tile-head"><input type="checkbox"><span class="cat-tile-name">户外运动</span><span class="cat-tile-cnt">47</span></div>
+            <div class="cat-tile-children">蹦床/帐篷</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tree-section">
+        <h4>🧸 玩具母婴 <span class="head-cnt">187 SKU</span></h4>
+        <div class="cat-grid">
+          <div class="cat-tile">
+            <div class="cat-tile-head"><input type="checkbox"><span class="cat-tile-name">儿童玩具</span><span class="cat-tile-cnt">112</span></div>
+            <div class="cat-tile-children">滑梯/积木/玩具屋</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: selected cart -->
+    <div class="col-right">
+      <div class="cart-header">
+        <h3>🛒 已选品类</h3>
+        <span class="cart-clear">清空</span>
+      </div>
+
+      <div class="cart-item">
+        <span class="name">家居 / 储物收纳</span>
+        <span class="ct">98</span>
+        <span class="x">×</span>
+      </div>
+      <div class="cart-item">
+        <span class="name">家居 / 户外家具</span>
+        <span class="ct">147</span>
+        <span class="x">×</span>
+      </div>
+      <div class="cart-item">
+        <span class="name">办公 / 办公桌椅</span>
+        <span class="ct">156</span>
+        <span class="x">×</span>
+      </div>
+
+      <div style="margin-top:18px;padding:12px 14px;background:#0e1622;border:1px solid #1f3a5f;border-radius:9px">
+        <div style="font-size:0.74rem;color:#566;margin-bottom:4px">合计选中</div>
+        <div style="font-size:1.7rem;font-weight:800;color:#f7b731;line-height:1">401</div>
+        <div style="font-size:0.78rem;color:#aaa">SKU 待导出</div>
+      </div>
+
+      <div style="margin-top:14px;font-size:0.78rem;color:#566;line-height:1.6">
+        ✨ <strong style="color:#cdd6f4">提示</strong>：每个品类下的子类自动包含。如需排除某子类，点击品类卡片可展开筛选。
+      </div>
+    </div>
+  </div>
+
+  <!-- footer -->
+  <div class="m-footer">
+    <button class="btn-back">← 上一步</button>
+    <span style="font-size:0.82rem;color:#566">已选 3 个品类 · 401 SKU</span>
+    <div class="btn-spacer"></div>
+    <button class="btn-next">下一步：选文件格式 →</button>
+  </div>
+</div>
+
+<!-- floating preview -->
+<div class="preview">
+  <div style="font-size:0.74rem;color:#566;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">📊 实时预估</div>
+  <div class="preview-row"><span>选中品类</span><strong>3 个</strong></div>
+  <div class="preview-row"><span>商品 SKU</span><strong>401</strong></div>
+  <div class="preview-row"><span>含促销</span><strong>327</strong></div>
+  <div class="preview-row"><span>价格点</span><strong>~36k 条</strong></div>
+  <div class="preview-total">预计大小 <strong>~2.1 MB</strong></div>
+</div>
+
+<!-- callout -->
+<div class="callout">
+  <div class="callout-num">方案 1B</div>
+  <h3>全屏向导式 · Wizard Modal</h3>
+  <p><strong>5 步流程</strong>，三栏布局清晰：左品牌锁定 / 中品类瀑布 / 右已选购物车。每步进度可回看。<br><strong>适合</strong>：跨品牌大批量、第一次使用、需要清晰流程的客户。</p>
+</div>
+
+</body>
+</html>

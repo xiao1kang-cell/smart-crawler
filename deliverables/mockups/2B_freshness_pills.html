@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>方案 2B · 双标签 Pill 列 — smart-crawler</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+body{background:#fff;color:#1f2937;min-height:100vh;font-size:14px}
+a{color:#7c3aed;text-decoration:none}
+
+.topbar{padding:14px 24px;display:flex;align-items:center;gap:18px;border-bottom:1px solid #e5e7eb}
+.logo-wrap{display:flex;align-items:center;gap:9px}
+.logo{width:30px;height:30px;border-radius:6px;background:radial-gradient(circle at 30% 30%,#a78bfa,#7c3aed)}
+.brand{font-weight:700;color:#111827}
+.brand .accent{color:#7c3aed}
+.site-select{padding:7px 16px 7px 14px;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:8px;font-size:0.85rem;color:#374151;display:flex;align-items:center;gap:8px;min-width:240px;justify-content:space-between}
+.site-url{color:#6b7280;font-size:0.82rem}
+.user{margin-left:auto;display:flex;align-items:center;gap:12px;font-size:0.85rem}
+.user .dot{width:8px;height:8px;background:#10b981;border-radius:50%}
+.user .ts{color:#6b7280;font-size:0.78rem}
+.export-btn{padding:8px 16px;background:#fff;border:1px solid #d1d5db;border-radius:8px;font-size:0.85rem;color:#374151;display:flex;align-items:center;gap:6px;cursor:pointer}
+
+.tabs{display:flex;gap:0;padding:0 24px;border-bottom:1px solid #e5e7eb}
+.tab{padding:14px 18px;color:#6b7280;font-size:0.92rem;cursor:pointer;position:relative}
+.tab.active{color:#7c3aed;font-weight:600}
+.tab.active::after{content:'';position:absolute;bottom:-1px;left:18px;right:18px;height:2px;background:#7c3aed}
+
+.filters{padding:18px 24px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.f-chip{padding:5px 14px;border-radius:18px;font-size:0.85rem;cursor:pointer}
+.f-chip.purple{background:linear-gradient(135deg,#ede9fe,#ddd6fe);color:#7c3aed;font-weight:600}
+.f-chip.gray{background:#f3f4f6;color:#6b7280}
+.f-chip.fresh-filter{background:linear-gradient(135deg,#d1fae5,#a7f3d0);color:#065f46;font-weight:600;display:flex;align-items:center;gap:5px}
+.f-chip.fresh-filter .dot{width:7px;height:7px;border-radius:50%;background:#10b981}
+.f-input{background:#f9fafb;border:1px solid #e5e7eb;color:#374151;padding:6px 12px;border-radius:18px;font-size:0.85rem;width:160px;outline:none}
+.f-spacer{flex:1}
+.btn-filter{padding:6px 20px;background:linear-gradient(135deg,#a78bfa,#7c3aed);color:#fff;border-radius:18px;font-size:0.85rem;font-weight:600;cursor:pointer;border:none}
+
+/* freshness legend */
+.legend{padding:0 24px 14px;display:flex;gap:12px;font-size:0.78rem;color:#6b7280;align-items:center}
+.legend strong{color:#374151}
+.legend-item{display:flex;align-items:center;gap:5px}
+.legend-dot{width:9px;height:9px;border-radius:50%}
+.lg-green{background:#10b981}
+.lg-yellow{background:#f59e0b}
+.lg-red{background:#ef4444}
+
+/* table */
+.table-wrap{padding:0 24px 24px}
+table{width:100%;border-collapse:collapse;font-size:0.88rem}
+th{text-align:left;padding:14px 14px;color:#9ca3af;font-weight:500;font-size:0.85rem;border-bottom:1px solid #e5e7eb;white-space:nowrap}
+td{padding:18px 14px;border-bottom:1px solid #f3f4f6;color:#374151;vertical-align:middle}
+tr:hover{background:#fafbfc}
+
+.idx-col{width:30px;color:#9ca3af}
+.img-col{width:80px}
+.thumb{width:60px;height:60px;background:linear-gradient(135deg,#f3f4f6,#e5e7eb);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:1.5rem;color:#9ca3af}
+.title-col{min-width:240px;max-width:320px}
+.sku-col{font-family:'Fira Code',monospace;color:#6b7280;font-size:0.82rem}
+.attr-col{color:#6b7280;font-size:0.85rem}
+.price-col{color:#7c3aed;font-weight:600}
+.dash{color:#d1d5db}
+.status-tag{display:inline-block;padding:3px 12px;background:#d1fae5;color:#065f46;border-radius:14px;font-size:0.78rem;font-weight:500}
+
+/* NEW: 数据新鲜度双 pill 列 */
+.fresh-col{min-width:170px;background:rgba(247,183,49,.05);border-left:3px solid #f7b731;border-right:3px solid #f7b731}
+.pills{display:flex;flex-direction:column;gap:5px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:14px;font-size:0.74rem;font-weight:500;width:fit-content;white-space:nowrap}
+.pill-first{background:#f3f4f6;color:#6b7280}
+.pill-first::before{content:'首';color:#9ca3af;background:#fff;width:14px;height:14px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:0.66rem;font-weight:700;margin-right:1px}
+
+.pill-recent{font-weight:600}
+.pill-fresh{background:#d1fae5;color:#065f46}
+.pill-fresh::before{content:'';width:7px;height:7px;border-radius:50%;background:#10b981;display:inline-block}
+.pill-mid{background:#fef3c7;color:#92400e}
+.pill-mid::before{content:'';width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block}
+.pill-stale{background:#fee2e2;color:#991b1b}
+.pill-stale::before{content:'⚠';font-size:0.7rem;color:#dc2626}
+
+.gap-label{font-size:0.7rem;color:#9ca3af;margin-top:2px}
+
+/* highlight banner */
+.highlight-banner{position:fixed;top:130px;right:30px;background:linear-gradient(135deg,#10b981,#059669);color:#fff;padding:14px 18px;border-radius:11px;max-width:300px;font-size:0.82rem;line-height:1.55;z-index:50;box-shadow:0 8px 24px rgba(16,185,129,.3)}
+.highlight-banner strong{font-weight:800}
+.highlight-banner::after{content:'';position:absolute;top:48%;right:-10px;border:8px solid transparent;border-left-color:#059669}
+
+/* callout */
+.callout{position:fixed;bottom:24px;left:24px;max-width:300px;background:linear-gradient(135deg,#10b981,#059669);color:#fff;padding:14px 18px;border-radius:12px;z-index:300;box-shadow:0 6px 24px rgba(16,185,129,.3)}
+.callout-num{display:inline-block;background:rgba(255,255,255,.2);padding:1px 8px;border-radius:10px;font-size:0.72rem;font-weight:700;margin-bottom:5px}
+.callout h3{font-size:0.95rem;font-weight:800;margin-bottom:5px}
+.callout p{font-size:0.8rem;line-height:1.5;opacity:.95}
+.callout code{background:rgba(0,0,0,.2);padding:1px 5px;border-radius:3px;font-size:0.78rem}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo-wrap">
+    <div class="logo"></div>
+    <div class="brand">smart<span class="accent">·</span>crawler</div>
+  </div>
+  <div class="site-select">SONGMICS · DE（11624）<span>▾</span></div>
+  <div class="site-url">https://www.songmics.de/</div>
+  <div class="user">
+    <span class="dot"></span>
+    <span>Aosom 管理员</span>
+    <span class="ts">更新 2026-05-21 04:03</span>
+  </div>
+  <div class="export-btn">⬇ 导出 Excel</div>
+</div>
+
+<div class="tabs">
+  <div class="tab">总体分析</div>
+  <div class="tab active">产品分析</div>
+  <div class="tab">销售促销</div>
+  <div class="tab">数据源</div>
+  <div class="tab">采集任务</div>
+  <div class="tab">API 接入</div>
+</div>
+
+<div class="filters">
+  <div class="f-chip purple">所有产品 11624</div>
+  <div class="f-chip gray">畅销 0</div>
+  <div class="f-chip gray">最新 0</div>
+  <input class="f-input" placeholder="搜索标题 / SKU">
+  <input class="f-input" placeholder="最低价" style="width:90px">
+  <input class="f-input" placeholder="最高价" style="width:90px">
+  <div class="f-chip fresh-filter"><span class="dot"></span>仅看 24h 新数据</div>
+  <button class="btn-filter">筛选</button>
+</div>
+
+<div class="legend">
+  <strong>新鲜度图例：</strong>
+  <div class="legend-item"><span class="legend-dot lg-green"></span>24 小时内</div>
+  <div class="legend-item"><span class="legend-dot lg-yellow"></span>7 天内</div>
+  <div class="legend-item"><span class="legend-dot lg-red"></span>超过 30 天 · 死库存</div>
+</div>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th class="idx-col">#</th>
+        <th>图片</th>
+        <th>产品标题</th>
+        <th>SKU</th>
+        <th>属性</th>
+        <th>售价</th>
+        <th>原价</th>
+        <th>30天销量</th>
+        <th>评分</th>
+        <th>状态</th>
+        <th>品类</th>
+        <th style="color:#10b981;font-weight:700">数据新鲜度 ⭐</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="idx-col">1</td>
+        <td class="img-col"><div class="thumb">🧺</div></td>
+        <td class="title-col">Wäschekorb, Wäschesammler, Wäschesortierer</td>
+        <td class="sku-col">BLHB35223BH01</td>
+        <td class="attr-col">Farbe:Tintenschwarz</td>
+        <td class="price-col">$56.99</td>
+        <td class="dash">—</td>
+        <td>0</td>
+        <td class="dash">—</td>
+        <td><span class="status-tag">在售</span></td>
+        <td>Wäschewagen</td>
+        <td class="fresh-col">
+          <div class="pills">
+            <span class="pill pill-first">首抓 05-18</span>
+            <span class="pill pill-recent pill-fresh">最近 04:03</span>
+          </div>
+          <div class="gap-label">已追踪 3 天</div>
+        </td>
+      </tr>
+      <tr>
+        <td class="idx-col">2</td>
+        <td class="img-col"><div class="thumb">🧳</div></td>
+        <td class="title-col">Koffer, Hartschalenkoffer mit TSA-Schloss und Koffergurt</td>
+        <td class="sku-col">RLPB35001B101</td>
+        <td class="attr-col">Farbe:Tintenschwarz / 36x20x55cm</td>
+        <td class="price-col">$49.99</td>
+        <td class="dash">—</td>
+        <td>0</td>
+        <td class="dash">—</td>
+        <td><span class="status-tag">在售</span></td>
+        <td class="dash">—</td>
+        <td class="fresh-col">
+          <div class="pills">
+            <span class="pill pill-first">首抓 04-12</span>
+            <span class="pill pill-recent pill-fresh">最近 04:03</span>
+          </div>
+          <div class="gap-label">已追踪 40 天 · 持续更新</div>
+        </td>
+      </tr>
+      <tr>
+        <td class="idx-col">3</td>
+        <td class="img-col"><div class="thumb">🧳</div></td>
+        <td class="title-col">Koffer, Hartschalenkoffer Größe:50x30x75cm</td>
+        <td class="sku-col">RLPB35003Q101</td>
+        <td class="attr-col">Farbe:Blau / 50x30x75cm</td>
+        <td class="price-col">$66.99</td>
+        <td class="dash">—</td>
+        <td>0</td>
+        <td class="dash">—</td>
+        <td><span class="status-tag">在售</span></td>
+        <td class="dash">—</td>
+        <td class="fresh-col">
+          <div class="pills">
+            <span class="pill pill-first">首抓 04-12</span>
+            <span class="pill pill-recent pill-mid">最近 05-18</span>
+          </div>
+          <div class="gap-label">3 天未更新</div>
+        </td>
+      </tr>
+      <tr>
+        <td class="idx-col">4</td>
+        <td class="img-col"><div class="thumb">🧳</div></td>
+        <td class="title-col">Koffer, Größe:45x25x65cm</td>
+        <td class="sku-col">RLPB35002C101</td>
+        <td class="attr-col">Farbe:Grün / 45x25x65cm</td>
+        <td class="price-col">$59.99</td>
+        <td class="dash">—</td>
+        <td>0</td>
+        <td class="dash">—</td>
+        <td><span class="status-tag">在售</span></td>
+        <td class="dash">—</td>
+        <td class="fresh-col">
+          <div class="pills">
+            <span class="pill pill-first">首抓 02-08</span>
+            <span class="pill pill-recent pill-mid">最近 05-15</span>
+          </div>
+          <div class="gap-label">6 天未更新</div>
+        </td>
+      </tr>
+      <tr>
+        <td class="idx-col">5</td>
+        <td class="img-col"><div class="thumb">🧳</div></td>
+        <td class="title-col">Koffer, 50x30x75cm 绿色</td>
+        <td class="sku-col">RLPB35003C101</td>
+        <td class="attr-col">Farbe:Grün / 50x30x75cm</td>
+        <td class="price-col">$66.99</td>
+        <td class="dash">—</td>
+        <td>0</td>
+        <td class="dash">—</td>
+        <td><span class="status-tag" style="background:#fee2e2;color:#991b1b">下架</span></td>
+        <td class="dash">—</td>
+        <td class="fresh-col">
+          <div class="pills">
+            <span class="pill pill-first">首抓 2025-11-20</span>
+            <span class="pill pill-recent pill-stale">最近 04-08</span>
+          </div>
+          <div class="gap-label" style="color:#dc2626;font-weight:600">⚠ 43 天未更新 · 死库存</div>
+        </td>
+      </tr>
+      <tr>
+        <td class="idx-col">6</td>
+        <td class="img-col"><div class="thumb">🧳</div></td>
+        <td class="title-col">Koffer, Tintenschwarz 50x30x75cm</td>
+        <td class="sku-col">RLPB35003B101</td>
+        <td class="attr-col">Farbe:Tintenschwarz / 50x30x75cm</td>
+        <td class="price-col">$66.99</td>
+        <td class="dash">—</td>
+        <td>0</td>
+        <td class="dash">—</td>
+        <td><span class="status-tag">在售</span></td>
+        <td class="dash">—</td>
+        <td class="fresh-col">
+          <div class="pills">
+            <span class="pill pill-first">首抓 03-20</span>
+            <span class="pill pill-recent pill-fresh">最近 04:03</span>
+          </div>
+          <div class="gap-label">已追踪 62 天</div>
+        </td>
+      </tr>
+      <tr>
+        <td class="idx-col">7</td>
+        <td class="img-col"><div class="thumb">🧳</div></td>
+        <td class="title-col">Koffer, Blau 45x25x65cm</td>
+        <td class="sku-col">RLPB35002Q101</td>
+        <td class="attr-col">Farbe:Blau / 45x25x65cm</td>
+        <td class="price-col">$59.99</td>
+        <td class="dash">—</td>
+        <td>0</td>
+        <td class="dash">—</td>
+        <td><span class="status-tag" style="background:#fef3c7;color:#92400e">缺货</span></td>
+        <td class="dash">—</td>
+        <td class="fresh-col">
+          <div class="pills">
+            <span class="pill pill-first">首抓 2026-01-04</span>
+            <span class="pill pill-recent pill-stale">最近 03-15</span>
+          </div>
+          <div class="gap-label" style="color:#dc2626;font-weight:600">⚠ 67 天未更新</div>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- highlight banner -->
+<div class="highlight-banner">
+  ⭐ <strong>新增列「数据新鲜度」</strong><br>
+  两行 pill：上=首次入库，下=最近采集。<br>
+  绿/黄/红 颜色编码新鲜度，一眼看到 <strong>死库存</strong> 和 <strong>持续追踪</strong> 的数据，可按新鲜度筛选。
+</div>
+
+<!-- callout -->
+<div class="callout">
+  <div class="callout-num">方案 2B</div>
+  <h3>双标签 Pill 列 · Freshness Pills</h3>
+  <p><strong>升级版</strong>：同时展示 <code>首次入库</code> + <code>最近采集</code>，并按时间差自动着色：<br>
+  ● 绿 = 24h 内更新<br>
+  ● 黄 = 7 天内<br>
+  ● 红 = >30 天死库存<br><br>
+  <strong>优点</strong>：一眼判断数据新鲜度<br><strong>缺点</strong>：占列宽 170px</p>
+</div>
+
+</body>
+</html>

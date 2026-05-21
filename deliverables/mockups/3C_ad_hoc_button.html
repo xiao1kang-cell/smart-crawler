@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>方案 3C · 按需采集按钮 — smart-crawler</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+body{background:#fff;color:#1f2937;min-height:100vh;font-size:14px}
+a{color:#7c3aed;text-decoration:none}
+
+.topbar{padding:14px 24px;display:flex;align-items:center;gap:18px;border-bottom:1px solid #e5e7eb}
+.logo{width:30px;height:30px;border-radius:6px;background:radial-gradient(circle at 30% 30%,#a78bfa,#7c3aed)}
+.brand{font-weight:700;color:#111827}
+.brand .accent{color:#7c3aed}
+.site-select{padding:7px 16px 7px 14px;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:8px;font-size:0.85rem;color:#374151;display:flex;align-items:center;gap:8px;min-width:200px;justify-content:space-between}
+.site-url{color:#6b7280;font-size:0.82rem}
+.user{margin-left:auto;display:flex;align-items:center;gap:12px;font-size:0.85rem}
+.user .dot{width:8px;height:8px;background:#10b981;border-radius:50%}
+
+.tabs{display:flex;gap:0;padding:0 24px;border-bottom:1px solid #e5e7eb}
+.tab{padding:14px 18px;color:#6b7280;font-size:0.92rem;cursor:pointer;position:relative}
+.tab.active{color:#7c3aed;font-weight:600}
+.tab.active::after{content:'';position:absolute;bottom:-1px;left:18px;right:18px;height:2px;background:#7c3aed}
+
+/* warning banner on the site page */
+.warn-banner{background:linear-gradient(135deg,#fef3c7,#fde68a);border-left:4px solid #f59e0b;border-radius:0;padding:14px 24px;display:flex;align-items:center;gap:14px}
+.warn-banner .ic{font-size:1.4rem}
+.warn-banner-content{flex:1}
+.warn-banner-content strong{color:#78350f;font-size:0.95rem}
+.warn-banner-content p{font-size:0.85rem;color:#78350f;margin-top:2px}
+.warn-banner code{background:rgba(0,0,0,.08);padding:1px 5px;border-radius:3px;font-family:'Fira Code',monospace;font-size:0.82rem}
+.btn-banner{padding:9px 20px;background:#92400e;color:#fff;border-radius:8px;font-weight:700;font-size:0.85rem;cursor:pointer;border:none;display:flex;align-items:center;gap:6px;animation:pulse 2.5s infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(146,64,14,.4)}50%{box-shadow:0 0 0 8px rgba(146,64,14,0)}}
+
+/* filters bar */
+.filters{padding:14px 24px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #f3f4f6}
+.f-chip{padding:5px 14px;border-radius:18px;font-size:0.85rem;cursor:pointer}
+.f-chip.purple{background:linear-gradient(135deg,#ede9fe,#ddd6fe);color:#7c3aed;font-weight:600}
+.f-chip.gray{background:#f3f4f6;color:#6b7280}
+.f-input{background:#f9fafb;border:1px solid #e5e7eb;color:#374151;padding:6px 12px;border-radius:18px;font-size:0.85rem;width:160px;outline:none}
+.f-spacer{flex:1}
+.btn-filter{padding:6px 20px;background:linear-gradient(135deg,#a78bfa,#7c3aed);color:#fff;border-radius:18px;font-size:0.85rem;font-weight:600;cursor:pointer;border:none}
+
+/* table preview behind */
+.table-bg{padding:20px 24px;filter:blur(1px);opacity:.4}
+table{width:100%;border-collapse:collapse;font-size:0.86rem}
+th{text-align:left;padding:10px 14px;color:#9ca3af;border-bottom:1px solid #e5e7eb;font-weight:500}
+td{padding:14px 14px;border-bottom:1px solid #f3f4f6;color:#374151}
+.thumb{width:40px;height:40px;background:linear-gradient(135deg,#f3f4f6,#e5e7eb);border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:1.2rem}
+.sku{font-family:'Fira Code',monospace;color:#6b7280;font-size:0.78rem}
+.price{color:#7c3aed;font-weight:600}
+
+/* MODAL: ad-hoc collection setup */
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:50}
+.modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:560px;background:#fff;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.25);z-index:60;overflow:hidden}
+
+.m-header{padding:18px 22px;border-bottom:1px solid #f3f4f6;background:linear-gradient(135deg,#fef3c7,#fde68a)}
+.m-header h3{font-size:1.05rem;font-weight:700;color:#78350f;display:flex;align-items:center;gap:10px}
+.m-header p{font-size:0.82rem;color:#78350f;margin-top:4px}
+
+.m-body{padding:22px}
+
+.field{margin-bottom:18px}
+.field-label{font-size:0.85rem;font-weight:600;color:#374151;margin-bottom:8px;display:flex;align-items:center;gap:7px}
+.field-help{font-size:0.78rem;color:#6b7280;margin-top:5px}
+
+.amount-options{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.amount-opt{padding:14px 10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:9px;text-align:center;cursor:pointer;transition:all .15s}
+.amount-opt:hover{border-color:#c4b5fd}
+.amount-opt.selected{background:linear-gradient(135deg,#faf5ff,#f3e8ff);border-color:#7c3aed;box-shadow:0 0 0 3px rgba(124,58,237,.1)}
+.amount-opt .num{font-size:1.3rem;font-weight:800;color:#111827}
+.amount-opt .lbl{font-size:0.72rem;color:#6b7280;margin-top:2px}
+.amount-opt.selected .num{color:#7c3aed}
+.amount-opt .est{font-size:0.66rem;color:#9ca3af;margin-top:3px}
+
+.cat-filter{background:#f9fafb;border:1px solid #e5e7eb;border-radius:9px;padding:14px 16px}
+.cat-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:0.85rem}
+.cat-row:last-child{margin-bottom:0}
+.cat-row input[type=checkbox]{accent-color:#7c3aed}
+.cat-row .ct{margin-left:auto;font-size:0.72rem;color:#9ca3af;background:#fff;padding:1px 7px;border-radius:8px}
+
+.preview-row{display:flex;background:linear-gradient(135deg,#fef3c7,#fde68a);border:1px solid #fbbf24;border-radius:9px;padding:12px 16px;margin-top:14px;align-items:center;gap:14px}
+.preview-row .ic{font-size:1.4rem}
+.preview-row p{font-size:0.82rem;color:#78350f;line-height:1.5}
+.preview-row p strong{font-weight:700}
+
+.m-footer{padding:14px 22px;background:#f9fafb;display:flex;align-items:center;gap:10px;border-top:1px solid #f3f4f6}
+.btn-cancel{padding:9px 16px;background:#fff;border:1px solid #d1d5db;color:#374151;border-radius:7px;font-size:0.85rem;cursor:pointer}
+.btn-go{padding:9px 22px;background:linear-gradient(135deg,#fbbf24,#f59e0b);color:#1f2937;font-weight:700;border-radius:7px;font-size:0.88rem;cursor:pointer;border:none;margin-left:auto;display:flex;align-items:center;gap:6px}
+
+/* simultaneously show: running task progress (bottom-right toast) */
+.task-toast{position:fixed;bottom:24px;right:24px;width:340px;background:#fff;border:1px solid #e5e7eb;border-radius:11px;box-shadow:0 12px 30px rgba(0,0,0,.12);z-index:70;overflow:hidden}
+.toast-head{padding:12px 16px;background:#1f2937;color:#fff;display:flex;align-items:center;gap:9px;font-size:0.88rem}
+.toast-head .live-dot{width:8px;height:8px;background:#10b981;border-radius:50%;animation:blink 1.5s infinite}
+@keyframes blink{50%{opacity:.3}}
+.toast-head .title{flex:1;font-weight:600}
+.toast-head .x{cursor:pointer;color:#9ca3af}
+.toast-body{padding:14px 16px}
+.toast-stats{display:flex;justify-content:space-between;font-size:0.82rem;margin-bottom:10px}
+.toast-stats div{color:#6b7280}
+.toast-stats strong{color:#111827;font-weight:700}
+.toast-progress{height:8px;background:#f3f4f6;border-radius:4px;overflow:hidden;margin-bottom:8px}
+.toast-progress-fill{height:100%;background:linear-gradient(90deg,#a78bfa,#7c3aed);border-radius:4px;transition:width .3s;width:34%}
+.toast-meta{font-size:0.74rem;color:#9ca3af;display:flex;justify-content:space-between}
+
+/* callout */
+.callout{position:fixed;bottom:24px;left:24px;max-width:280px;background:linear-gradient(135deg,#fbbf24,#f59e0b);color:#1f2937;padding:14px 18px;border-radius:12px;z-index:300;box-shadow:0 6px 24px rgba(251,191,36,.35)}
+.callout-num{display:inline-block;background:rgba(0,0,0,.15);padding:1px 8px;border-radius:10px;font-size:0.72rem;font-weight:700;margin-bottom:5px}
+.callout h3{font-size:0.95rem;font-weight:800;margin-bottom:5px}
+.callout p{font-size:0.8rem;line-height:1.5}
+.callout code{background:rgba(0,0,0,.2);padding:1px 5px;border-radius:3px;font-size:0.78rem;color:#fff}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div style="display:flex;align-items:center;gap:9px">
+    <div class="logo"></div>
+    <div class="brand">smart<span class="accent">·</span>crawler</div>
+  </div>
+  <div class="site-select">Vidaxl · DE（200）<span>▾</span></div>
+  <div class="site-url">https://www.vidaxl.de/</div>
+  <div class="user"><span class="dot"></span><span>Aosom 管理员</span></div>
+</div>
+
+<div class="tabs">
+  <div class="tab">总体分析</div>
+  <div class="tab active">产品分析</div>
+  <div class="tab">销售促销</div>
+  <div class="tab">数据源</div>
+  <div class="tab">采集任务</div>
+</div>
+
+<!-- warning banner inside the site page -->
+<div class="warn-banner">
+  <div class="ic">⚠️</div>
+  <div class="warn-banner-content">
+    <strong>这个站点数据可能不完整</strong>
+    <p>当前已采集 <code>200 SKU</code>，但 Vidaxl DE 实际有约 <code>250,000 SKU</code>（覆盖率 <strong>0.08%</strong>）。<br>需要更完整数据？立即按需扩量这个站点。</p>
+  </div>
+  <button class="btn-banner">⚡ 扩量采集这个站</button>
+</div>
+
+<div class="filters">
+  <div class="f-chip purple">所有产品 200</div>
+  <div class="f-chip gray">畅销 0</div>
+  <input class="f-input" placeholder="搜索标题 / SKU">
+  <button class="btn-filter">筛选</button>
+</div>
+
+<!-- table behind (blurred) -->
+<div class="table-bg">
+  <table>
+    <thead><tr><th>#</th><th>图片</th><th>SKU</th><th>标题</th><th>价格</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td><div class="thumb">🪑</div></td><td class="sku">VX-DE-001</td><td>Garten Sitzgruppe Holzhocker</td><td class="price">€89.99</td><td>在售</td></tr>
+      <tr><td>2</td><td><div class="thumb">🛋️</div></td><td class="sku">VX-DE-002</td><td>Sofa 3-Sitzer Grau Stoff</td><td class="price">€349.00</td><td>在售</td></tr>
+      <tr><td>3</td><td><div class="thumb">🪟</div></td><td class="sku">VX-DE-003</td><td>Pergola Holz mit Dach 3x4m</td><td class="price">€699.00</td><td>在售</td></tr>
+      <tr><td>4</td><td><div class="thumb">🌳</div></td><td class="sku">VX-DE-004</td><td>Gartenpavillon Aluminium 4x3m</td><td class="price">€599.00</td><td>在售</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- MODAL: ad-hoc collection -->
+<div class="modal-bg"></div>
+<div class="modal">
+  <div class="m-header">
+    <h3>⚡ 按需扩量采集 · Vidaxl DE</h3>
+    <p>仅这个站点单次扩量，不影响其他站和全局配置</p>
+  </div>
+
+  <div class="m-body">
+    <div class="field">
+      <div class="field-label">① 扩量数量</div>
+      <div class="amount-options">
+        <div class="amount-opt"><div class="num">+500</div><div class="lbl">追加</div><div class="est">~12 min</div></div>
+        <div class="amount-opt selected"><div class="num">+2,000</div><div class="lbl">追加</div><div class="est">~45 min</div></div>
+        <div class="amount-opt"><div class="num">+10K</div><div class="lbl">追加</div><div class="est">~2.5 h</div></div>
+        <div class="amount-opt"><div class="num">全量</div><div class="lbl">~250K</div><div class="est">~8 h</div></div>
+      </div>
+      <div class="field-help">💡 当前已有 200，扩量后总数 = 当前 + 新增。重复 SKU 会自动去重。</div>
+    </div>
+
+    <div class="field">
+      <div class="field-label">② 优先采集品类（可选）</div>
+      <div class="cat-filter">
+        <div class="cat-row"><input type="checkbox" checked><span>家具 / 户外</span><span class="ct">优先</span></div>
+        <div class="cat-row"><input type="checkbox" checked><span>家具 / 储物</span><span class="ct">优先</span></div>
+        <div class="cat-row"><input type="checkbox"><span>家具 / 客厅</span><span class="ct">普通</span></div>
+        <div class="cat-row"><input type="checkbox"><span>家居装饰</span><span class="ct">普通</span></div>
+        <div class="cat-row"><input type="checkbox"><span>厨房 / 餐具</span><span class="ct">普通</span></div>
+        <div class="cat-row"><input type="checkbox"><span>其余 87 个品类</span><span class="ct">如果有时间</span></div>
+      </div>
+      <div class="field-help">勾选的品类会先抓完，剩余 SKU 配额按其他品类轮询。</div>
+    </div>
+
+    <div class="preview-row">
+      <div class="ic">📊</div>
+      <p><strong>预计耗时 ~45 min</strong> · 抓 ~2,000 SKU · 优先「户外」+ 「储物」品类<br>
+         <strong>调度</strong>：立刻开始 · <strong>风险</strong>：低（单次扩量，不会触发风控）</p>
+    </div>
+  </div>
+
+  <div class="m-footer">
+    <button class="btn-cancel">取消</button>
+    <button class="btn-go">⚡ 立即开始扩量采集</button>
+  </div>
+</div>
+
+<!-- running task toast (showing a previous ad-hoc job in progress) -->
+<div class="task-toast">
+  <div class="toast-head">
+    <div class="live-dot"></div>
+    <div class="title">采集任务 · Vidaxl FR</div>
+    <div class="x">×</div>
+  </div>
+  <div class="toast-body">
+    <div class="toast-stats">
+      <div>已采集 <strong>683 / 2,000</strong> SKU</div>
+      <div>剩余 ~22 min</div>
+    </div>
+    <div class="toast-progress"><div class="toast-progress-fill"></div></div>
+    <div class="toast-meta">
+      <span>34% · 起始 04:18</span>
+      <span style="color:#10b981">● 运行中</span>
+    </div>
+  </div>
+</div>
+
+<!-- callout -->
+<div class="callout">
+  <div class="callout-num">方案 3C</div>
+  <h3>按需采集 · Ad-hoc Button</h3>
+  <p><strong>每个站点页加按钮</strong>，看到数据少就一键扩量。不改全局配置、不影响其他站。后台异步跑，<strong>右下角进度条实时反馈</strong>。<br><br><strong>优点</strong>：精细 · 渐进式 · 风险最低<br><strong>缺点</strong>：每次需点击，没有自动持续覆盖</p>
+</div>
+
+</body>
+</html>

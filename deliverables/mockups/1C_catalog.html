@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>方案 1C · 品类目录浏览式 — smart-crawler</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+body{background:#0c0c12;color:#e0e0e0;min-height:100vh;font-size:14px}
+a{color:inherit;text-decoration:none}
+
+/* top */
+.topbar{background:#13131c;border-bottom:1px solid #1f1f2e;padding:11px 24px;display:flex;align-items:center;gap:16px;height:54px}
+.logo{width:30px;height:30px;background:linear-gradient(135deg,#ff6b35,#f7b731);border-radius:7px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;color:#000}
+.brand{font-weight:700}
+.tabs{display:flex;gap:0;margin-left:24px}
+.tab{padding:10px 16px;color:#888;font-size:0.88rem;cursor:pointer;border-bottom:2px solid transparent}
+.tab:hover{color:#ccc}
+.tab.active{color:#f7b731;border-color:#f7b731;font-weight:600}
+.tab.new{display:flex;align-items:center;gap:6px}
+.tab.new::before{content:'NEW';background:linear-gradient(90deg,#ff6b35,#f7b731);color:#000;padding:1px 6px;border-radius:6px;font-size:0.62rem;font-weight:700}
+.search{margin-left:auto;width:240px}
+.search input{width:100%;background:#0c0c14;border:1px solid #2a2a3e;color:#ccc;padding:7px 12px;border-radius:6px;font-size:0.85rem}
+.cart-icon{position:relative;width:38px;height:38px;background:#1a1a26;border-radius:9px;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.cart-badge{position:absolute;top:-4px;right:-4px;background:#f7b731;color:#000;font-size:0.66rem;font-weight:800;padding:1px 6px;border-radius:9px;border:2px solid #13131c}
+
+/* filter chips */
+.filters{padding:14px 24px;background:#0e0e18;border-bottom:1px solid #1a1a2a;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.f-group{font-size:0.78rem;color:#566;margin-right:2px}
+.f-chip{background:#1a1a26;border:1px solid #2a2a3e;padding:5px 12px;border-radius:16px;font-size:0.8rem;cursor:pointer;display:flex;align-items:center;gap:6px}
+.f-chip.active{background:#1a3a4a;border-color:#4ecdc4;color:#4ecdc4}
+.f-chip .x{font-size:0.7rem;opacity:.6}
+.f-spacer{flex:1}
+.f-sort{color:#888;font-size:0.82rem;cursor:pointer}
+
+/* main */
+.main{padding:22px 24px;max-width:1480px;margin:0 auto}
+.section-head{display:flex;align-items:baseline;gap:14px;margin-bottom:18px}
+.section-head h2{font-size:1.3rem;font-weight:700}
+.section-head .meta{color:#667;font-size:0.85rem}
+
+/* category grid */
+.cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:18px}
+
+.cat-card{background:#13131c;border:1px solid #1e1e2e;border-radius:14px;overflow:hidden;transition:all .2s;cursor:pointer;position:relative}
+.cat-card:hover{border-color:#4ecdc4;transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.4)}
+
+.cat-image-strip{display:grid;grid-template-columns:repeat(4,1fr);height:96px;gap:1px;background:#0c0c14}
+.cat-image{background:linear-gradient(135deg,#1a2a3a,#0a1a2a);display:flex;align-items:center;justify-content:center;font-size:2.2rem;color:#4ecdc488}
+.cat-image:nth-child(2){background:linear-gradient(135deg,#2a1a3a,#1a0a2a);color:#dda0dd88}
+.cat-image:nth-child(3){background:linear-gradient(135deg,#3a2a1a,#2a1a0a);color:#f7b73188}
+.cat-image:nth-child(4){background:linear-gradient(135deg,#1a3a2a,#0a2a1a);color:#4ecdc488}
+
+.cat-body{padding:16px 18px}
+.cat-name{font-size:1.1rem;font-weight:700;display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.cat-emoji{font-size:1.3rem}
+.cat-sub{font-size:0.78rem;color:#566;margin-bottom:14px}
+
+.cat-stats{display:flex;align-items:baseline;gap:14px;margin-bottom:14px}
+.cat-count{font-size:1.8rem;font-weight:800;color:#4ecdc4;line-height:1}
+.cat-count-lbl{font-size:0.74rem;color:#566}
+
+.cat-meta{display:flex;flex-direction:column;gap:5px;margin-bottom:14px}
+.cat-meta-row{display:flex;justify-content:space-between;font-size:0.78rem}
+.cat-meta-row span:first-child{color:#566}
+.cat-meta-row span:last-child{color:#ccc;font-weight:600}
+.cat-meta-row .promo-pct{color:#f7b731}
+.cat-promo-bar{height:5px;background:#1a1a26;border-radius:3px;overflow:hidden;margin-top:2px}
+.cat-promo-fill{height:100%;background:linear-gradient(90deg,#ff6b35,#f7b731);border-radius:3px}
+
+.cat-actions{display:flex;gap:8px}
+.btn-download{flex:1;padding:9px 14px;background:linear-gradient(90deg,#ff6b35,#f7b731);color:#000;font-weight:700;border-radius:8px;font-size:0.82rem;text-align:center;cursor:pointer;border:none}
+.btn-add-cart{width:38px;padding:0;background:#1a1a26;border:1px solid #2a2a3e;border-radius:8px;color:#aaa;font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.btn-add-cart:hover{background:#0e1a22;border-color:#4ecdc4;color:#4ecdc4}
+.cat-card.in-cart .btn-add-cart{background:#0e1a22;border-color:#4ecdc4;color:#4ecdc4}
+
+.cat-add-badge{position:absolute;top:10px;right:10px;background:rgba(0,0,0,.6);backdrop-filter:blur(8px);padding:4px 10px;border-radius:14px;font-size:0.72rem;color:#fff;display:flex;align-items:center;gap:5px;border:1px solid #4ecdc4;opacity:0;transition:opacity .15s}
+.cat-card.in-cart .cat-add-badge{opacity:1}
+
+.cat-tag{position:absolute;top:10px;left:10px;background:rgba(247,183,49,.95);color:#000;padding:3px 9px;border-radius:13px;font-size:0.7rem;font-weight:700;letter-spacing:0.5px}
+
+/* sidebar cart drawer */
+.cart-drawer{position:fixed;top:54px;right:0;width:320px;height:calc(100vh - 54px);background:#0e0e18;border-left:1px solid #1f3a5f;padding:18px 20px;overflow-y:auto;z-index:50;box-shadow:-12px 0 30px rgba(0,0,0,.4)}
+.cart-drawer h3{font-size:1rem;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.cart-drawer h3 .ct{margin-left:auto;background:#f7b731;color:#000;padding:1px 9px;border-radius:11px;font-size:0.74rem}
+
+.cart-list .ci{background:#13131c;border:1px solid #1e1e2e;border-radius:8px;padding:10px 12px;margin-bottom:7px}
+.cart-list .ci-head{display:flex;align-items:center;gap:7px;margin-bottom:3px}
+.cart-list .ci-name{font-size:0.85rem;font-weight:600;flex:1}
+.cart-list .ci-x{font-size:0.9rem;color:#566;cursor:pointer}
+.cart-list .ci-meta{font-size:0.72rem;color:#566}
+
+.cart-summary{margin:14px 0;padding:14px;background:linear-gradient(135deg,#0f1a2e,#0a1520);border:1px solid #1f3a5f;border-radius:9px}
+.cart-sum-row{display:flex;justify-content:space-between;padding:3px 0;font-size:0.82rem;color:#aaa}
+.cart-sum-row strong{color:#fff;font-weight:600}
+.cart-sum-row.total{font-size:0.95rem;color:#f7b731;margin-top:8px;padding-top:9px;border-top:1px solid #1f3a5f}
+.cart-sum-row.total strong{color:#f7b731;font-size:1.05rem}
+
+.btn-cart-download{width:100%;padding:11px 16px;background:linear-gradient(90deg,#ff6b35,#f7b731);color:#000;font-weight:700;border-radius:9px;font-size:0.92rem;border:none;cursor:pointer}
+
+/* callout */
+.callout{position:fixed;bottom:24px;left:24px;max-width:280px;background:linear-gradient(135deg,#f7b731,#ff6b35);color:#000;padding:14px 18px;border-radius:12px;z-index:300;box-shadow:0 6px 24px rgba(247,183,49,.35)}
+.callout-num{display:inline-block;background:rgba(0,0,0,.2);padding:1px 8px;border-radius:10px;font-size:0.72rem;font-weight:700;margin-bottom:5px}
+.callout h3{font-size:0.95rem;font-weight:800;margin-bottom:5px}
+.callout p{font-size:0.8rem;line-height:1.5}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">SC</div>
+  <div class="brand">smart-crawler</div>
+  <div class="tabs">
+    <div class="tab">总览</div>
+    <div class="tab">产品分析</div>
+    <div class="tab">销售促销</div>
+    <div class="tab new active">品类下载</div>
+    <div class="tab">Reddit</div>
+  </div>
+  <div class="search"><input placeholder="🔍 搜索品类..."></div>
+  <div class="cart-icon">🛒<span class="cart-badge">3</span></div>
+</div>
+
+<div class="filters">
+  <span class="f-group">品牌</span>
+  <div class="f-chip active">Costway <span class="x">×</span></div>
+  <div class="f-chip">SONGMICS</div>
+  <div class="f-chip">Homary</div>
+  <div class="f-chip">Vidaxl</div>
+  <div class="f-chip" style="color:#566">+5 more</div>
+  <span class="f-group" style="margin-left:18px">国家</span>
+  <div class="f-chip active">US <span class="x">×</span></div>
+  <div class="f-chip active">CA <span class="x">×</span></div>
+  <div class="f-chip">DE</div>
+  <div class="f-chip">UK</div>
+  <div class="f-spacer"></div>
+  <div class="f-sort">↕ 按商品数 ▾</div>
+</div>
+
+<div class="main">
+  <div class="section-head">
+    <h2>📁 品类浏览</h2>
+    <span class="meta">共 24 个品类 · 2,663 SKU · 默认筛选: Costway · US/CA</span>
+  </div>
+
+  <div class="cat-grid">
+
+    <div class="cat-card in-cart">
+      <div class="cat-tag">🔥 热门</div>
+      <div class="cat-add-badge">✓ 已加入</div>
+      <div class="cat-image-strip">
+        <div class="cat-image">🛋️</div><div class="cat-image">🪑</div><div class="cat-image">🛏️</div><div class="cat-image">📦</div>
+      </div>
+      <div class="cat-body">
+        <div class="cat-name"><span class="cat-emoji">🏠</span>家居 / 储物收纳</div>
+        <div class="cat-sub">5 个子类 · 滑动衣柜/抽屉柜/储物架</div>
+        <div class="cat-stats">
+          <div><div class="cat-count">98</div><div class="cat-count-lbl">SKU</div></div>
+        </div>
+        <div class="cat-meta">
+          <div class="cat-meta-row"><span>价格区间</span><span>$29 - $389</span></div>
+          <div class="cat-meta-row"><span>促销占比</span><span class="promo-pct">73%</span></div>
+          <div class="cat-promo-bar"><div class="cat-promo-fill" style="width:73%"></div></div>
+        </div>
+        <div class="cat-actions">
+          <button class="btn-download">⬇ 下载这个品类</button>
+          <button class="btn-add-cart">✓</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="cat-card in-cart">
+      <div class="cat-tag">🔥 热门</div>
+      <div class="cat-add-badge">✓ 已加入</div>
+      <div class="cat-image-strip">
+        <div class="cat-image">⛱️</div><div class="cat-image">🪴</div><div class="cat-image">🌳</div><div class="cat-image">🏕️</div>
+      </div>
+      <div class="cat-body">
+        <div class="cat-name"><span class="cat-emoji">🏡</span>家居 / 户外家具</div>
+        <div class="cat-sub">遮阳伞 / 餐桌椅 / 秋千</div>
+        <div class="cat-stats">
+          <div><div class="cat-count">147</div><div class="cat-count-lbl">SKU</div></div>
+        </div>
+        <div class="cat-meta">
+          <div class="cat-meta-row"><span>价格区间</span><span>$89 - $899</span></div>
+          <div class="cat-meta-row"><span>促销占比</span><span class="promo-pct">68%</span></div>
+          <div class="cat-promo-bar"><div class="cat-promo-fill" style="width:68%"></div></div>
+        </div>
+        <div class="cat-actions">
+          <button class="btn-download">⬇ 下载这个品类</button>
+          <button class="btn-add-cart">✓</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="cat-card in-cart">
+      <div class="cat-add-badge">✓ 已加入</div>
+      <div class="cat-image-strip">
+        <div class="cat-image">💻</div><div class="cat-image">🪑</div><div class="cat-image">📋</div><div class="cat-image">🖱️</div>
+      </div>
+      <div class="cat-body">
+        <div class="cat-name"><span class="cat-emoji">💼</span>办公 / 办公桌椅</div>
+        <div class="cat-sub">站立桌 / 人体工学椅 / 会议桌</div>
+        <div class="cat-stats">
+          <div><div class="cat-count">156</div><div class="cat-count-lbl">SKU</div></div>
+        </div>
+        <div class="cat-meta">
+          <div class="cat-meta-row"><span>价格区间</span><span>$59 - $599</span></div>
+          <div class="cat-meta-row"><span>促销占比</span><span class="promo-pct">81%</span></div>
+          <div class="cat-promo-bar"><div class="cat-promo-fill" style="width:81%"></div></div>
+        </div>
+        <div class="cat-actions">
+          <button class="btn-download">⬇ 下载这个品类</button>
+          <button class="btn-add-cart">✓</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="cat-card">
+      <div class="cat-image-strip">
+        <div class="cat-image">🛋️</div><div class="cat-image">📺</div><div class="cat-image">☕</div><div class="cat-image">🖼️</div>
+      </div>
+      <div class="cat-body">
+        <div class="cat-name"><span class="cat-emoji">🏠</span>家居 / 客厅家具</div>
+        <div class="cat-sub">沙发 / 茶几 / 电视柜</div>
+        <div class="cat-stats">
+          <div><div class="cat-count">82</div><div class="cat-count-lbl">SKU</div></div>
+        </div>
+        <div class="cat-meta">
+          <div class="cat-meta-row"><span>价格区间</span><span>$129 - $1,299</span></div>
+          <div class="cat-meta-row"><span>促销占比</span><span class="promo-pct">59%</span></div>
+          <div class="cat-promo-bar"><div class="cat-promo-fill" style="width:59%"></div></div>
+        </div>
+        <div class="cat-actions">
+          <button class="btn-download">⬇ 下载这个品类</button>
+          <button class="btn-add-cart">+</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="cat-card">
+      <div class="cat-image-strip">
+        <div class="cat-image">🛏️</div><div class="cat-image">🪞</div><div class="cat-image">🗄️</div><div class="cat-image">🛌</div>
+      </div>
+      <div class="cat-body">
+        <div class="cat-name"><span class="cat-emoji">🏠</span>家居 / 卧室家具</div>
+        <div class="cat-sub">床 / 衣柜 / 床头柜</div>
+        <div class="cat-stats">
+          <div><div class="cat-count">94</div><div class="cat-count-lbl">SKU</div></div>
+        </div>
+        <div class="cat-meta">
+          <div class="cat-meta-row"><span>价格区间</span><span>$199 - $899</span></div>
+          <div class="cat-meta-row"><span>促销占比</span><span class="promo-pct">52%</span></div>
+          <div class="cat-promo-bar"><div class="cat-promo-fill" style="width:52%"></div></div>
+        </div>
+        <div class="cat-actions">
+          <button class="btn-download">⬇ 下载这个品类</button>
+          <button class="btn-add-cart">+</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="cat-card">
+      <div class="cat-tag" style="background:rgba(78,205,196,.95);color:#000">📈 增长</div>
+      <div class="cat-image-strip">
+        <div class="cat-image">🏃</div><div class="cat-image">🚴</div><div class="cat-image">🏋️</div><div class="cat-image">🤸</div>
+      </div>
+      <div class="cat-body">
+        <div class="cat-name"><span class="cat-emoji">🏃</span>运动 / 健身器械</div>
+        <div class="cat-sub">跑步机 / 划船机 / 健身车</div>
+        <div class="cat-stats">
+          <div><div class="cat-count">87</div><div class="cat-count-lbl">SKU</div></div>
+        </div>
+        <div class="cat-meta">
+          <div class="cat-meta-row"><span>价格区间</span><span>$179 - $999</span></div>
+          <div class="cat-meta-row"><span>促销占比</span><span class="promo-pct">64%</span></div>
+          <div class="cat-promo-bar"><div class="cat-promo-fill" style="width:64%"></div></div>
+        </div>
+        <div class="cat-actions">
+          <button class="btn-download">⬇ 下载这个品类</button>
+          <button class="btn-add-cart">+</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- cart drawer (visible) -->
+<div class="cart-drawer">
+  <h3>🛒 下载篮 <span class="ct">3</span></h3>
+
+  <div class="cart-list">
+    <div class="ci">
+      <div class="ci-head"><span class="ci-name">储物收纳</span><span class="ci-x">×</span></div>
+      <div class="ci-meta">家居 · 98 SKU · 促销 73%</div>
+    </div>
+    <div class="ci">
+      <div class="ci-head"><span class="ci-name">户外家具</span><span class="ci-x">×</span></div>
+      <div class="ci-meta">家居 · 147 SKU · 促销 68%</div>
+    </div>
+    <div class="ci">
+      <div class="ci-head"><span class="ci-name">办公桌椅</span><span class="ci-x">×</span></div>
+      <div class="ci-meta">办公 · 156 SKU · 促销 81%</div>
+    </div>
+  </div>
+
+  <div class="cart-summary">
+    <div class="cart-sum-row"><span>品类</span><strong>3 个</strong></div>
+    <div class="cart-sum-row"><span>SKU 合计</span><strong>401</strong></div>
+    <div class="cart-sum-row"><span>含促销</span><strong>302</strong></div>
+    <div class="cart-sum-row total"><span>预计大小</span><strong>~2.1 MB</strong></div>
+  </div>
+
+  <button class="btn-cart-download">⬇ 一键下载 · 401 SKU</button>
+
+  <div style="margin-top:14px;font-size:0.74rem;color:#566;line-height:1.5">
+    💡 篮子里的品类会打包为 1 个 ZIP，每个品类一个 Excel 文件
+  </div>
+</div>
+
+<!-- callout -->
+<div class="callout">
+  <div class="callout-num">方案 1C</div>
+  <h3>品类目录浏览式 · Catalog Browser</h3>
+  <p>像逛超市一样浏览品类卡片，<strong>视觉化呈现每个品类的关键指标</strong>（SKU 数 / 价格区间 / 促销占比）。<br><strong>适合</strong>：选品/竞品分析师做探索性研究，发现你不知道的品类。</p>
+</div>
+
+</body>
+</html>
