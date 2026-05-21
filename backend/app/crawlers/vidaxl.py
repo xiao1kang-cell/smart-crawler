@@ -25,7 +25,7 @@ from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
 
 API_BASE = "https://b2b.vidaxl.com/api_customer/products"
-STOREFRONT_LIMIT = int(os.environ.get("VIDAXL_LIMIT", "200"))
+STOREFRONT_LIMIT = int(os.environ.get("VIDAXL_LIMIT", "5000"))
 API_PAGE = 500
 _LD_RE = re.compile(
     r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', re.S)
@@ -129,13 +129,17 @@ class VidaxlCrawler(BaseCrawler):
 
         prod_sitemaps = [u for u in subs if "custom-product" in u]
         if not prod_sitemaps:
-            # vidaxl_ca / 部分新站点：sitemap_index 返回 200 但 body 是空
-            # <sitemapindex/>，主页又是 Demandware SPA 骨架屏 —— 纯爬路径走不通。
-            # 不能 return 空 result（runner 会标 success/0 products，掩盖失败）。
+            # vidaxl_ca：sitemap_index 返回 200 但 body 是空 <sitemapindex/>。
+            # 实测（2026-05-19）确认根因：VidaXL 已暂停加拿大站运营，
+            # 页面显示 "We're pausing orders until further notice."，
+            # 类别页 0 商品，Search-FAQ 替代 Search-Show —— 不是技术问题。
+            # 等 VidaXL 重开加拿大站后，sitemap 会自动填充，此处代码无需改动。
             raise RuntimeError(
                 f"sitemap_index 返回 200 但无 custom-product 子 sitemap "
-                f"（{len(subs)} 个 <loc>，0 个匹配）。站点疑似 Demandware SPA "
-                f"渲染，建议走路径1 官方 API（设 VIDAXL_API_EMAIL/TOKEN）")
+                f"（{len(subs)} 个 <loc>，0 个匹配）。"
+                f"已知原因（vidaxl_ca）：VidaXL 已暂停该市场运营，"
+                f"类别页显示 'pausing orders until further notice'，"
+                f"无商品可采集，需等业务重开。")
         urls: list[str] = []
         for sm in prod_sitemaps:
             if len(urls) >= self.limit:

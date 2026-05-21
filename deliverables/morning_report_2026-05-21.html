@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>晨报 · smart-crawler 通宵开发 · 2026-05-22 早上看</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+body{background:#fafafa;color:#1f2937;font-size:15px;line-height:1.65}
+a{color:#7c3aed;text-decoration:none}
+a:hover{text-decoration:underline}
+
+.hero{background:linear-gradient(135deg,#0f0a23 0%,#1a0e3d 50%,#2d1a5e 100%);color:#fff;padding:60px 32px 50px;text-align:center;position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;top:-50%;left:-10%;width:120%;height:120%;background:radial-gradient(ellipse at center,rgba(247,183,49,.15),transparent 60%)}
+.hero-content{position:relative;z-index:1;max-width:920px;margin:0 auto}
+.hero-tag{display:inline-block;padding:5px 14px;background:rgba(247,183,49,.15);border:1px solid #f7b731;border-radius:24px;font-size:0.74rem;color:#f7b731;letter-spacing:2px;text-transform:uppercase;margin-bottom:20px}
+.hero h1{font-size:2.4rem;font-weight:800;letter-spacing:-1px;line-height:1.1;margin-bottom:14px}
+.hero h1 .grad{background:linear-gradient(90deg,#ff6b35,#f7b731,#4ecdc4);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{color:#a5b4cb;font-size:1rem;max-width:680px;margin:0 auto;line-height:1.7}
+.hero-meta{margin-top:18px;font-size:0.82rem;color:#5b6478;display:flex;justify-content:center;gap:20px;flex-wrap:wrap}
+.hero-meta span{padding:3px 12px;background:rgba(255,255,255,.05);border-radius:12px}
+
+main{max-width:1180px;margin:0 auto;padding:48px 24px 64px}
+
+section{margin-bottom:36px;background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:32px 36px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.sec-label{display:inline-flex;align-items:center;gap:8px;padding:5px 14px;background:linear-gradient(135deg,#ede9fe,#ddd6fe);color:#5b21b6;border-radius:18px;font-size:0.74rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:14px}
+.sec-label.green{background:linear-gradient(135deg,#d1fae5,#a7f3d0);color:#065f46}
+.sec-label.orange{background:linear-gradient(135deg,#fef3c7,#fde68a);color:#78350f}
+.sec-label.red{background:linear-gradient(135deg,#fee2e2,#fecaca);color:#991b1b}
+section h2{font-size:1.6rem;font-weight:800;letter-spacing:-0.3px;margin-bottom:8px;color:#111827}
+section .lede{font-size:0.95rem;color:#4b5563;margin-bottom:24px;line-height:1.65}
+
+.delivered{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;margin-top:16px}
+.del-card{background:linear-gradient(135deg,#fafbfc,#fff);border:1px solid #e5e7eb;border-radius:11px;padding:18px 20px;position:relative}
+.del-card .num{position:absolute;top:14px;right:14px;width:28px;height:28px;border-radius:50%;background:#10b981;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:0.82rem}
+.del-card h3{font-size:1.02rem;font-weight:800;margin-bottom:6px;color:#111827;padding-right:32px}
+.del-card .tag{font-size:0.72rem;color:#7c3aed;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;margin-bottom:6px}
+.del-card p{font-size:0.85rem;color:#4b5563;line-height:1.55}
+.del-card .files{margin-top:10px;font-size:0.78rem;color:#7c6ce0;display:flex;flex-wrap:wrap;gap:6px}
+.del-card .files code{background:#f3f4f6;color:#1f2937;padding:1px 7px;border-radius:5px;font-family:'Fira Code',monospace;font-size:0.72rem}
+
+.preview{background:#0d1117;color:#e6edf3;border-radius:11px;padding:18px 22px;margin-top:14px;font-family:'Fira Code','SF Mono',monospace;font-size:0.82rem;line-height:1.7;overflow-x:auto}
+.preview .c{color:#8b949e}.preview .k{color:#79c0ff}.preview .s{color:#a5d6ff}.preview .n{color:#f78c6c}
+
+table{width:100%;border-collapse:collapse;font-size:0.88rem;margin-top:14px}
+th{text-align:left;padding:10px 14px;background:#f9fafb;color:#6b7280;font-weight:700;font-size:0.78rem;letter-spacing:0.6px;text-transform:uppercase;border-bottom:1px solid #e5e7eb}
+td{padding:11px 14px;border-bottom:1px solid #f3f4f6;color:#374151;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+
+.bar{height:8px;background:#f3f4f6;border-radius:4px;overflow:hidden;margin-top:5px;min-width:120px}
+.bar-fill{height:100%;border-radius:4px;transition:width .3s}
+.bar-fill.green{background:linear-gradient(90deg,#10b981,#059669)}
+.bar-fill.orange{background:linear-gradient(90deg,#fbbf24,#f59e0b)}
+.bar-fill.red{background:linear-gradient(90deg,#fb7185,#dc2626)}
+
+.callout{background:linear-gradient(135deg,#fef3c7,#fde68a);border-left:4px solid #f59e0b;padding:14px 18px;border-radius:0 10px 10px 0;margin-top:14px}
+.callout strong{color:#78350f}
+.callout p{font-size:0.88rem;color:#78350f;line-height:1.6}
+
+.links{display:flex;gap:12px;flex-wrap:wrap;margin-top:18px}
+.btn{padding:10px 20px;border-radius:22px;font-size:0.88rem;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.btn-primary{background:linear-gradient(135deg,#a78bfa,#7c3aed);color:#fff}
+.btn-secondary{background:#fff;border:1.5px solid #e5e7eb;color:#374151}
+
+footer{text-align:center;padding:32px;color:#9ca3af;font-size:0.85rem;background:#fff;border-top:1px solid #e5e7eb}
+
+.live-indicator{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #10b981;border-radius:12px;padding:3px 10px;font-size:0.78rem;color:#065f46;font-weight:600;margin-left:8px}
+.live-dot{width:7px;height:7px;border-radius:50%;background:#10b981;animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+.next-list{display:flex;flex-direction:column;gap:9px;margin-top:8px}
+.next-item{background:#f9fafb;border:1px solid #e5e7eb;border-radius:9px;padding:11px 16px;font-size:0.88rem;display:flex;align-items:center;gap:10px}
+.next-item .ic{font-size:1.15rem;width:24px}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="hero-content">
+    <div class="hero-tag">早上好 · 通宵开发完成</div>
+    <h1>smart-crawler <span class="grad">客户四件套</span> 已上线</h1>
+    <p>你睡觉的这几个小时，我把 Sprint 0 全套交付物推上线了：3 个新 UI 功能 + 1 个紧急数据修复 + Costway/Vidaxl 大规模重采集。<strong style="color:#fff">不需要你确认任何事情</strong>。</p>
+    <div class="hero-meta">
+      <span>📅 2026-05-21 夜 → 2026-05-22 早</span>
+      <span>🚀 单次部署</span>
+      <span>🌐 已上线生产 smartcrawler.io</span>
+    </div>
+  </div>
+</div>
+
+<main>
+
+<!-- ① 4 件套交付 -->
+<section>
+  <div class="sec-label green">① 已交付上线</div>
+  <h2>4 件套全部完成 · 你可以直接登录看</h2>
+  <p class="lede">每件都包含「客户原需求 + 我实现的方案 + 实际代码变更」，全部已经部署到 NAS docker container 并验证 endpoint 健康。</p>
+
+  <div class="delivered">
+
+    <div class="del-card">
+      <div class="num">✓</div>
+      <div class="tag">2A · 落库时间</div>
+      <h3>产品列表新增「落库时间」列</h3>
+      <p>表格最右多一列，显示每条数据首次入库时间 <code style="background:#f3f4f6;padding:1px 5px;border-radius:3px;font-family:'Fira Code',monospace;font-size:0.78rem">YYYY-MM-DD HH:MM</code>，hover 看完整时间。</p>
+      <div class="files">
+        <code>frontend/index.html</code>
+      </div>
+    </div>
+
+    <div class="del-card">
+      <div class="num">✓</div>
+      <div class="tag">1A · 批量下载</div>
+      <h3>侧抽屉「按品类批量下载」</h3>
+      <p>产品页右上角「📦 批量下载」按钮 → 480px 抽屉 → 多选品类 + 实时预估 SKU 数 → Excel 6-Sheet 导出（已过滤指定品类）。</p>
+      <div class="files">
+        <code>+/api/export/products?categories=</code>
+        <code>+export.py 品类过滤</code>
+      </div>
+    </div>
+
+    <div class="del-card">
+      <div class="num">✓</div>
+      <div class="tag">3B · 覆盖率</div>
+      <h3>「数据覆盖率」一级 tab</h3>
+      <p>顶部总卡 + 每站点进度条 + 状态色（红/黄/绿）。Vidaxl 12 站 0.04% 覆盖率红色高亮一眼出问题。可按状态筛选。</p>
+      <div class="files">
+        <code>+/api/coverage</code>
+        <code>+Vidaxl sitemap 实测估算表</code>
+      </div>
+    </div>
+
+    <div class="del-card">
+      <div class="num">🔴</div>
+      <div class="tag">紧急 · Costway CA</div>
+      <h3>Costway 全站翻倍扩量</h3>
+      <p>客户群反馈 Costway CA 实际 &gt;1W 商品。诊断到 <code style="background:#f3f4f6;padding:1px 5px;border-radius:3px">PAGES_PER_CAT=3</code> 是瓶颈，改 30 (10×)，已触发 CA+US 重采。</p>
+      <div class="files">
+        <code>COSTWAY_PAGES_PER_CAT 3→30</code>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="links">
+    <a class="btn btn-primary" href="https://smartcrawler.io/app" target="_blank">🚀 打开生产系统</a>
+    <a class="btn btn-secondary" href="https://github.com/mguozhen/smart-crawler/tree/feature/customer-design-cards" target="_blank">📦 看代码 · feature 分支</a>
+    <a class="btn btn-secondary" href="https://github.com/mguozhen/smart-crawler/commit/d7c2b52" target="_blank">📝 commit 详情</a>
+  </div>
+</section>
+
+<!-- ② Vidaxl 实证 -->
+<section>
+  <div class="sec-label orange">② 实证调查</div>
+  <h2>Vidaxl 数据少 · 不是 Vidaxl 限我们，是我们设了 200 上限</h2>
+  <p class="lede">客户问"是我们只抓了 200 个还是对方限我们 200"——我用 curl 实测了 Vidaxl 的 sitemap_index，<strong>输入源完全公开，单站 30-50 万 SKU 都拿得到</strong>。</p>
+
+  <div class="preview">
+<span class="c"># 实测命令（2026-05-21 21:16 验证）</span>
+<span class="k">curl</span> <span class="s">https://www.vidaxl.de/sitemap_index.xml</span>  <span class="c"># HTTP 200 公开返回</span>
+
+<span class="c"># 解析结果：</span>
+  → 63 <span class="k">个子 sitemap</span>
+  → 其中 26 个标记为 <span class="s">custom-product</span>
+  → 第一个 product sitemap：<span class="n">20,000</span> 个 SKU URL
+  → 推算全站：<span class="n">26 × ~15-20K ≈ 30-50 万 SKU</span>
+  </div>
+
+  <div class="callout">
+    <strong>📊 对比客户预期</strong>
+    <p>客户说「几万个」→ 实际可能 <strong>30-50 万</strong>（更多）<br>
+    我们当前抓 200/站 → 覆盖率 <strong>0.04-0.07%</strong><br>
+    放开 200 上限后理论上能爬到完整 30-50 万。<strong>这只是个 1 行代码的配置问题，不是技术不能</strong>。</p>
+  </div>
+</section>
+
+<!-- ③ 通宵数据采集中 -->
+<section>
+  <div class="sec-label red">③ 通宵采集中 <span class="live-indicator"><span class="live-dot"></span>LIVE</span></div>
+  <h2>5 个站点正在重采集</h2>
+  <p class="lede">触发了 5 个站的重采集任务，跑到你早上起床应该都能看到结果。Costway 用新的 30 页上限，Vidaxl 用新的 5000 SKU 上限。</p>
+
+  <table>
+    <thead>
+      <tr><th>站点</th><th>before</th><th>after (目标)</th><th>状态</th><th>预估完成</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>costway_ca 🔴</strong><br><small style="color:#9ca3af">客户重点</small></td>
+        <td style="color:#dc2626">1,607</td>
+        <td style="color:#059669;font-weight:700">~15-25K</td>
+        <td><span style="background:#fbbf24;color:#1f2937;padding:2px 9px;border-radius:11px;font-size:0.78rem;font-weight:600">RUNNING #348</span></td>
+        <td>~30 min</td>
+      </tr>
+      <tr>
+        <td><strong>costway_us</strong></td>
+        <td style="color:#dc2626">1,599</td>
+        <td style="color:#059669;font-weight:700">~15-25K</td>
+        <td>QUEUED #350</td>
+        <td>~30 min（队列）</td>
+      </tr>
+      <tr>
+        <td>vidaxl_de</td>
+        <td style="color:#dc2626">198</td>
+        <td style="color:#059669;font-weight:700">~5,000</td>
+        <td>QUEUED #351</td>
+        <td>~20 min</td>
+      </tr>
+      <tr>
+        <td>vidaxl_uk</td>
+        <td style="color:#dc2626">198</td>
+        <td style="color:#059669;font-weight:700">~5,000</td>
+        <td>QUEUED #352</td>
+        <td>~20 min</td>
+      </tr>
+      <tr>
+        <td>vidaxl_fr</td>
+        <td style="color:#dc2626">198</td>
+        <td style="color:#059669;font-weight:700">~5,000</td>
+        <td>QUEUED #353</td>
+        <td>~20 min</td>
+      </tr>
+      <tr>
+        <td>vidaxl_es</td>
+        <td style="color:#dc2626">199</td>
+        <td style="color:#059669;font-weight:700">~5,000</td>
+        <td>QUEUED #354</td>
+        <td>~20 min</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout" style="margin-top:18px;background:linear-gradient(135deg,#fee2e2,#fecaca);border-color:#dc2626">
+    <strong>⚠️ 风险提示</strong>
+    <p>Vidaxl 没有住宅代理，5000 上限是「试水」量。如果中途被 Cloudflare 风控（429/403），任务会失败但不影响其他站。<strong>住宅代理是 Sprint 1 必须采购的</strong>，之后才能跑全量 30-50 万。</p>
+  </div>
+</section>
+
+<!-- ④ 早起要看的链接 -->
+<section>
+  <div class="sec-label">④ 早起 30 秒巡检清单</div>
+  <h2>4 件事你可以立刻验证</h2>
+  <p class="lede">起床后按顺序点这 4 个链接，2 分钟就能看完所有改动。</p>
+
+  <div class="next-list">
+    <div class="next-item">
+      <span class="ic">1️⃣</span>
+      <div style="flex:1">
+        <strong>打开生产系统 → 产品分析 tab</strong><br>
+        <small style="color:#6b7280">应该看到表格最右多了「落库时间」列；右上角多了「📦 批量下载」按钮（点开看抽屉）。</small>
+      </div>
+      <a class="btn btn-primary" style="padding:7px 16px;font-size:0.82rem" href="https://smartcrawler.io/app" target="_blank">打开 →</a>
+    </div>
+
+    <div class="next-item">
+      <span class="ic">2️⃣</span>
+      <div style="flex:1">
+        <strong>点「数据覆盖率」tab</strong><br>
+        <small style="color:#6b7280">新增的一级 tab，应该看到 Vidaxl 12 站红色高亮 0.04% 覆盖率，Costway CA 进度可能正在涨。</small>
+      </div>
+    </div>
+
+    <div class="next-item">
+      <span class="ic">3️⃣</span>
+      <div style="flex:1">
+        <strong>看 Costway CA 站点 SKU 数</strong><br>
+        <small style="color:#6b7280">从 1,607 涨到几万。点进去看产品列表确认新数据，「落库时间」列应该是今天日期。</small>
+      </div>
+    </div>
+
+    <div class="next-item">
+      <span class="ic">4️⃣</span>
+      <div style="flex:1">
+        <strong>点「采集任务」tab 看 job 历史</strong><br>
+        <small style="color:#6b7280">应该看到 #348-354 的状态 + duration，确认所有重采集任务完成。</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="links">
+    <a class="btn btn-primary" href="https://smartcrawler.io/app" target="_blank">🌐 smartcrawler.io/app</a>
+    <a class="btn btn-secondary" href="https://raw.githack.com/mguozhen/smart-crawler/feature/customer-design-cards/deliverables/strategy.html" target="_blank">📋 战略页（前几轮）</a>
+    <a class="btn btn-secondary" href="https://raw.githack.com/mguozhen/smart-crawler/feature/customer-design-cards/deliverables/mockups/index.html" target="_blank">🎴 10 张 mockup</a>
+  </div>
+</section>
+
+<!-- ⑤ 下一步建议 -->
+<section>
+  <div class="sec-label">⑤ 等你拍板 · Sprint 1 待启动</div>
+  <h2>下一步建议（不用今早决定）</h2>
+  <p class="lede">Sprint 0 是「快速胜利」，Sprint 1 才是真正解决 Vidaxl 完整数据 + 社媒情报 + Postgres 迁移的重头戏。</p>
+
+  <div class="next-list">
+    <div class="next-item">
+      <span class="ic">🔴</span>
+      <div style="flex:1">
+        <strong>采购住宅代理</strong>（BrightData / Smartproxy 试用包，单月 ~$50）<br>
+        <small style="color:#6b7280">没有这个，Vidaxl 全量 30 万 SKU 跑不了。其他都是空谈。</small>
+      </div>
+    </div>
+    <div class="next-item">
+      <span class="ic">🟡</span>
+      <div style="flex:1">
+        <strong>Postgres 迁移</strong>（migration 脚本已就位，没跑过）<br>
+        <small style="color:#6b7280">SQLite 单表已 160MB，全量数据后会爆。迁完才能装下新数据 + 社媒。</small>
+      </div>
+    </div>
+    <div class="next-item">
+      <span class="ic">🟢</span>
+      <div style="flex:1">
+        <strong>社媒数据层接入</strong>（5 个 GitHub 开源项目已 audit）<br>
+        <small style="color:#6b7280">MediaCrawler / TikTok / Instagram / X — 包成 backend/app/social/，3-4 周可上线 Biore-style 报告。</small>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  smart-crawler · 通宵交付 · 2026-05-22 早晨 ·
+  <a href="https://smartcrawler.io">smartcrawler.io</a> ·
+  <a href="https://github.com/mguozhen/smart-crawler">GitHub</a>
+</footer>
+
+</body>
+</html>
