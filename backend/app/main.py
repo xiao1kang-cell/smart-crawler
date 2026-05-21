@@ -113,8 +113,15 @@ def home():
 
 @app.get("/app")
 def dashboard():
-    """数据看板控制台。"""
-    return FileResponse(FRONTEND_DIR / "index.html")
+    """数据看板控制台。No-cache 确保改 UI 后立即生效。"""
+    return FileResponse(
+        FRONTEND_DIR / "index.html",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.get("/favicon.svg")
