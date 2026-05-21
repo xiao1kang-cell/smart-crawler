@@ -44,18 +44,18 @@ sites:
   - {site: yaheetech_uk, brand: Yaheetech, country: UK, url: "https://yaheestore.co.uk/", platform: shopify, proxy_tier: none}
 
   # ========== Vidaxl（荷贝, P1）— 自建平台，反爬强（直连 401，需住宅代理）==========
-  - {site: vidaxl_us, brand: Vidaxl, country: US, url: "https://www.vidaxl.com/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 5000}
-  - {site: vidaxl_uk, brand: Vidaxl, country: UK, url: "https://www.vidaxl.co.uk/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 5000}
-  - {site: vidaxl_ca, brand: Vidaxl, country: CA, url: "https://en.vidaxl.ca/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 5000}
-  - {site: vidaxl_ie, brand: Vidaxl, country: IE, url: "https://www.vidaxl.ie/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 5000}
-  - {site: vidaxl_de, brand: Vidaxl, country: DE, url: "https://www.vidaxl.de/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 5000}
-  - {site: vidaxl_it, brand: Vidaxl, country: IT, url: "https://www.vidaxl.it/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 5000}
-  - {site: vidaxl_es, brand: Vidaxl, country: ES, url: "https://www.vidaxl.es/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 5000}
-  - {site: vidaxl_fr, brand: Vidaxl, country: FR, url: "https://www.vidaxl.fr/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 5000}
-  - {site: vidaxl_ro, brand: Vidaxl, country: RO, url: "https://www.vidaxl.ro/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 5000}
-  - {site: vidaxl_pt, brand: Vidaxl, country: PT, url: "https://www.vidaxl.pt/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 5000}
-  - {site: vidaxl_nl, brand: Vidaxl, country: NL, url: "https://www.vidaxl.nl/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 5000}
-  - {site: vidaxl_pl, brand: Vidaxl, country: PL, url: "https://www.vidaxl.pl/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 5000}
+  - {site: vidaxl_us, brand: Vidaxl, country: US, url: "https://www.vidaxl.com/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0}
+  - {site: vidaxl_uk, brand: Vidaxl, country: UK, url: "https://www.vidaxl.co.uk/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 0}
+  - {site: vidaxl_ca, brand: Vidaxl, country: CA, url: "https://en.vidaxl.ca/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 0}
+  - {site: vidaxl_ie, brand: Vidaxl, country: IE, url: "https://www.vidaxl.ie/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 0}
+  - {site: vidaxl_de, brand: Vidaxl, country: DE, url: "https://www.vidaxl.de/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 0}
+  - {site: vidaxl_it, brand: Vidaxl, country: IT, url: "https://www.vidaxl.it/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 0}
+  - {site: vidaxl_es, brand: Vidaxl, country: ES, url: "https://www.vidaxl.es/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 0}
+  - {site: vidaxl_fr, brand: Vidaxl, country: FR, url: "https://www.vidaxl.fr/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 0}
+  - {site: vidaxl_ro, brand: Vidaxl, country: RO, url: "https://www.vidaxl.ro/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 0}
+  - {site: vidaxl_pt, brand: Vidaxl, country: PT, url: "https://www.vidaxl.pt/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 0}
+  - {site: vidaxl_nl, brand: Vidaxl, country: NL, url: "https://www.vidaxl.nl/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 0}
+  - {site: vidaxl_pl, brand: Vidaxl, country: PL, url: "https://www.vidaxl.pl/", platform: vidaxl, proxy_tier: none, product_match: "/p/", max_products: 0}
 
   # ========== Flexispot（乐歌, P1）— React，目录较小 ==========
   - {site: flexispot_us, brand: Flexispot, country: US, url: "https://www.flexispot.com/", platform: flexispot, proxy_tier: none, exclude_match: "spine-care-center", max_products: 150}

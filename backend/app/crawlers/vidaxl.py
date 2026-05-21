@@ -25,7 +25,7 @@ from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
 
 API_BASE = "https://b2b.vidaxl.com/api_customer/products"
-STOREFRONT_LIMIT = int(os.environ.get("VIDAXL_LIMIT", "5000"))
+STOREFRONT_LIMIT = int(os.environ.get("VIDAXL_LIMIT", "999999"))
 API_PAGE = 500
 _LD_RE = re.compile(
     r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', re.S)
