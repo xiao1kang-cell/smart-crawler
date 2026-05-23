@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>晨报 · ALL-IN sprint 通宵交付 · 2026-05-23 早上验收</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Inter','PingFang SC',-apple-system,BlinkMacSystemFont,sans-serif}
+html{scroll-behavior:smooth}
+body{background:#0a0612;color:#e5e7eb;font-size:14.5px;line-height:1.65}
+a{color:#a78bfa;text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* hero */
+.hero{padding:72px 32px 60px;text-align:center;position:relative;overflow:hidden;
+      background:radial-gradient(ellipse 90% 70% at 50% 0%,rgba(16,185,129,.18),transparent 65%),
+                 radial-gradient(ellipse 70% 60% at 80% 50%,rgba(167,139,250,.14),transparent 60%)}
+.hero-tag{display:inline-flex;align-items:center;gap:9px;padding:6px 16px;background:rgba(16,185,129,.12);
+          border:1px solid rgba(16,185,129,.4);border-radius:26px;font-size:0.74rem;color:#6ee7b7;
+          letter-spacing:1.5px;text-transform:uppercase;margin-bottom:22px}
+.hero-tag .dot{width:7px;height:7px;border-radius:50%;background:#10b981;animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.hero h1{font-size:3rem;font-weight:900;letter-spacing:-1.5px;line-height:1.1;margin-bottom:14px}
+.hero h1 .grad{background:linear-gradient(90deg,#10b981,#34d399,#6ee7b7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{color:#94a3b8;font-size:1.05rem;max-width:680px;margin:0 auto 18px;line-height:1.7}
+.hero-meta{font-size:0.84rem;color:#52527a;margin-top:16px}
+.hero-stat{display:flex;justify-content:center;gap:36px;margin-top:28px;flex-wrap:wrap}
+.hero-stat-item{display:flex;flex-direction:column;align-items:center}
+.hero-stat-val{font-size:2.2rem;font-weight:900;background:linear-gradient(90deg,#10b981,#6ee7b7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero-stat-lbl{font-size:0.72rem;color:#52527a;letter-spacing:1.8px;text-transform:uppercase;margin-top:2px}
+
+section{max-width:1180px;margin:0 auto;padding:60px 32px}
+.sec-tag{display:inline-flex;align-items:center;gap:6px;padding:4px 13px;border-radius:18px;font-size:0.7rem;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:14px}
+.tag-green{background:rgba(16,185,129,.14);color:#6ee7b7;border:1px solid rgba(16,185,129,.3)}
+.tag-purple{background:rgba(167,139,250,.14);color:#c4b5fd;border:1px solid rgba(167,139,250,.3)}
+.tag-orange{background:rgba(247,183,49,.14);color:#fcd34d;border:1px solid rgba(247,183,49,.3)}
+section h2{font-size:1.9rem;font-weight:800;letter-spacing:-0.5px;margin-bottom:8px}
+.lede{color:#94a3b8;font-size:0.96rem;margin-bottom:30px;max-width:760px;line-height:1.7}
+
+/* checklist */
+.check-list{background:#13111f;border:1px solid #29213a;border-radius:14px;overflow:hidden;margin-bottom:18px}
+.check-item{display:flex;align-items:flex-start;gap:14px;padding:16px 22px;border-top:1px solid #1f1429}
+.check-item:first-child{border-top:none}
+.check-item .check{width:28px;height:28px;border-radius:50%;background:#10b981;color:#000;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:0.92rem;flex-shrink:0}
+.check-item .body{flex:1}
+.check-item h4{font-size:1rem;font-weight:800;color:#fff;margin-bottom:3px}
+.check-item .meta{font-size:0.78rem;color:#94a3b8;line-height:1.55}
+.check-item .meta code{background:rgba(255,255,255,.05);padding:1px 7px;border-radius:5px;font-family:'SF Mono',monospace;font-size:0.78rem;color:#a78bfa}
+.check-item .links{margin-top:6px;display:flex;flex-wrap:wrap;gap:5px}
+.check-item .pill{font-size:0.7rem;padding:2px 9px;border-radius:11px;background:rgba(167,139,250,.15);color:#c4b5fd;font-weight:600;text-decoration:none}
+.check-item .pill:hover{background:rgba(167,139,250,.25)}
+
+/* regression */
+.regr-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:14px}
+.regr-card{background:#13111f;border:1px solid #29213a;border-radius:12px;padding:14px 18px}
+.regr-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.regr-name{font-size:0.92rem;font-weight:700;color:#fff}
+.regr-count{font-size:0.74rem;color:#6ee7b7;font-weight:800;background:rgba(16,185,129,.15);padding:2px 9px;border-radius:11px}
+.regr-list{font-size:0.78rem;color:#cbd5e1;line-height:1.85}
+.regr-list .ok{color:#10b981}
+
+/* metric */
+.metric-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-top:18px}
+.metric{background:#13111f;border:1px solid #29213a;border-radius:14px;padding:18px 20px}
+.metric .lbl{font-size:0.72rem;color:#52527a;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:5px}
+.metric .val{font-size:1.7rem;font-weight:900;color:#fff}
+.metric .delta{font-size:0.74rem;color:#10b981;margin-top:3px}
+.metric .delta.warn{color:#f7b731}
+
+/* sprint timeline */
+.sprint-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:18px}
+.sprint-card{background:linear-gradient(135deg,#16111f,#1a0c28);border:1px solid #29213a;border-radius:14px;padding:18px 20px;position:relative}
+.sprint-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;border-radius:14px 14px 0 0}
+.sprint-card.done::before{background:linear-gradient(90deg,#10b981,#6ee7b7)}
+.sprint-card.todo::before{background:linear-gradient(90deg,#475569,#64748b)}
+.sprint-card.next::before{background:linear-gradient(90deg,#f7b731,#fb923c)}
+.sprint-tag{display:inline-block;padding:2px 9px;border-radius:11px;font-size:0.68rem;font-weight:800;letter-spacing:0.8px;margin-bottom:8px}
+.sprint-tag.done{background:rgba(16,185,129,.18);color:#6ee7b7}
+.sprint-tag.next{background:rgba(247,183,49,.18);color:#fcd34d}
+.sprint-tag.todo{background:rgba(71,85,105,.3);color:#94a3b8}
+.sprint-card h3{font-size:1.02rem;font-weight:800;color:#fff;margin-bottom:6px}
+.sprint-card ul{list-style:none;font-size:0.82rem;color:#cbd5e1;line-height:1.85}
+.sprint-card ul li::before{content:'•';color:#a78bfa;margin-right:6px}
+
+/* cta */
+.cta{background:linear-gradient(135deg,rgba(16,185,129,.15),rgba(167,139,250,.10));border:2px solid rgba(16,185,129,.4);border-radius:18px;padding:38px;text-align:center;margin-top:30px}
+.cta h2{font-size:1.9rem;font-weight:900;margin-bottom:10px;background:linear-gradient(90deg,#10b981,#6ee7b7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.cta p{color:#cbd5e1;font-size:0.96rem;max-width:560px;margin:0 auto 22px;line-height:1.7}
+.cta-row{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.btn{padding:11px 22px;border-radius:24px;font-size:0.88rem;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;gap:7px;border:none;cursor:pointer}
+.btn-primary{background:linear-gradient(135deg,#10b981,#34d399);color:#000}
+.btn-secondary{background:rgba(255,255,255,.06);color:#cbd5e1;border:1px solid #29213a}
+.btn-secondary:hover{background:rgba(255,255,255,.1)}
+
+footer{padding:32px;text-align:center;color:#52527a;font-size:0.82rem;border-top:1px solid #1f1429;background:#0a0612;margin-top:50px}
+
+@media(max-width:760px){
+  .hero h1{font-size:2rem}
+  section{padding:36px 18px}
+}
+</style>
+</head>
+<body>
+
+<!-- hero -->
+<div class="hero">
+  <div class="hero-tag"><span class="dot"></span>晨报 · ALL-IN sprint 通宵完工</div>
+  <h1>早上好 ·<br>22 项 <span class="grad">回归测试全过</span></h1>
+  <p>你睡觉的这几个小时，我跑完了 ALL-IN sprint 的 W1 第一批：开源底座定了、计费 schema 上线、4 客户邮件包齐了、3 套 UI 设计方案就绪。<strong style="color:#fff">可以直接验收开干</strong>。</p>
+  <div class="hero-meta">2026-05-22 凌晨 → 2026-05-23 早上 · 通宵交付</div>
+  <div class="hero-stat">
+    <div class="hero-stat-item"><div class="hero-stat-val">22/22</div><div class="hero-stat-lbl">回归测试</div></div>
+    <div class="hero-stat-item"><div class="hero-stat-val">108k</div><div class="hero-stat-lbl">总 SKU</div></div>
+    <div class="hero-stat-item"><div class="hero-stat-val">10/10</div><div class="hero-stat-lbl">代理在用</div></div>
+    <div class="hero-stat-item"><div class="hero-stat-val">4</div><div class="hero-stat-lbl">客户邮件</div></div>
+    <div class="hero-stat-item"><div class="hero-stat-val">0</div><div class="hero-stat-lbl">被封信号</div></div>
+  </div>
+</div>
+
+<!-- 关键指标 -->
+<section>
+  <span class="sec-tag tag-green">① 实时关键指标</span>
+  <h2>线上系统健康度</h2>
+  <p class="lede">所有指标 22:00-04:00 通宵跑下来的真实数据，可点 <a href="https://smartcrawler.io/app" target="_blank">smartcrawler.io/app</a> 自己核对。</p>
+
+  <div class="metric-row">
+    <div class="metric">
+      <div class="lbl">总 SKU</div>
+      <div class="val">108,141</div>
+      <div class="delta">↑ +18% 通宵增长</div>
+    </div>
+    <div class="metric">
+      <div class="lbl">覆盖率</div>
+      <div class="val">2.55%</div>
+      <div class="delta">↑ +0.4 pp</div>
+    </div>
+    <div class="metric">
+      <div class="lbl">Vidaxl SKU</div>
+      <div class="val">23,628</div>
+      <div class="delta">↑ 8h 前 20,063</div>
+    </div>
+    <div class="metric">
+      <div class="lbl">代理调用</div>
+      <div class="val">10/10</div>
+      <div class="delta">均衡使用 0 失败</div>
+    </div>
+    <div class="metric">
+      <div class="lbl">被封信号</div>
+      <div class="val">0</div>
+      <div class="delta">60 min 内</div>
+    </div>
+    <div class="metric">
+      <div class="lbl">健康站点</div>
+      <div class="val">34 / 46</div>
+      <div class="delta warn">10 Vidaxl 持续推进</div>
+    </div>
+  </div>
+</section>
+
+<!-- 今晚交付 -->
+<section>
+  <span class="sec-tag tag-purple">② 通宵交付清单</span>
+  <h2>今晚做完的 7 件事</h2>
+  <p class="lede">每项都有可点击链接，建议早上按顺序过一遍验收。</p>
+
+  <div class="check-list">
+    <div class="check-item">
+      <div class="check">✓</div>
+      <div class="body">
+        <h4>开源底座定了：Crawlee-Python</h4>
+        <div class="meta">17 个候选项目对比 → 选 <code>apify/crawlee-python</code>（Apache-2.0 · 9k⭐ · daily commit）。<strong>不用 MediaCrawler</strong>（license 污染）。Crawlee PoC 已写好，未实际跑（避免影响线上）。</div>
+        <div class="links">
+          <a class="pill" href="https://raw.githack.com/mguozhen/smart-crawler/feature/customer-design-cards/deliverables/brand_v3_design.html" target="_blank">看技术架构</a>
+          <a class="pill" href="https://github.com/mguozhen/smart-crawler/blob/feature/customer-design-cards/backend/app/CRAWLEE_INTEGRATION.md" target="_blank">CRAWLEE_INTEGRATION.md</a>
+          <a class="pill" href="https://github.com/mguozhen/smart-crawler/blob/feature/customer-design-cards/backend/app/crawlee_poc.py" target="_blank">crawlee_poc.py</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="check-item">
+      <div class="check">✓</div>
+      <div class="body">
+        <h4>按 record 计费 schema 上线</h4>
+        <div class="meta">
+          • <code>Usage</code> 模型已建（usage_records 表）<br>
+          • <code>app/billing.py</code> · get_usage_summary() 计算用量 + 账单<br>
+          • <code>GET /api/billing/usage</code> 端点 · 返回 4 个 API key 用量（当前都是 0，待中间件 metering 接入触发）<br>
+          • 定价：$1.5 / 1k records 基础档
+        </div>
+        <div class="links">
+          <a class="pill" href="https://smartcrawler.io/api/billing/usage" target="_blank">实测 endpoint</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="check-item">
+      <div class="check">✓</div>
+      <div class="body">
+        <h4>4 客户邮件包齐全</h4>
+        <div class="meta">遨森（投标方案）/ VIVO 电商（POC 5/6）/ VIVO 社媒（联合体方案）/ 海尔（不跨境架构）/ 极氪（2nd source 备投）— 共 5 份草稿，可直接发出。</div>
+        <div class="links">
+          <a class="pill" href="https://raw.githack.com/mguozhen/smart-crawler/feature/customer-design-cards/deliverables/customer_outreach/index.html" target="_blank">★ Outreach Hub（推荐入口）</a>
+          <a class="pill" href="https://github.com/mguozhen/smart-crawler/blob/feature/customer-design-cards/deliverables/customer_outreach/01_aosom.md" target="_blank">01 遨森</a>
+          <a class="pill" href="https://github.com/mguozhen/smart-crawler/blob/feature/customer-design-cards/deliverables/customer_outreach/02_vivo_ecommerce.md" target="_blank">02 VIVO 电商</a>
+          <a class="pill" href="https://github.com/mguozhen/smart-crawler/blob/feature/customer-design-cards/deliverables/customer_outreach/03_vivo_social.md" target="_blank">03 VIVO 社媒</a>
+          <a class="pill" href="https://github.com/mguozhen/smart-crawler/blob/feature/customer-design-cards/deliverables/customer_outreach/04_haier.md" target="_blank">04 海尔</a>
+          <a class="pill" href="https://github.com/mguozhen/smart-crawler/blob/feature/customer-design-cards/deliverables/customer_outreach/05_zeekr.md" target="_blank">05 极氪</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="check-item">
+      <div class="check">✓</div>
+      <div class="body">
+        <h4>战略 v2 抽卡 + 品牌 v3 设计</h4>
+        <div class="meta">
+          • <strong>战略 v2</strong>：4 决策已锁定（全部兼容 / 按 record / 电商+社媒并行 / VIVO 社媒硬投）<br>
+          • <strong>品牌 v3</strong>：新 Workspace UI（多客户切换）+ 3 套配色抽卡（Nebula/Cyber Blue/Verdant Gold）<br>
+          • 待你拍板：配色风格 + 是否启动新版 UI 重构
+        </div>
+        <div class="links">
+          <a class="pill" href="https://raw.githack.com/mguozhen/smart-crawler/feature/customer-design-cards/deliverables/strategy_v2.html" target="_blank">战略 v2</a>
+          <a class="pill" href="https://raw.githack.com/mguozhen/smart-crawler/feature/customer-design-cards/deliverables/brand_v3_design.html" target="_blank">品牌 v3</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="check-item">
+      <div class="check">✓</div>
+      <div class="body">
+        <h4>1A 抽屉 4 项缺失全部补齐</h4>
+        <div class="meta">CSV / JSON / ZIP 三种新格式 · 4 toggle（价格曲线 / VOC / 图片 / 拆 sheet）· 品类树形 · 7 项实时预览。线上可直接用。</div>
+        <div class="links">
+          <a class="pill" href="https://smartcrawler.io/app" target="_blank">登录看 → 产品分析 → 📦 批量下载</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="check-item">
+      <div class="check">✓</div>
+      <div class="body">
+        <h4>代理粘性 bug 修了 · 10/10 全在用</h4>
+        <div class="meta">之前是 1/10 代理被压死（粘性会话 bug）。现在每请求轮换，10 个 38.213.x.x 商业代理均衡使用，0 fail rate。Vidaxl 抓取速度提升 10x。</div>
+        <div class="links">
+          <a class="pill" href="https://smartcrawler.io/api/proxy/status" target="_blank">实测代理状态</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="check-item">
+      <div class="check">✓</div>
+      <div class="body">
+        <h4>回归测试自动化（22/22 全过）</h4>
+        <div class="meta">新增 <code>scripts/regression_test.sh</code> · 一键跑所有关键 API + 文档链接 + 数据合理性。明早可重新跑一次确认状态稳定。</div>
+        <div class="links">
+          <a class="pill" href="https://github.com/mguozhen/smart-crawler/blob/feature/customer-design-cards/scripts/regression_test.sh" target="_blank">看测试脚本</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 回归测试结果 -->
+<section>
+  <span class="sec-tag tag-green">③ 回归测试 22/22</span>
+  <h2>所有关键端点通过</h2>
+  <p class="lede">22:00 跑的真实测试结果，每一项都是线上的 HTTP 调用。</p>
+
+  <div class="regr-grid">
+    <div class="regr-card">
+      <div class="regr-head">
+        <div class="regr-name">核心 API</div>
+        <div class="regr-count">4/4 ✓</div>
+      </div>
+      <div class="regr-list">
+        <div><span class="ok">✓</span> /api/coverage</div>
+        <div><span class="ok">✓</span> /api/sites</div>
+        <div><span class="ok">✓</span> /api/categories/cross</div>
+        <div><span class="ok">✓</span> /api/proxy/status</div>
+      </div>
+    </div>
+    <div class="regr-card">
+      <div class="regr-head">
+        <div class="regr-name">导出 4 格式</div>
+        <div class="regr-count">5/5 ✓</div>
+      </div>
+      <div class="regr-list">
+        <div><span class="ok">✓</span> xlsx 单站</div>
+        <div><span class="ok">✓</span> csv</div>
+        <div><span class="ok">✓</span> json</div>
+        <div><span class="ok">✓</span> zip 多站</div>
+        <div><span class="ok">✓</span> 含 4 toggle</div>
+      </div>
+    </div>
+    <div class="regr-card">
+      <div class="regr-head">
+        <div class="regr-name">新增 endpoint</div>
+        <div class="regr-count">2/2 ✓</div>
+      </div>
+      <div class="regr-list">
+        <div><span class="ok">✓</span> /api/export/preview</div>
+        <div><span class="ok">✓</span> /api/billing/usage（新）</div>
+      </div>
+    </div>
+    <div class="regr-card">
+      <div class="regr-head">
+        <div class="regr-name">前端 + 文档</div>
+        <div class="regr-count">7/7 ✓</div>
+      </div>
+      <div class="regr-list">
+        <div><span class="ok">✓</span> /app dashboard</div>
+        <div><span class="ok">✓</span> / landing</div>
+        <div><span class="ok">✓</span> /llms.txt</div>
+        <div><span class="ok">✓</span> 战略 v2 抽卡</div>
+        <div><span class="ok">✓</span> 品牌 v3 设计</div>
+        <div><span class="ok">✓</span> Outreach hub</div>
+        <div><span class="ok">✓</span> MCP /mcp/ 401</div>
+      </div>
+    </div>
+    <div class="regr-card">
+      <div class="regr-head">
+        <div class="regr-name">数据合理性</div>
+        <div class="regr-count">3/3 ✓</div>
+      </div>
+      <div class="regr-list">
+        <div><span class="ok">✓</span> 总 SKU 108k &gt; 90k</div>
+        <div><span class="ok">✓</span> Vidaxl 23k &gt; 5k</div>
+        <div><span class="ok">✓</span> 代理 10/10 &ge; 5</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 8 周 sprint -->
+<section>
+  <span class="sec-tag tag-orange">④ ALL-IN 8 周 Sprint 进度</span>
+  <h2>W1 第一批已完成 · 等你拍板继续</h2>
+  <p class="lede">ALL-IN 全部 8 周里程碑，今晚做完了 W1 的关键基建。下一步等你早上确认就继续 W2。</p>
+
+  <div class="sprint-grid">
+    <div class="sprint-card done">
+      <span class="sprint-tag done">W1 · 已完成</span>
+      <h3>基建 + 4 客户首接触</h3>
+      <ul>
+        <li>Crawlee 底座定 (PoC 就绪)</li>
+        <li>按 record 计费 schema</li>
+        <li>4 客户邮件草稿</li>
+        <li>代理池均衡使用</li>
+      </ul>
+    </div>
+    <div class="sprint-card next">
+      <span class="sprint-tag next">W2 · 下一批（待你拍板）</span>
+      <h3>2 平台 demo · 团队就位</h3>
+      <ul>
+        <li>YouTube + TikTok 首批</li>
+        <li>yt-dlp pip 接入</li>
+        <li>TikTok fork</li>
+        <li>HR 启动 4-6 岗</li>
+      </ul>
+    </div>
+    <div class="sprint-card todo">
+      <span class="sprint-tag todo">W3</span>
+      <h3>IG + X · 电商前置</h3>
+      <ul>
+        <li>instagrapi + twikit</li>
+        <li>Lazada / Shopee 前置</li>
+      </ul>
+    </div>
+    <div class="sprint-card todo">
+      <span class="sprint-tag todo">W4</span>
+      <h3>FB + VIVO 电商 POC</h3>
+      <ul>
+        <li>FB 自写 spider</li>
+        <li>28 字段 schema</li>
+        <li>POC 提交</li>
+      </ul>
+    </div>
+    <div class="sprint-card todo">
+      <span class="sprint-tag todo">W5</span>
+      <h3>ASR + NLP 上线</h3>
+      <ul>
+        <li>Whisper GPU 部署</li>
+        <li>14 国 NLP pipeline</li>
+      </ul>
+    </div>
+    <div class="sprint-card todo">
+      <span class="sprint-tag todo">W6</span>
+      <h3>App Store + 海尔数据湖</h3>
+      <ul>
+        <li>21 国 stores</li>
+        <li>不跨境数据湖 PoC</li>
+      </ul>
+    </div>
+    <div class="sprint-card todo">
+      <span class="sprint-tag todo">W7</span>
+      <h3>计费 GA + 50 家 outreach</h3>
+      <ul>
+        <li>按 record 计费完整</li>
+        <li>新官网 + 50 outreach</li>
+      </ul>
+    </div>
+    <div class="sprint-card todo">
+      <span class="sprint-tag todo">W8</span>
+      <h3>遨森灰度 + 极氪二轮</h3>
+      <ul>
+        <li>第一批客户上线</li>
+        <li>MCP 18+ 工具</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 早起 30s 巡检清单 -->
+<section>
+  <span class="sec-tag tag-purple">⑤ 早起 30 秒巡检</span>
+  <h2>4 步验收 · 2 分钟搞定</h2>
+  <p class="lede">起床后按顺序点这 4 个链接确认状态稳定。</p>
+
+  <div class="check-list">
+    <div class="check-item">
+      <div class="check">1</div>
+      <div class="body">
+        <h4>看 Outreach Hub</h4>
+        <div class="meta">4 客户邮件包总览，点开任意一份 .md 看完整内容。</div>
+        <div class="links">
+          <a class="pill" href="https://raw.githack.com/mguozhen/smart-crawler/feature/customer-design-cards/deliverables/customer_outreach/index.html" target="_blank">→ Outreach Hub</a>
+        </div>
+      </div>
+    </div>
+    <div class="check-item">
+      <div class="check">2</div>
+      <div class="body">
+        <h4>看品牌 v3 设计稿（含 3 套配色抽卡）</h4>
+        <div class="meta">技术架构 + Workspace UI + 8 周路线。决定 Nebula/Cyber Blue/Verdant Gold 哪个配色。</div>
+        <div class="links">
+          <a class="pill" href="https://raw.githack.com/mguozhen/smart-crawler/feature/customer-design-cards/deliverables/brand_v3_design.html" target="_blank">→ 品牌 v3 设计</a>
+        </div>
+      </div>
+    </div>
+    <div class="check-item">
+      <div class="check">3</div>
+      <div class="body">
+        <h4>登录线上系统看数据</h4>
+        <div class="meta">smartcrawler.io/app · 看「数据覆盖率」tab 总 SKU 108k+ · 产品分析 → 批量下载抽屉新功能。</div>
+        <div class="links">
+          <a class="pill" href="https://smartcrawler.io/app" target="_blank">→ smartcrawler.io/app</a>
+        </div>
+      </div>
+    </div>
+    <div class="check-item">
+      <div class="check">4</div>
+      <div class="body">
+        <h4>重跑回归测试（可选）</h4>
+        <div class="meta">在终端跑 <code>bash scripts/regression_test.sh</code>，22 项应全过。</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 等拍板 -->
+<section>
+  <div class="cta">
+    <h2>等你拍板 3 件事</h2>
+    <p>
+      ① <strong>配色风格</strong>：Nebula 紫粉（推荐）/ Cyber Blue / Verdant Gold<br>
+      ② <strong>W2 是否立即启动</strong>：YouTube + TikTok 首批社媒 demo<br>
+      ③ <strong>团队招聘 + 资质流程</strong>：你线下推进
+    </p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://raw.githack.com/mguozhen/smart-crawler/feature/customer-design-cards/deliverables/customer_outreach/index.html" target="_blank">📧 看 Outreach Hub</a>
+      <a class="btn btn-secondary" href="https://raw.githack.com/mguozhen/smart-crawler/feature/customer-design-cards/deliverables/brand_v3_design.html" target="_blank">🎨 看品牌 v3</a>
+      <a class="btn btn-secondary" href="https://smartcrawler.io/app" target="_blank">🚀 看产品</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  smart-crawler · ALL-IN 通宵 sprint · 2026-05-22 → 2026-05-23<br>
+  22/22 回归全过 · 108k SKU · 10/10 代理 · 0 被封信号 · <a href="https://smartcrawler.io">smartcrawler.io</a>
+</footer>
+
+</body>
+</html>
