@@ -657,3 +657,48 @@ def data_coverage(db: Session = Depends(get_db)):
             "healthy_count": healthy,
         },
     }
+
+
+# ---------- 按 record 计费 · 用量查询 ----------
+# Schema 就绪 · 中间件层 metering 留给下个迭代（避免影响线上稳定性）
+@router.get("/billing/usage")
+def billing_usage(days: int = 30, user: str = Depends(require_user),
+                  db: Session = Depends(get_db)):
+    """当前用户所有 API key 的 N 天用量 + 账单。
+
+    用于：
+    · 海尔大数据湖项目 · 资源池按订单付费对接
+    · 用户自助查询：调用量 / 字节数 / 账单 / 按 endpoint 分组
+    """
+    if user.startswith("apikey:"):
+        raise HTTPException(403, "API 密钥不能查计费")
+    from ..billing import get_usage_summary
+    keys = db.query(ApiKey).all()
+    return {
+        "days": days,
+        "keys": [{
+            "id": k.id,
+            "name": k.name,
+            "key_prefix": (k.key_prefix or "") + "…",
+            **get_usage_summary(k.id, days),
+        } for k in keys],
+    }
+
+
+@router.get("/billing/usage/{api_key_id}")
+def billing_usage_detail(api_key_id: int, days: int = 30,
+                         user: str = Depends(require_user),
+                         db: Session = Depends(get_db)):
+    """指定 API key 的 N 天用量明细。"""
+    if user.startswith("apikey:"):
+        raise HTTPException(403, "API 密钥不能查计费")
+    k = db.query(ApiKey).filter(ApiKey.id == api_key_id).first()
+    if not k:
+        raise HTTPException(404, "API key 不存在")
+    from ..billing import get_usage_summary
+    return {
+        "id": k.id,
+        "name": k.name,
+        "key_prefix": (k.key_prefix or "") + "…",
+        **get_usage_summary(api_key_id, days),
+    }

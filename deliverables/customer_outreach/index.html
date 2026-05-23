@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Customer Outreach Hub · smart-crawler 周末发邮包</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Inter','PingFang SC',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+html{scroll-behavior:smooth}
+body{background:#0a0612;color:#e5e7eb;font-size:14.5px;line-height:1.65;overflow-x:hidden}
+a{color:#a78bfa;text-decoration:none}
+
+/* nav */
+nav{position:sticky;top:0;z-index:50;background:rgba(10,6,18,.94);backdrop-filter:blur(14px);
+    border-bottom:1px solid #1f1429;padding:0 32px;height:60px;display:flex;align-items:center;gap:28px}
+.nav-logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:1rem}
+.nav-mark{width:30px;height:30px;border-radius:8px;background:conic-gradient(from 0deg,#a78bfa,#ec4899,#f7b731,#10b981,#a78bfa);
+          display:flex;align-items:center;justify-content:center;position:relative}
+.nav-mark::after{content:'';position:absolute;inset:3px;border-radius:6px;background:#0a0612}
+.nav-mark span{position:relative;z-index:1;font-size:11px;font-weight:900;color:#fff}
+.nav-links{display:flex;gap:24px;margin-left:auto;font-size:0.86rem;color:#9ca3af}
+.nav-links a:hover{color:#fff}
+.nav-cta{padding:8px 18px;background:linear-gradient(135deg,#a78bfa,#ec4899);color:#000;font-weight:700;border-radius:8px;font-size:0.84rem}
+
+/* hero */
+.hero{padding:90px 32px 60px;text-align:center;position:relative;overflow:hidden;
+      background:radial-gradient(ellipse 100% 80% at 50% 0%,rgba(167,139,250,.22),transparent 60%),
+                 radial-gradient(ellipse 80% 60% at 90% 40%,rgba(236,72,153,.18),transparent 60%),
+                 radial-gradient(ellipse 80% 60% at 10% 60%,rgba(16,185,129,.12),transparent 60%)}
+.hero-tag{display:inline-flex;align-items:center;gap:9px;padding:6px 16px;background:rgba(167,139,250,.10);
+          border:1px solid rgba(167,139,250,.35);border-radius:26px;font-size:0.74rem;color:#c4b5fd;
+          letter-spacing:1.5px;text-transform:uppercase;margin-bottom:24px}
+.hero-tag .dot{width:6px;height:6px;border-radius:50%;background:#a78bfa;animation:pulse 1.8s infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.85)}}
+.hero h1{font-size:3.4rem;font-weight:900;letter-spacing:-2px;line-height:1.05;margin-bottom:18px}
+.hero h1 .grad{background:linear-gradient(90deg,#ff6b35,#f7b731,#4ecdc4,#a78bfa,#ec4899);
+               -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+               background-size:200% auto;animation:flow 6s linear infinite}
+@keyframes flow{0%{background-position:0% center}100%{background-position:200% center}}
+.hero p{color:#9ca3af;font-size:1.08rem;max-width:720px;margin:0 auto 18px;line-height:1.65}
+.hero p strong{color:#f7b731;font-weight:700}
+.hero-stat{display:flex;justify-content:center;gap:48px;margin-top:32px;flex-wrap:wrap}
+.hero-stat-item{display:flex;flex-direction:column;align-items:center}
+.hero-stat-val{font-size:2rem;font-weight:900;background:linear-gradient(90deg,#a78bfa,#ec4899);
+               -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero-stat-lbl{font-size:0.72rem;color:#6b7280;letter-spacing:2px;text-transform:uppercase;margin-top:2px}
+
+/* section */
+section{max-width:1260px;margin:0 auto;padding:60px 32px}
+.sec-tag{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:20px;
+         font-size:0.68rem;font-weight:800;letter-spacing:1.8px;text-transform:uppercase;margin-bottom:14px}
+.sec-tag.purple{background:rgba(167,139,250,.14);color:#c4b5fd;border:1px solid rgba(167,139,250,.3)}
+.sec-tag.pink{background:rgba(236,72,153,.14);color:#fbcfe8;border:1px solid rgba(236,72,153,.3)}
+.sec-tag.green{background:rgba(16,185,129,.14);color:#6ee7b7;border:1px solid rgba(16,185,129,.3)}
+.sec-tag.orange{background:rgba(247,183,49,.14);color:#fcd34d;border:1px solid rgba(247,183,49,.3)}
+.sec-tag.gray{background:rgba(156,163,175,.14);color:#cbd5e1;border:1px solid rgba(156,163,175,.3)}
+section h2{font-size:2rem;font-weight:900;letter-spacing:-1px;margin-bottom:12px;color:#fff;line-height:1.15}
+section .lede{color:#9ca3af;font-size:0.98rem;margin-bottom:32px;max-width:780px;line-height:1.7}
+
+/* card grid */
+.card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}
+.card{background:linear-gradient(135deg,#16111f,#1a0c28);border:1px solid #29213a;border-radius:18px;
+      padding:26px 28px;position:relative;overflow:hidden;transition:all .25s;display:flex;flex-direction:column}
+.card:hover{transform:translateY(-3px);border-color:#3b3158;box-shadow:0 18px 50px rgba(167,139,250,.12)}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#a78bfa,#ec4899)}
+.card.gold::before{background:linear-gradient(90deg,#f7b731,#fb923c)}
+.card.green::before{background:linear-gradient(90deg,#10b981,#34d399)}
+.card.silver::before{background:linear-gradient(90deg,#94a3b8,#cbd5e1)}
+.card.gray::before{background:linear-gradient(90deg,#52525b,#71717a)}
+
+.card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+.card-title{display:flex;align-items:center;gap:10px}
+.card-emoji{font-size:1.7rem}
+.card-name{font-size:1.18rem;font-weight:800;color:#fff;letter-spacing:-0.3px;line-height:1.2}
+.card-sub{font-size:0.72rem;color:#9ca3af;margin-top:3px;letter-spacing:0.3px}
+.hit-badge{padding:5px 11px;border-radius:11px;font-size:0.72rem;font-weight:800;letter-spacing:0.5px;white-space:nowrap}
+.hit-90{background:rgba(247,183,49,.18);color:#fcd34d;border:1px solid rgba(247,183,49,.4)}
+.hit-50{background:rgba(16,185,129,.16);color:#6ee7b7;border:1px solid rgba(16,185,129,.35)}
+.hit-40{background:rgba(167,139,250,.16);color:#c4b5fd;border:1px solid rgba(167,139,250,.35)}
+.hit-15{background:rgba(236,72,153,.14);color:#fbcfe8;border:1px solid rgba(236,72,153,.32)}
+.hit-20{background:rgba(156,163,175,.16);color:#cbd5e1;border:1px solid rgba(156,163,175,.35)}
+
+.rfp-row{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 14px}
+.rfp-pill{font-size:0.72rem;padding:5px 11px;background:rgba(255,255,255,.04);
+          border:1px solid rgba(255,255,255,.08);color:#cbd5e1;border-radius:10px;font-weight:600}
+.rfp-pill.hot{background:rgba(247,183,49,.14);color:#fcd34d;border-color:rgba(247,183,49,.3)}
+.rfp-pill.cool{background:rgba(16,185,129,.14);color:#6ee7b7;border-color:rgba(16,185,129,.3)}
+
+.kv-list{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0 16px}
+.kv{background:rgba(255,255,255,.025);border:1px solid #29213a;border-radius:10px;padding:10px 12px}
+.kv .lbl{font-size:0.65rem;color:#6b7280;text-transform:uppercase;letter-spacing:1.2px;font-weight:700}
+.kv .val{font-size:0.92rem;color:#fff;font-weight:700;margin-top:3px}
+.kv .val.accent{color:#a78bfa}
+.kv .val.warm{color:#fcd34d}
+.kv .val.cool{color:#6ee7b7}
+
+.action-row{display:flex;align-items:center;gap:10px;margin-top:auto;padding-top:14px;border-top:1px dashed #29213a}
+.action-text{flex:1;font-size:0.82rem;color:#9ca3af;line-height:1.5}
+.action-text strong{color:#fff}
+.btn{padding:9px 16px;background:linear-gradient(135deg,#a78bfa,#ec4899);color:#000;font-weight:800;
+     border-radius:9px;font-size:0.8rem;letter-spacing:0.3px;display:inline-flex;align-items:center;gap:6px;
+     transition:transform .18s;border:none;cursor:pointer;text-decoration:none}
+.btn:hover{transform:translateY(-1px)}
+.btn.ghost{background:transparent;color:#a78bfa;border:1px solid rgba(167,139,250,.4)}
+.btn.ghost:hover{background:rgba(167,139,250,.10)}
+
+/* 2nd source standalone */
+.second-source{background:linear-gradient(135deg,#13111f,#1a0c28);
+               border:1px dashed #3b3158;border-radius:18px;padding:32px 36px;margin-top:24px;
+               display:grid;grid-template-columns:1.5fr 1fr;gap:32px;align-items:center}
+.ss-head{display:flex;align-items:center;gap:14px;margin-bottom:10px}
+.ss-emoji{font-size:2.4rem}
+.ss-title{font-size:1.4rem;font-weight:900;color:#fff;letter-spacing:-0.4px}
+.ss-sub{font-size:0.78rem;color:#9ca3af;margin-top:3px;letter-spacing:0.5px}
+.ss-body{color:#9ca3af;font-size:0.94rem;line-height:1.7;margin-top:14px}
+.ss-body strong{color:#fff}
+.ss-side{background:rgba(0,0,0,.25);border:1px solid #29213a;border-radius:14px;padding:20px 22px}
+.ss-side .lbl{font-size:0.66rem;color:#6b7280;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;margin-bottom:5px}
+.ss-side .val{font-size:1.2rem;font-weight:800;color:#fff;margin-bottom:14px}
+.ss-side .val.accent{background:linear-gradient(90deg,#94a3b8,#cbd5e1);
+                     -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+
+/* sprint schedule */
+.schedule{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:24px}
+.sch-card{background:#16111f;border:1px solid #29213a;border-radius:14px;padding:18px 20px;position:relative}
+.sch-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;border-radius:14px 14px 0 0}
+.sch-card.d0::before{background:#a78bfa}.sch-card.d1::before{background:#ec4899}
+.sch-card.d2::before{background:#f7b731}.sch-card.d3::before{background:#10b981}
+.sch-when{font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;margin-bottom:6px}
+.sch-what{font-size:1rem;font-weight:800;color:#fff;line-height:1.3;margin-bottom:6px}
+.sch-who{font-size:0.78rem;color:#9ca3af;line-height:1.55}
+.sch-who strong{color:#c4b5fd}
+
+footer{background:#0a0612;border-top:1px solid #1f1429;padding:32px;text-align:center;color:#52527a;font-size:0.82rem;margin-top:60px}
+footer a{color:#a78bfa}
+
+@media(max-width:880px){
+  .hero h1{font-size:2.2rem}
+  .card-grid{grid-template-columns:1fr}
+  .kv-list{grid-template-columns:1fr}
+  .second-source{grid-template-columns:1fr}
+  nav{padding:0 16px;gap:14px}
+  .nav-links{display:none}
+}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="nav-logo">
+    <div class="nav-mark"><span>SC</span></div>
+    smart-crawler · Outreach Hub
+  </div>
+  <div class="nav-links">
+    <a href="#deals">4 客户包</a>
+    <a href="#second">极氪备投</a>
+    <a href="#sprint">Sprint 节奏</a>
+  </div>
+  <a class="nav-cta" href="#deals">立即开发</a>
+</nav>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-tag"><span class="dot"></span>WEEKEND SPRINT · 周末发邮包</div>
+  <h1>4 客户 outreach 包<br><span class="grad">周末即可发出</span></h1>
+  <p>本周整理出 <strong>4 个目标客户 + 1 个备投客户</strong> 的完整 outreach 邮件模板、技术应答方案、报价档位与谈判要点 —— 每一份都基于真实 RFP / 招标公告写出。打开任一卡片直达邮件草稿，复制即可发送。</p>
+  <div class="hero-stat">
+    <div class="hero-stat-item"><div class="hero-stat-val">4+1</div><div class="hero-stat-lbl">Outreach 包</div></div>
+    <div class="hero-stat-item"><div class="hero-stat-val">46 站</div><div class="hero-stat-lbl">已建采集源</div></div>
+    <div class="hero-stat-item"><div class="hero-stat-val">¥10w-2M</div><div class="hero-stat-lbl">单客户报价区间</div></div>
+    <div class="hero-stat-item"><div class="hero-stat-val">0 失败</div><div class="hero-stat-lbl">代理池实测调用</div></div>
+  </div>
+</div>
+
+<!-- 4 DEAL CARDS -->
+<section id="deals">
+  <span class="sec-tag purple">DEAL CARDS · 4 主投目标</span>
+  <h2>4 个客户 · 4 套战术</h2>
+  <p class="lede">每张卡片含命中度评估、关键 RFP 数字、推荐 action、报价档位。点击「打开邮件草稿」直达 raw.githack 渲染的 markdown。</p>
+
+  <div class="card-grid">
+
+    <!-- AOSOM -->
+    <div class="card gold">
+      <div class="card-head">
+        <div class="card-title">
+          <div class="card-emoji">🛒</div>
+          <div>
+            <div class="card-name">遨森（Aosom）</div>
+            <div class="card-sub">跨境家居电商 · 12 国自营站</div>
+          </div>
+        </div>
+        <div class="hit-badge hit-90">命中度 90%</div>
+      </div>
+      <div class="rfp-row">
+        <span class="rfp-pill hot">RFP-ready</span>
+        <span class="rfp-pill">SRS v1.0</span>
+        <span class="rfp-pill">9 品牌 46 站</span>
+        <span class="rfp-pill">21 评论平台</span>
+      </div>
+      <div class="kv-list">
+        <div class="kv"><div class="lbl">关键数字</div><div class="val accent">46 站 / 104,576 SKU</div></div>
+        <div class="kv"><div class="lbl">决策者</div><div class="val">CMO / 品类总监</div></div>
+        <div class="kv"><div class="lbl">报价档位</div><div class="val warm">¥12w / ¥24w / ¥48w</div></div>
+        <div class="kv"><div class="lbl">推荐 action</div><div class="val cool">直接投标 + Demo</div></div>
+      </div>
+      <div class="action-row">
+        <div class="action-text"><strong>2 周内签订年单</strong> · SRS 已 90% 命中 · demo 优先 · 别的乙方要从 0 写代码</div>
+        <a class="btn" href="https://raw.githack.com/mguozhen/smart-crawler/feature/customer-design-cards/deliverables/customer_outreach/01_aosom.md" target="_blank">打开邮件 →</a>
+      </div>
+    </div>
+
+    <!-- VIVO ECOMMERCE -->
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title">
+          <div class="card-emoji">📱</div>
+          <div>
+            <div class="card-name">VIVO 电商论坛舆情</div>
+            <div class="card-sub">含 iQOO · 14 国 14 手机品牌</div>
+          </div>
+        </div>
+        <div class="hit-badge hit-40">命中度 40%</div>
+      </div>
+      <div class="rfp-row">
+        <span class="rfp-pill hot">POC 5/6 窗口</span>
+        <span class="rfp-pill">28 字段</span>
+        <span class="rfp-pill">615 商品 URL</span>
+        <span class="rfp-pill cool">联合体方案</span>
+      </div>
+      <div class="kv-list">
+        <div class="kv"><div class="lbl">关键数字</div><div class="val accent">615 商品 · 22/28 字段</div></div>
+        <div class="kv"><div class="lbl">硬性门槛</div><div class="val warm">公司 ≥ 100 人</div></div>
+        <div class="kv"><div class="lbl">报价档位</div><div class="val warm">¥50-100w / 年</div></div>
+        <div class="kv"><div class="lbl">推荐 action</div><div class="val cool">POC 入围 + 联合体</div></div>
+      </div>
+      <div class="action-row">
+        <div class="action-text"><strong>5/6 实战窗口</strong> · 加 6 字段 · 适配 Lazada/Shopee/Flipkart · 联合体绕开门槛</div>
+        <a class="btn" href="https://raw.githack.com/mguozhen/smart-crawler/feature/customer-design-cards/deliverables/customer_outreach/02_vivo_ecommerce.md" target="_blank">打开邮件 →</a>
+      </div>
+    </div>
+
+    <!-- VIVO SOCIAL -->
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title">
+          <div class="card-emoji">📺</div>
+          <div>
+            <div class="card-name">VIVO 海外社媒 VOC</div>
+            <div class="card-sub">5 平台 + ASR + 多语 NLP</div>
+          </div>
+        </div>
+        <div class="hit-badge hit-15">命中度 15%</div>
+      </div>
+      <div class="rfp-row">
+        <span class="rfp-pill">1 亿条/年</span>
+        <span class="rfp-pill">367 账号</span>
+        <span class="rfp-pill hot">6 周加速</span>
+        <span class="rfp-pill cool">ALL-IN 路线</span>
+      </div>
+      <div class="kv-list">
+        <div class="kv"><div class="lbl">关键数字</div><div class="val accent">367 账号 / 5 平台</div></div>
+        <div class="kv"><div class="lbl">技术难点</div><div class="val warm">FB 反爬 + Whisper ASR</div></div>
+        <div class="kv"><div class="lbl">报价档位</div><div class="val warm">¥100-300w / 年</div></div>
+        <div class="kv"><div class="lbl">推荐 action</div><div class="val cool">联合体 + 6 周冲刺</div></div>
+      </div>
+      <div class="action-row">
+        <div class="action-text"><strong>高难度高回报</strong> · 5 平台 + ASR + 367 账号 · 联合体投标 · 7-8 月 POC</div>
+        <a class="btn" href="https://raw.githack.com/mguozhen/smart-crawler/feature/customer-design-cards/deliverables/customer_outreach/03_vivo_social.md" target="_blank">打开邮件 →</a>
+      </div>
+    </div>
+
+    <!-- HAIER -->
+    <div class="card green">
+      <div class="card-head">
+        <div class="card-title">
+          <div class="card-emoji">🏠</div>
+          <div>
+            <div class="card-name">海尔智家 IT 招标组</div>
+            <div class="card-sub">大规模定制业务 · 数据服务招标</div>
+          </div>
+        </div>
+        <div class="hit-badge hit-50">命中度 50%</div>
+      </div>
+      <div class="rfp-row">
+        <span class="rfp-pill hot">数据湖 SG + EU</span>
+        <span class="rfp-pill">不跨境</span>
+        <span class="rfp-pill">不涉 PII</span>
+        <span class="rfp-pill cool">反爬应对</span>
+      </div>
+      <div class="kv-list">
+        <div class="kv"><div class="lbl">关键数字</div><div class="val accent">新加坡数据湖</div></div>
+        <div class="kv"><div class="lbl">付费模式</div><div class="val warm">资源池按订单付费</div></div>
+        <div class="kv"><div class="lbl">报价档位</div><div class="val warm">¥20w PoC / ¥80-200w 年</div></div>
+        <div class="kv"><div class="lbl">推荐 action</div><div class="val cool">PoC 入围（4-6 周）</div></div>
+      </div>
+      <div class="action-row">
+        <div class="action-text"><strong>4 硬性要求全命中</strong> · 多 region K8s · 按 record 计费 schema 就绪 · 6 个月保修</div>
+        <a class="btn" href="https://raw.githack.com/mguozhen/smart-crawler/feature/customer-design-cards/deliverables/customer_outreach/04_haier.md" target="_blank">打开邮件 →</a>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- 2ND SOURCE: ZEEKR -->
+<section id="second">
+  <span class="sec-tag gray">2ND SOURCE · 备投目标</span>
+  <h2>极氪（Zeekr）· 不抢主标，做备份</h2>
+  <p class="lede">Shulex 已于 2026-04-20 中标。商务 70% 权重，公司 ≥5 年门槛，我们短期内无法主标。但保留备投关系成本极低，Q3-Q4 可顶上。</p>
+
+  <div class="second-source">
+    <div>
+      <div class="ss-head">
+        <div class="ss-emoji">🚗</div>
+        <div>
+          <div class="ss-title">极氪 21 国海外 VOC</div>
+          <div class="ss-sub">吉利集团 · 高端新能源车 · Qimeng.Yang@geely.com</div>
+        </div>
+      </div>
+      <div class="rfp-row">
+        <span class="rfp-pill">Shulex 已中标</span>
+        <span class="rfp-pill">商务 70%</span>
+        <span class="rfp-pill">公司 ≥ 5 年门槛</span>
+        <span class="rfp-pill cool">汽车垂媒 7 站</span>
+      </div>
+      <div class="ss-body">
+        <strong>策略</strong>：不抢主标 · 突出 smart-crawler 独有的<strong>汽车垂媒 7 站覆盖</strong>（Quattroruote / Auto Swiat / Coches.net / Motor.es / AutoBild / Auto Express / Carscoops）· 提议 Q3-Q4 作为 2nd source · 主标 SLA 不达标时 4-6 周顶上 · 报价仅技术服务（¥50-150w / 年）。<br><br>
+        <strong>ROI 评估</strong>：投入 1 小时写邮件 · 30% 回邮率 · 10% 子模块外包概率 · 5% 顶上主标概率 · 期望收益 ≈ ¥7.5w。
+      </div>
+    </div>
+    <div class="ss-side">
+      <div class="lbl">命中度</div>
+      <div class="val accent">20%</div>
+      <div class="lbl">推荐 action</div>
+      <div class="val">2nd source 备投</div>
+      <div class="lbl">报价（仅技术）</div>
+      <div class="val">¥50-150w / 年</div>
+      <a class="btn ghost" href="https://raw.githack.com/mguozhen/smart-crawler/feature/customer-design-cards/deliverables/customer_outreach/05_zeekr.md" target="_blank" style="margin-top:6px">打开邮件 →</a>
+    </div>
+  </div>
+</section>
+
+<!-- SPRINT SCHEDULE -->
+<section id="sprint">
+  <span class="sec-tag green">SPRINT NODE · 节奏与发件时间</span>
+  <h2>周末发件节奏</h2>
+  <p class="lede">先发命中度高的 · 周一前完成 4 份主投 + 1 份备投发件 · 周三跟进无回信目标 · 周五开始第二轮触达。</p>
+
+  <div class="schedule">
+    <div class="sch-card d0">
+      <div class="sch-when">SAT · 周六上午</div>
+      <div class="sch-what">遨森（Aosom）</div>
+      <div class="sch-who">命中度 90% · 直接投标 + Demo 邀请 → <strong>CMO 或品类总监</strong></div>
+    </div>
+    <div class="sch-card d0">
+      <div class="sch-when">SAT · 周六下午</div>
+      <div class="sch-what">海尔智家</div>
+      <div class="sch-who">命中度 50% · PoC 提案 + 反爬数据样本 → <strong>IT 招标组联系人</strong></div>
+    </div>
+    <div class="sch-card d1">
+      <div class="sch-when">SUN · 周日上午</div>
+      <div class="sch-what">VIVO 电商舆情</div>
+      <div class="sch-who">命中度 40% · POC 名额申请 + 联合体方案 → <strong>VIVO 商研负责人</strong></div>
+    </div>
+    <div class="sch-card d1">
+      <div class="sch-when">SUN · 周日下午</div>
+      <div class="sch-what">VIVO 海外社媒</div>
+      <div class="sch-who">命中度 15% · POC 应答 + 6 周开发计划 → <strong>VIVO VOC 负责人</strong></div>
+    </div>
+    <div class="sch-card d2">
+      <div class="sch-when">MON · 周一</div>
+      <div class="sch-what">极氪（Zeekr）</div>
+      <div class="sch-who">命中度 20% · 2nd source 备投 · 低姿态 + 技术信息密度 → <strong>Qimeng.Yang@geely.com</strong></div>
+    </div>
+    <div class="sch-card d3">
+      <div class="sch-when">WED · 周三</div>
+      <div class="sch-what">第一轮跟进</div>
+      <div class="sch-who">对周末发出无回信的目标做 follow up · <strong>引入新信息</strong>（不重复 · 加数据）</div>
+    </div>
+    <div class="sch-card d3">
+      <div class="sch-when">FRI · 周五</div>
+      <div class="sch-what">第二轮触达</div>
+      <div class="sch-who">对仍无回信目标 ping 第二次 · 或换 channel（LinkedIn / 内部介绍） · 之后转长尾</div>
+    </div>
+    <div class="sch-card d3">
+      <div class="sch-when">下周一</div>
+      <div class="sch-what">复盘 + 数据</div>
+      <div class="sch-who">统计发件 / 打开 / 回信 / Demo 邀约率 · 决定下一周新目标</div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  smart-crawler · Customer Outreach Hub · 周末 sprint · 生成于 2026-05-22<br>
+  Repo · <a href="https://github.com/mguozhen/smart-crawler" target="_blank">github.com/mguozhen/smart-crawler</a> ·
+  Branch · <code>feature/customer-design-cards</code>
+</footer>
+
+</body>
+</html>

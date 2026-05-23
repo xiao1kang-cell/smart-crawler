@@ -268,3 +268,23 @@ class CrawlJob(Base):
     success_rate = Column(Float)
     duration_sec = Column(Float)
     error = Column(Text)
+
+
+class Usage(Base):
+    """按 record 计费 · 记录每个 API key 的调用量。
+
+    用于：
+    · 海尔大数据湖项目 · 资源池按订单付费对接
+    · API key 维度月度账单（$1.5 / 1k records 基础档）
+    · 按 endpoint 分组用量统计（/api/sites, /mcp/, /api/export/products...）
+    """
+
+    __tablename__ = "usage_records"
+
+    id = Column(Integer, primary_key=True)
+    api_key_id = Column(Integer, ForeignKey("api_keys.id"), index=True)
+    endpoint = Column(String, index=True)            # /api/sites, /mcp/, /api/export/products...
+    record_count = Column(Integer, default=0)        # 该次调用返回的 records 数
+    bytes_returned = Column(Integer, default=0)      # 返回字节数（用于带宽计费选项）
+    duration_ms = Column(Integer)                    # 调用耗时（用于 SLA 监控）
+    occurred_at = Column(DateTime, default=datetime.utcnow, index=True)
