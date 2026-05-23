@@ -7,3 +7,9 @@ data/*.db
 .claude/
 .env
 data/
+
+# 含 API key 的私密交付文件 — 仅本地，绝不入库
+deliverables/COLLEAGUE_ACCESS.md
+deliverables/*_credentials*
+deliverables/*_secret*
+deliverables/*_key.md

@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>smart-crawler · 项目状态 2026-05-19</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg2: #161b22;
+    --bg3: #21262d;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #7d8590;
+    --green: #3fb950;
+    --green-bg: #0d2119;
+    --yellow: #d29922;
+    --yellow-bg: #272115;
+    --red: #f85149;
+    --red-bg: #2d1217;
+    --blue: #58a6ff;
+    --blue-bg: #0d1f38;
+    --purple: #bc8cff;
+    --orange: #ff7b72;
+    --teal: #39d353;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* ── Header ── */
+  .header {
+    background: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #1c2128 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 32px 40px 28px;
+    position: relative;
+    overflow: hidden;
+  }
+  .header::before {
+    content: '';
+    position: absolute;
+    top: -60px; right: -60px;
+    width: 300px; height: 300px;
+    background: radial-gradient(circle, rgba(88,166,255,0.06) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .header-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .logo-icon {
+    width: 40px; height: 40px;
+    background: linear-gradient(135deg, #1f6feb, #58a6ff);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+  .logo-text h1 {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+  }
+  .logo-text p {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 1px;
+  }
+  .status-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--green-bg);
+    border: 1px solid rgba(63,185,80,0.3);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-size: 13px;
+    color: var(--green);
+    font-weight: 500;
+  }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.6; transform: scale(0.85); }
+  }
+  .header-meta {
+    display: flex;
+    gap: 24px;
+    margin-top: 20px;
+    flex-wrap: wrap;
+  }
+  .meta-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .meta-item span { color: var(--text); }
+
+  /* ── Layout ── */
+  .container { max-width: 1200px; margin: 0 auto; padding: 32px 40px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  @media (max-width: 900px) {
+    .grid4 { grid-template-columns: repeat(2, 1fr); }
+    .grid3 { grid-template-columns: 1fr 1fr; }
+    .grid2 { grid-template-columns: 1fr; }
+    .container { padding: 20px; }
+  }
+
+  /* ── Section ── */
+  .section { margin-bottom: 32px; }
+  .section-title {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--muted);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .section-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* ── Metric Cards ── */
+  .metric-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+  .metric-card:hover { border-color: #484f58; }
+  .metric-card .accent-line {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+  }
+  .metric-card.blue .accent-line { background: linear-gradient(90deg, #1f6feb, #58a6ff); }
+  .metric-card.green .accent-line { background: linear-gradient(90deg, #238636, #3fb950); }
+  .metric-card.purple .accent-line { background: linear-gradient(90deg, #6e40c9, #bc8cff); }
+  .metric-card.orange .accent-line { background: linear-gradient(90deg, #bd561d, #ff7b72); }
+  .metric-label {
+    font-size: 12px;
+    color: var(--muted);
+    font-weight: 500;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .metric-value {
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: -1px;
+    line-height: 1;
+  }
+  .metric-card.blue .metric-value { color: var(--blue); }
+  .metric-card.green .metric-value { color: var(--green); }
+  .metric-card.purple .metric-value { color: var(--purple); }
+  .metric-card.orange .metric-value { color: var(--orange); }
+  .metric-sub {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .metric-sub .tag {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 11px;
+    color: var(--text);
+  }
+
+  /* ── Card ── */
+  .card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .card-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .card-title {
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .card-body { padding: 20px; }
+  .badge {
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 6px;
+    padding: 2px 8px;
+  }
+  .badge-green { background: var(--green-bg); color: var(--green); border: 1px solid rgba(63,185,80,0.3); }
+  .badge-yellow { background: var(--yellow-bg); color: var(--yellow); border: 1px solid rgba(210,153,34,0.3); }
+  .badge-red { background: var(--red-bg); color: var(--red); border: 1px solid rgba(248,81,73,0.3); }
+  .badge-blue { background: var(--blue-bg); color: var(--blue); border: 1px solid rgba(88,166,255,0.3); }
+  .badge-muted { background: var(--bg3); color: var(--muted); border: 1px solid var(--border); }
+
+  /* ── Task List ── */
+  .task-list { display: flex; flex-direction: column; gap: 10px; }
+  .task-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 14px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    transition: border-color 0.15s;
+  }
+  .task-item:hover { border-color: #484f58; }
+  .task-item.done { border-left: 3px solid var(--green); }
+  .task-item.pending { border-left: 3px solid var(--yellow); }
+  .task-item.blocked { border-left: 3px solid var(--red); }
+  .task-item.info { border-left: 3px solid var(--blue); }
+  .task-icon {
+    font-size: 16px;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .task-content { flex: 1; }
+  .task-title { font-weight: 500; font-size: 13px; }
+  .task-desc { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .task-desc code {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0px 5px;
+    font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+    font-size: 11px;
+    color: #e6edf3;
+  }
+
+  /* ── Site Grid ── */
+  .site-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 10px;
+  }
+  .site-item {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: border-color 0.15s, transform 0.1s;
+  }
+  .site-item:hover { border-color: #484f58; transform: translateY(-1px); }
+  .site-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .site-dot.ok { background: var(--green); box-shadow: 0 0 6px rgba(63,185,80,0.4); }
+  .site-dot.new { background: var(--blue); box-shadow: 0 0 6px rgba(88,166,255,0.4); animation: pulse 2s infinite; }
+  .site-dot.blocked { background: var(--yellow); }
+  .site-dot.empty { background: var(--red); }
+  .site-name {
+    font-size: 12px;
+    font-weight: 500;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .site-platform {
+    font-size: 10px;
+    color: var(--muted);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    white-space: nowrap;
+  }
+
+  /* ── Review Breakdown ── */
+  .review-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 4px;
+  }
+  .review-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .review-label { font-size: 12px; color: var(--muted); width: 120px; flex-shrink: 0; }
+  .review-track {
+    flex: 1;
+    height: 6px;
+    background: var(--bg);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .review-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 1s ease;
+  }
+  .review-count { font-size: 12px; font-weight: 600; width: 45px; text-align: right; }
+
+  /* ── System Health ── */
+  .health-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .health-item {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .health-name { font-size: 11px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+  .health-val { font-size: 18px; font-weight: 700; margin-top: 4px; }
+  .health-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* ── Timeline ── */
+  .timeline { display: flex; flex-direction: column; gap: 0; }
+  .tl-item {
+    display: flex;
+    gap: 16px;
+    position: relative;
+  }
+  .tl-item:not(:last-child)::before {
+    content: '';
+    position: absolute;
+    left: 7px; top: 26px;
+    width: 2px;
+    bottom: 0;
+    background: var(--border);
+  }
+  .tl-dot {
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    margin-top: 12px;
+    border: 2px solid;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 8px;
+  }
+  .tl-dot.done { border-color: var(--green); background: rgba(63,185,80,0.15); color: var(--green); }
+  .tl-dot.waiting { border-color: var(--yellow); background: rgba(210,153,34,0.1); }
+  .tl-dot.sched { border-color: var(--blue); background: rgba(88,166,255,0.1); }
+  .tl-content { flex: 1; padding: 10px 0 16px; }
+  .tl-title { font-size: 13px; font-weight: 500; }
+  .tl-when { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* ── Footer ── */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 20px 40px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  footer a { color: var(--blue); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #484f58; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="header-top">
+    <div class="logo">
+      <div class="logo-icon">🕷</div>
+      <div class="logo-text">
+        <h1>smart-crawler</h1>
+        <p>Cross-border E-commerce Data Engine · MCP/REST API</p>
+      </div>
+    </div>
+    <div class="status-badge">
+      <div class="status-dot"></div>
+      Production · Healthy
+    </div>
+  </div>
+  <div class="header-meta">
+    <div class="meta-item">📅 Updated <span>2026-05-19</span></div>
+    <div class="meta-item">🖥 NAS <span>192.168.1.80 / vocserver</span></div>
+    <div class="meta-item">🌐 <span>smartcrawler.io</span></div>
+    <div class="meta-item">🐳 Container <span>smart-crawler:8077</span></div>
+    <div class="meta-item">🗄 DB <span>PostgreSQL 16 · 192 MB</span></div>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Data Metrics -->
+  <div class="section">
+    <div class="section-title">📊 数据总量</div>
+    <div class="grid4">
+      <div class="metric-card blue">
+        <div class="accent-line"></div>
+        <div class="metric-label">🛍 商品</div>
+        <div class="metric-value">62,926</div>
+        <div class="metric-sub">
+          <span class="tag">+47 今日</span>
+          46 站覆盖
+        </div>
+      </div>
+      <div class="metric-card green">
+        <div class="accent-line"></div>
+        <div class="metric-label">🎯 促销</div>
+        <div class="metric-value">37,591</div>
+        <div class="metric-sub">价格事件追踪</div>
+      </div>
+      <div class="metric-card purple">
+        <div class="accent-line"></div>
+        <div class="metric-label">⭐ 评论</div>
+        <div class="metric-value">8,602</div>
+        <div class="metric-sub">
+          <span class="tag">Trustpilot</span>
+          <span class="tag">reviews.io</span>
+          <span class="tag">Google</span>
+        </div>
+      </div>
+      <div class="metric-card orange">
+        <div class="accent-line"></div>
+        <div class="metric-label">📈 价格历史</div>
+        <div class="metric-value">343K</div>
+        <div class="metric-sub">343,456 条记录</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Review Breakdown + System Health -->
+  <div class="grid2" style="margin-bottom:32px;">
+
+    <!-- Reviews breakdown -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">⭐ 评论渠道分布</span>
+        <span class="badge badge-muted">8,602 total</span>
+      </div>
+      <div class="card-body">
+        <div class="review-bar">
+          <div class="review-row">
+            <span class="review-label">Google Maps</span>
+            <div class="review-track">
+              <div class="review-fill" style="width:65%; background:linear-gradient(90deg,#ea4335,#fbbc04);"></div>
+            </div>
+            <span class="review-count" style="color:#ea4335;">5,584</span>
+          </div>
+          <div class="review-row">
+            <span class="review-label">reviews.io</span>
+            <div class="review-track">
+              <div class="review-fill" style="width:19.5%; background:linear-gradient(90deg,#1f6feb,#58a6ff);"></div>
+            </div>
+            <span class="review-count" style="color:#58a6ff;">1,672</span>
+          </div>
+          <div class="review-row">
+            <span class="review-label">Trustpilot</span>
+            <div class="review-track">
+              <div class="review-fill" style="width:15.6%; background:linear-gradient(90deg,#00b67a,#39d353);"></div>
+            </div>
+            <span class="review-count" style="color:#39d353;">1,346</span>
+          </div>
+        </div>
+        <div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--border); font-size:12px; color:var(--muted);">
+          ⚠️ 当前评论集中在 <code style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:1px 5px;color:var(--text);">aosom_uk</code>。
+          待办：为 Costway / Songmics / Homary 等 7 个品牌配置渠道，预计 5–10× 增量。
+        </div>
+      </div>
+    </div>
+
+    <!-- System health -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">🖥 系统资源</span>
+        <span class="badge badge-green">All Green</span>
+      </div>
+      <div class="card-body">
+        <div class="health-grid">
+          <div class="health-item">
+            <div class="health-name">App Container</div>
+            <div class="health-val" style="color:var(--green);">138 MB</div>
+            <div class="health-sub">0.3% CPU · smart-crawler</div>
+          </div>
+          <div class="health-item">
+            <div class="health-name">PostgreSQL</div>
+            <div class="health-val" style="color:var(--blue);">273 MB</div>
+            <div class="health-sub">smart-crawler-pg · 192MB data</div>
+          </div>
+          <div class="health-item">
+            <div class="health-name">Disk Usage</div>
+            <div class="health-val" style="color:var(--purple);">42 GB</div>
+            <div class="health-sub">15 TB total · 0.3% used</div>
+          </div>
+          <div class="health-item">
+            <div class="health-name">Snapshots</div>
+            <div class="health-val" style="color:var(--orange);">1.8 GB</div>
+            <div class="health-sub">data/snapshots/ · 可滚动清理</div>
+          </div>
+        </div>
+        <div style="margin-top:14px; font-size:12px; color:var(--muted);">
+          🗑 今日清理：392 MB SQLite 冷文件（pre-PG 快照 + WAL + .bak）
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Today's Work -->
+  <div class="section">
+    <div class="section-title">✅ 今日完成（2026-05-19）</div>
+    <div class="task-list">
+
+      <div class="task-item done">
+        <div class="task-icon">🗄</div>
+        <div class="task-content">
+          <div class="task-title">P0.1 · PostgreSQL 迁移验证 + Zombie Jobs 清理</div>
+          <div class="task-desc">PG 迁移已完成，数据吻合。3 个僵尸 job 标记为 <code>failed</code>（容器重启遗留，无实际损失）。</div>
+        </div>
+        <span class="badge badge-green">Done</span>
+      </div>
+
+      <div class="task-item done">
+        <div class="task-icon">🗑</div>
+        <div class="task-content">
+          <div class="task-title">P0.2 · SQLite 遗留文件清理 — 释放 392 MB</div>
+          <div class="task-desc">清除 <code>smart_crawler.db</code>(171MB) + <code>.bak-pg</code>(171MB) + WAL(50MB) + SHM(128KB)。仅保留 <code>smart_crawler_2026-05-17_pre-pg.db.gz</code> 冷备。</div>
+        </div>
+        <span class="badge badge-green">Done</span>
+      </div>
+
+      <div class="task-item done">
+        <div class="task-icon">📋</div>
+        <div class="task-content">
+          <div class="task-title">P0.3 · HANDOFF.md 全面更新</div>
+          <div class="task-desc">更新至 PG 架构，反映评论 8,602、空站收敛至 2（vidaxl_us/ca）、新 shoper 采集器、Hunter 分叉提醒、备份路径。</div>
+        </div>
+        <span class="badge badge-green">Done</span>
+      </div>
+
+      <div class="task-item done">
+        <div class="task-icon">🕷</div>
+        <div class="task-content">
+          <div class="task-title">P1.3 · costway_pl 空站修复 — 新建 ShoperCrawler</div>
+          <div class="task-desc">
+            根因：平台非 Magento，是波兰本土 <strong>Shoper</strong> 系统。无 sitemap，JSON-LD 拆成 8 个 <code>@id</code> 相同的 block。
+            新建 <code>shoper.py</code>：主页 menu 发现 226 个类别 → 收集商品 URL → 按 <code>@id</code> 合并 JSON-LD 字段。
+            Quick test：47/50 商品成功解析（<strong>94%</strong>），129 秒。全量 400 商品计划于 02:00 日调度运行。
+          </div>
+        </div>
+        <span class="badge badge-green">47 入库</span>
+      </div>
+
+      <div class="task-item done">
+        <div class="task-icon">🔒</div>
+        <div class="task-content">
+          <div class="task-title">P1.1 · vidaxl_ca 根因定位 + 代码加固</div>
+          <div class="task-desc">
+            根因：<code>sitemap_index.xml</code> HTTP 200 但 body 是空 <code>&lt;sitemapindex/&gt;</code>。
+            <code>vidaxl.py</code> 已加 <code>RuntimeError</code> 快失败，防止产出 0 商品的静默成功 job。
+          </div>
+        </div>
+        <span class="badge badge-yellow">等凭据</span>
+      </div>
+
+      <div class="task-item done">
+        <div class="task-icon">📧</div>
+        <div class="task-content">
+          <div class="task-title">P1.2 · vidaxl_us — 凭据申请邮件起草</div>
+          <div class="task-desc">
+            根因：Demandware Auth 墙（HTTP 401），必须走官方 Dropshipping API。
+            已起草客户邮件（<code>vidaxl_credentials_request_2026-05-19.md</code>）：3 个选项 A/B/C 供客户决策。API 路径代码 <code>_crawl_api</code> 已就绪，等凭据即可跑。
+          </div>
+        </div>
+        <span class="badge badge-yellow">等客户回复</span>
+      </div>
+
+      <div class="task-item done">
+        <div class="task-icon">🔀</div>
+        <div class="task-content">
+          <div class="task-title">P2.2 · Hunter 分叉合并方案文档</div>
+          <div class="task-desc">
+            本地 main（3 commits，<code>6235bb1</code> 起）与 origin/main（Hunter 3 commits，<code>7b583f3</code>）独立修了同一 bug（review_runner 多平台命中问题）。
+            本地版本已在 NAS 生产运行。文档列出 C1/C2/C3 三种合并方案，推荐 PR review。
+            本地 HEAD 已推送备份至 <code>origin/local/may19-nas-snapshot</code>（HEAD=79fa6f2）。
+          </div>
+        </div>
+        <span class="badge badge-blue">待 Hunter 确认</span>
+      </div>
+
+      <div class="task-item done">
+        <div class="task-icon">🛒</div>
+        <div class="task-content">
+          <div class="task-title">P2.1 · Google Shopping 双路已就绪</div>
+          <div class="task-desc">
+            commit <code>79fa6f2</code>：scrapling StealthyFetcher（Google）+ curl_cffi（Bing Shopping）双路合并去重。
+            容器内 <code>scrapling[fetchers] 0.4.8</code> + <code>patchright</code> + <code>curl_cffi 0.15.0</code> 已安装。
+            当前 15 关键词 / 522 results。需跑 <code>GoogleShoppingCrawler('standing desk').crawl()</code> 实战验证。
+          </div>
+        </div>
+        <span class="badge badge-yellow">待验证</span>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Site Coverage -->
+  <div class="section">
+    <div class="section-title">🌐 站点覆盖（46 站）</div>
+    <div style="display:flex; gap:16px; margin-bottom:14px; flex-wrap:wrap;">
+      <div style="display:flex; align-items:center; gap:6px; font-size:12px;">
+        <span class="site-dot ok"></span> 有数据（44站）
+      </div>
+      <div style="display:flex; align-items:center; gap:6px; font-size:12px;">
+        <span class="site-dot new"></span> 今日新增（costway_pl）
+      </div>
+      <div style="display:flex; align-items:center; gap:6px; font-size:12px;">
+        <span class="site-dot blocked"></span> HTTP 401 Auth 墙（vidaxl_us）
+      </div>
+      <div style="display:flex; align-items:center; gap:6px; font-size:12px;">
+        <span class="site-dot empty"></span> 业务暂停无商品（vidaxl_ca）
+      </div>
+    </div>
+    <div class="site-grid">
+      <!-- Aosom Sites -->
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">aosom_uk</span><span class="site-platform">shopify</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">aosom_de</span><span class="site-platform">shopify</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">aosom_fr</span><span class="site-platform">shopify</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">aosom_es</span><span class="site-platform">shopify</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">aosom_it</span><span class="site-platform">shopify</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">aosom_nl</span><span class="site-platform">shopify</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">aosom_be</span><span class="site-platform">shopify</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">aosom_at</span><span class="site-platform">shopify</span></div>
+      <!-- Costway -->
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">costway_uk</span><span class="site-platform">magento</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">costway_de</span><span class="site-platform">magento</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">costway_fr</span><span class="site-platform">magento</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">costway_es</span><span class="site-platform">magento</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">costway_it</span><span class="site-platform">magento</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">costway_nl</span><span class="site-platform">magento</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">costway_be</span><span class="site-platform">magento</span></div>
+      <div class="site-item"><span class="site-dot new"></span><span class="site-name">costway_pl</span><span class="site-platform">shoper ✨</span></div>
+      <!-- VidaXL blocked -->
+      <div class="site-item" title="HTTP 401 全站 Auth 墙，需住宅代理"><span class="site-dot blocked"></span><span class="site-name">vidaxl_us</span><span class="site-platform">401 Auth</span></div>
+      <div class="site-item" title="VidaXL 已暂停加拿大市场运营"><span class="site-dot empty"></span><span class="site-name">vidaxl_ca</span><span class="site-platform">业务暂停</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">vidaxl_uk</span><span class="site-platform">generic</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">vidaxl_de</span><span class="site-platform">generic</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">vidaxl_fr</span><span class="site-platform">generic</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">vidaxl_nl</span><span class="site-platform">generic</span></div>
+      <!-- Songmics -->
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">songmics_uk</span><span class="site-platform">shopify</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">songmics_de</span><span class="site-platform">shopify</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">songmics_fr</span><span class="site-platform">shopify</span></div>
+      <!-- Homary -->
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">homary_uk</span><span class="site-platform">nuxt</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">homary_us</span><span class="site-platform">nuxt</span></div>
+      <!-- Yaheetech -->
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">yaheetech_uk</span><span class="site-platform">shopify</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">yaheetech_de</span><span class="site-platform">shopify</span></div>
+      <!-- VonHaus -->
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">vonhaus_uk</span><span class="site-platform">magento</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">vonhaus_us</span><span class="site-platform">vonhaus</span></div>
+      <!-- BCP -->
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">bcp_uk</span><span class="site-platform">generic</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">bcp_de</span><span class="site-platform">generic</span></div>
+      <!-- Flexispot -->
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">flexispot_uk</span><span class="site-platform">flexispot</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">flexispot_de</span><span class="site-platform">flexispot</span></div>
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">flexispot_us</span><span class="site-platform">flexispot</span></div>
+      <!-- Others -->
+      <div class="site-item"><span class="site-dot ok"></span><span class="site-name">其余 9 站</span><span class="site-platform">various</span></div>
+    </div>
+  </div>
+
+  <!-- Open Items + Next Milestones -->
+  <div class="grid2">
+
+    <!-- Open Items -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">🚧 Open Items（需外部决策）</span>
+        <span class="badge badge-yellow">2 blocking</span>
+      </div>
+      <div class="card-body">
+        <div class="task-list">
+
+          <div class="task-item blocked">
+            <div class="task-icon">🚫</div>
+            <div class="task-content">
+              <div class="task-title">vidaxl_ca — 业务已暂停（非技术问题）</div>
+              <div class="task-desc">
+                实测（2026-05-19）确认根因：VidaXL 已关闭加拿大市场，页面显示
+                <code>"We're pausing orders until further notice."</code>，类别 0 商品，sitemap 空。
+                无爬取手段可绕，等 VidaXL 重开加拿大站即可，代码无需改动。
+              </div>
+            </div>
+            <span class="badge badge-muted">等业务</span>
+          </div>
+
+          <div class="task-item blocked">
+            <div class="task-icon">🔒</div>
+            <div class="task-content">
+              <div class="task-title">vidaxl_us — 全站 HTTP 401 Auth 墙</div>
+              <div class="task-desc">
+                连 <code>robots.txt</code> 都 401，SFCC B2B Auth。需住宅代理（<code>proxies.txt</code> 取消注释）
+                或 Dropshipping API 凭据（<code>VIDAXL_API_EMAIL</code> + <code>VIDAXL_API_TOKEN</code>）。
+                <code>_crawl_api</code> 代码已就绪，等基础设施。
+              </div>
+            </div>
+            <span class="badge badge-red">需代理</span>
+          </div>
+
+          <div class="task-item pending">
+            <div class="task-icon">🔀</div>
+            <div class="task-content">
+              <div class="task-title">Hunter 分叉合并 — 等 PR review 确认</div>
+              <div class="task-desc">
+                三种方案（C1 theirs / C2 ours / C3 rebase）已文档化。
+                NAS 当前运行本地 main（commit <code>79fa6f2</code>）。
+                需跟 Hunter 对一次再决定方向。
+              </div>
+            </div>
+          </div>
+
+          <div class="task-item info">
+            <div class="task-icon">🛒</div>
+            <div class="task-content">
+              <div class="task-title">Google Shopping 双路 — 待实战验证</div>
+              <div class="task-desc">
+                代码已部署容器，scrapling + Bing 依赖已装。
+                还没跑过真实关键词。建议：<code>docker exec smart-crawler python -c "from app.crawlers.google_shopping import GoogleShoppingCrawler; ..."</code>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Next Milestones -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">📅 接下来的里程碑</span>
+      </div>
+      <div class="card-body">
+        <div class="timeline">
+
+          <div class="tl-item">
+            <div class="tl-dot sched"></div>
+            <div class="tl-content">
+              <div class="tl-title">costway_pl 全量爬取（400 商品）</div>
+              <div class="tl-when">🕑 今晚 02:00 · APScheduler 自动触发</div>
+            </div>
+          </div>
+
+          <div class="tl-item">
+            <div class="tl-dot waiting"></div>
+            <div class="tl-content">
+              <div class="tl-title">vidaxl US/CA 启动（等凭据）</div>
+              <div class="tl-when">⏳ 收到客户回复后 · 预计 +2,000–8,000 商品</div>
+            </div>
+          </div>
+
+          <div class="tl-item">
+            <div class="tl-dot waiting"></div>
+            <div class="tl-content">
+              <div class="tl-title">Hunter merge 决策</div>
+              <div class="tl-when">⏳ 会议/PR review · 决定用 C1/C2/C3</div>
+            </div>
+          </div>
+
+          <div class="tl-item">
+            <div class="tl-dot sched"></div>
+            <div class="tl-content">
+              <div class="tl-title">评论扩量（7 品牌各加渠道）</div>
+              <div class="tl-when">📋 下个 sprint · review_channels.yaml 编辑</div>
+            </div>
+          </div>
+
+          <div class="tl-item" style="padding-bottom:0;">
+            <div class="tl-dot sched"></div>
+            <div class="tl-content" style="padding-bottom:0;">
+              <div class="tl-title">MCP Registry 提交（仓库转 public 后）</div>
+              <div class="tl-when">📋 长期 · scripts/publish.sh 已就绪</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MCP API -->
+  <div class="section" style="margin-top:32px;">
+    <div class="section-title">🔌 MCP / REST API</div>
+    <div class="grid3">
+      <div class="card">
+        <div class="card-body" style="display:flex; flex-direction:column; gap:8px;">
+          <div style="font-size:12px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Endpoint</div>
+          <div style="font-size:14px; font-weight:600; color:var(--blue);">smartcrawler.io/mcp</div>
+          <div style="font-size:12px; color:var(--muted);">Streamable HTTP · FastMCP</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-body" style="display:flex; flex-direction:column; gap:8px;">
+          <div style="font-size:12px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">工具数量</div>
+          <div style="font-size:28px; font-weight:700; color:var(--purple);">9</div>
+          <div style="font-size:12px; color:var(--muted);">Bearer sck_... 鉴权</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-body" style="display:flex; flex-direction:column; gap:8px;">
+          <div style="font-size:12px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">调度</div>
+          <div style="font-size:14px; font-weight:500;">商品日更 <span style="color:var(--green);">02:00</span></div>
+          <div style="font-size:12px; color:var(--muted);">评论·Shopping 周更 · APScheduler</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Footer -->
+<footer>
+  <div>smart-crawler · NAS Production · Last audit 2026-05-19</div>
+  <div>
+    <a href="https://github.com/mguozhen/smart-crawler">GitHub</a>
+    &nbsp;·&nbsp;
+    <a href="https://smartcrawler.io">smartcrawler.io</a>
+    &nbsp;·&nbsp;
+    SSH: <code style="font-family:monospace; font-size:11px;">ssh solvea@192.168.1.80</code>
+  </div>
+</footer>
+
+</body>
+</html>

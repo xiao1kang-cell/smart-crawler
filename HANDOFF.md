@@ -52,12 +52,15 @@ cd backend && uvicorn app.main:app --port 8077
 
 ### 高 — 业务核心
 
-- **修空站 vidaxl_ca**：实测根因 = `https://en.vidaxl.ca/sitemap_index.xml` HTTP 200
-  但 body 是空 `<sitemapindex/>`（站点没列子 sitemap）。改 `vidaxl.py:_crawl_storefront`
-  加 fallback：sitemap 空 → 主页 nav 发现 → 类别页爬。
-- **修空站 vidaxl_us**：实测 HTTP 401（Demandware Auth 墙）。需要客户提供 vidaxl
-  Dropshipping 账号（`VIDAXL_API_EMAIL` + `VIDAXL_API_TOKEN`），走路径1官方 API。
-  `vidaxl.py:_crawl_api` 代码已就绪。
+- **空站 vidaxl_ca**：根因已确认（2026-05-19 实测）= **业务暂停，非技术问题**。
+  VidaXL 已关闭加拿大市场，页面显示 "We're pausing orders until further notice."，
+  所有类别 0 商品，sitemap 为空。无任何爬取手段可绕过。等 VidaXL 重开加拿大站即可，
+  `vidaxl.py` 代码无需改动，重开后 sitemap 会自动填充。
+- **空站 vidaxl_us**：根因 = **全站 HTTP 401**（Salesforce Commerce Cloud B2B Auth 墙），
+  连 `robots.txt` 都 401。目前唯一可行路径：
+  (a) 住宅代理（`proxies.txt` 的 `[residential]` 段配好后取消注释），或
+  (b) VidaXL Dropshipping API 凭据（`VIDAXL_API_EMAIL` + `VIDAXL_API_TOKEN`）。
+  `vidaxl.py:_crawl_api` 代码已就绪，等凭据即可。
 - ~~**修空站 costway_pl**~~：✅ 已通（2026-05-19）。根因：costway.pl 不是 Magento，
   而是 **Shoper**（波兰本土电商系统），无 sitemap，JSON-LD 把商品字段拆成多个 block
   按 @id 合并。新写 `app/crawlers/shoper.py`，类别页发现 + 同 @id block 字段合并。

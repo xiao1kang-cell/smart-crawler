@@ -1,0 +1,512 @@
+[
+  {
+    "subreddit": "entrepreneur",
+    "rank": 1,
+    "username": "an_onanist",
+    "contributor_stats": {
+      "username": "an_onanist",
+      "subreddit": "entrepreneur",
+      "posts_in_sub": 1,
+      "post_total_score": 15492,
+      "reddit_age_days": 2933,
+      "link_karma": 111790,
+      "comment_karma": 11406,
+      "total_karma": 123196,
+      "profile_url": "https://www.reddit.com/u/an_onanist"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "entrepreneur",
+    "rank": 2,
+    "username": "HappyHippo95",
+    "contributor_stats": {
+      "username": "HappyHippo95",
+      "subreddit": "entrepreneur",
+      "posts_in_sub": 3,
+      "post_total_score": 11816,
+      "reddit_age_days": 0,
+      "link_karma": 0,
+      "comment_karma": 0,
+      "total_karma": 0,
+      "profile_url": "https://www.reddit.com/u/HappyHippo95"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "entrepreneur",
+    "rank": 3,
+    "username": "johnstevens456",
+    "contributor_stats": {
+      "username": "johnstevens456",
+      "subreddit": "entrepreneur",
+      "posts_in_sub": 3,
+      "post_total_score": 11374,
+      "reddit_age_days": 3916,
+      "link_karma": 13188,
+      "comment_karma": 17829,
+      "total_karma": 31017,
+      "profile_url": "https://www.reddit.com/u/johnstevens456"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "ecommerce",
+    "rank": 1,
+    "username": "RealOGMilkBone",
+    "contributor_stats": {
+      "username": "RealOGMilkBone",
+      "subreddit": "ecommerce",
+      "posts_in_sub": 2,
+      "post_total_score": 4713,
+      "reddit_age_days": 850,
+      "link_karma": 4497,
+      "comment_karma": 414,
+      "total_karma": 4911,
+      "profile_url": "https://www.reddit.com/u/RealOGMilkBone"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "ecommerce",
+    "rank": 2,
+    "username": "Apprehensive_Pay6141",
+    "contributor_stats": {
+      "username": "Apprehensive_Pay6141",
+      "subreddit": "ecommerce",
+      "posts_in_sub": 4,
+      "post_total_score": 2057,
+      "reddit_age_days": 518,
+      "link_karma": 24934,
+      "comment_karma": 5621,
+      "total_karma": 30555,
+      "profile_url": "https://www.reddit.com/u/Apprehensive_Pay6141"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "ecommerce",
+    "rank": 3,
+    "username": "ReggieMilligan",
+    "contributor_stats": {
+      "username": "ReggieMilligan",
+      "subreddit": "ecommerce",
+      "posts_in_sub": 4,
+      "post_total_score": 658,
+      "reddit_age_days": 3302,
+      "link_karma": 4637,
+      "comment_karma": 2185,
+      "total_karma": 6822,
+      "profile_url": "https://www.reddit.com/u/ReggieMilligan"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "AmazonFBA",
+    "rank": 1,
+    "username": "SlyGuyxD",
+    "contributor_stats": {
+      "username": "SlyGuyxD",
+      "subreddit": "AmazonFBA",
+      "posts_in_sub": 12,
+      "post_total_score": 2436,
+      "reddit_age_days": 3003,
+      "link_karma": 3058,
+      "comment_karma": 859,
+      "total_karma": 3917,
+      "profile_url": "https://www.reddit.com/u/SlyGuyxD"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "AmazonFBA",
+    "rank": 2,
+    "username": "Working_Attention_66",
+    "contributor_stats": {
+      "username": "Working_Attention_66",
+      "subreddit": "AmazonFBA",
+      "posts_in_sub": 13,
+      "post_total_score": 1127,
+      "reddit_age_days": 1155,
+      "link_karma": 759,
+      "comment_karma": 173,
+      "total_karma": 932,
+      "profile_url": "https://www.reddit.com/u/Working_Attention_66"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "AmazonFBA",
+    "rank": 3,
+    "username": "Davydi",
+    "contributor_stats": {
+      "username": "Davydi",
+      "subreddit": "AmazonFBA",
+      "posts_in_sub": 7,
+      "post_total_score": 598,
+      "reddit_age_days": 2091,
+      "link_karma": 480,
+      "comment_karma": 134,
+      "total_karma": 614,
+      "profile_url": "https://www.reddit.com/u/Davydi"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "dropshipping",
+    "rank": 1,
+    "username": "emmanuella_ella",
+    "contributor_stats": {
+      "username": "emmanuella_ella",
+      "subreddit": "dropshipping",
+      "posts_in_sub": 10,
+      "post_total_score": 2098,
+      "reddit_age_days": 136,
+      "link_karma": 776,
+      "comment_karma": 22,
+      "total_karma": 798,
+      "profile_url": "https://www.reddit.com/u/emmanuella_ella"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "dropshipping",
+    "rank": 2,
+    "username": "Tragilos",
+    "contributor_stats": {
+      "username": "Tragilos",
+      "subreddit": "dropshipping",
+      "posts_in_sub": 7,
+      "post_total_score": 2345,
+      "reddit_age_days": 4225,
+      "link_karma": 4331,
+      "comment_karma": 8932,
+      "total_karma": 13263,
+      "profile_url": "https://www.reddit.com/u/Tragilos"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "dropshipping",
+    "rank": 3,
+    "username": "ThrowAway_NeedInfo",
+    "contributor_stats": {
+      "username": "ThrowAway_NeedInfo",
+      "subreddit": "dropshipping",
+      "posts_in_sub": 7,
+      "post_total_score": 1646,
+      "reddit_age_days": 664,
+      "link_karma": 429,
+      "comment_karma": 356,
+      "total_karma": 785,
+      "profile_url": "https://www.reddit.com/u/ThrowAway_NeedInfo"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "smallbusiness",
+    "rank": 1,
+    "username": "Background-Shirt2415",
+    "contributor_stats": {
+      "username": "Background-Shirt2415",
+      "subreddit": "smallbusiness",
+      "posts_in_sub": 2,
+      "post_total_score": 20426,
+      "reddit_age_days": 0,
+      "link_karma": 0,
+      "comment_karma": 0,
+      "total_karma": 0,
+      "profile_url": "https://www.reddit.com/u/Background-Shirt2415"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "smallbusiness",
+    "rank": 2,
+    "username": "Cheap-Front-7722",
+    "contributor_stats": {
+      "username": "Cheap-Front-7722",
+      "subreddit": "smallbusiness",
+      "posts_in_sub": 4,
+      "post_total_score": 3384,
+      "reddit_age_days": 142,
+      "link_karma": 605,
+      "comment_karma": 820,
+      "total_karma": 1425,
+      "profile_url": "https://www.reddit.com/u/Cheap-Front-7722"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "smallbusiness",
+    "rank": 3,
+    "username": "Candid-Primary2891",
+    "contributor_stats": {
+      "username": "Candid-Primary2891",
+      "subreddit": "smallbusiness",
+      "posts_in_sub": 2,
+      "post_total_score": 2693,
+      "reddit_age_days": 1673,
+      "link_karma": 906,
+      "comment_karma": 1640,
+      "total_karma": 2546,
+      "profile_url": "https://www.reddit.com/u/Candid-Primary2891"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "startups",
+    "rank": 1,
+    "username": "Hot-Conversation-437",
+    "contributor_stats": {
+      "username": "Hot-Conversation-437",
+      "subreddit": "startups",
+      "posts_in_sub": 7,
+      "post_total_score": 2110,
+      "reddit_age_days": 0,
+      "link_karma": 0,
+      "comment_karma": 0,
+      "total_karma": 0,
+      "profile_url": "https://www.reddit.com/u/Hot-Conversation-437"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "startups",
+    "rank": 2,
+    "username": "findur20",
+    "contributor_stats": {
+      "username": "findur20",
+      "subreddit": "startups",
+      "posts_in_sub": 6,
+      "post_total_score": 1757,
+      "reddit_age_days": 1228,
+      "link_karma": 729,
+      "comment_karma": 79,
+      "total_karma": 808,
+      "profile_url": "https://www.reddit.com/u/findur20"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "startups",
+    "rank": 3,
+    "username": "wilschroter",
+    "contributor_stats": {
+      "username": "wilschroter",
+      "subreddit": "startups",
+      "posts_in_sub": 3,
+      "post_total_score": 1941,
+      "reddit_age_days": 5080,
+      "link_karma": 1957,
+      "comment_karma": 1663,
+      "total_karma": 3620,
+      "profile_url": "https://www.reddit.com/u/wilschroter"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "marketing",
+    "rank": 1,
+    "username": "biz_booster",
+    "contributor_stats": {
+      "username": "biz_booster",
+      "subreddit": "marketing",
+      "posts_in_sub": 15,
+      "post_total_score": 14455,
+      "reddit_age_days": 2725,
+      "link_karma": 39485,
+      "comment_karma": 1943,
+      "total_karma": 41428,
+      "profile_url": "https://www.reddit.com/u/biz_booster"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "marketing",
+    "rank": 2,
+    "username": "polygraph-net",
+    "contributor_stats": {
+      "username": "polygraph-net",
+      "subreddit": "marketing",
+      "posts_in_sub": 7,
+      "post_total_score": 5704,
+      "reddit_age_days": 2765,
+      "link_karma": 10184,
+      "comment_karma": 32541,
+      "total_karma": 42725,
+      "profile_url": "https://www.reddit.com/u/polygraph-net"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "marketing",
+    "rank": 3,
+    "username": "Torholic",
+    "contributor_stats": {
+      "username": "Torholic",
+      "subreddit": "marketing",
+      "posts_in_sub": 3,
+      "post_total_score": 4525,
+      "reddit_age_days": 0,
+      "link_karma": 0,
+      "comment_karma": 0,
+      "total_karma": 0,
+      "profile_url": "https://www.reddit.com/u/Torholic"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "SEO",
+    "rank": 1,
+    "username": "WebLinkr",
+    "contributor_stats": {
+      "username": "WebLinkr",
+      "subreddit": "SEO",
+      "posts_in_sub": 27,
+      "post_total_score": 4635,
+      "reddit_age_days": 2659,
+      "link_karma": 16181,
+      "comment_karma": 33067,
+      "total_karma": 49248,
+      "profile_url": "https://www.reddit.com/u/WebLinkr"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "SEO",
+    "rank": 2,
+    "username": "Character_Ad_1990",
+    "contributor_stats": {
+      "username": "Character_Ad_1990",
+      "subreddit": "SEO",
+      "posts_in_sub": 5,
+      "post_total_score": 2522,
+      "reddit_age_days": 1961,
+      "link_karma": 798,
+      "comment_karma": 1171,
+      "total_karma": 1969,
+      "profile_url": "https://www.reddit.com/u/Character_Ad_1990"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "SEO",
+    "rank": 3,
+    "username": "tetonpassboarder",
+    "contributor_stats": {
+      "username": "tetonpassboarder",
+      "subreddit": "SEO",
+      "posts_in_sub": 2,
+      "post_total_score": 2796,
+      "reddit_age_days": 3834,
+      "link_karma": 6902,
+      "comment_karma": 3004,
+      "total_karma": 9906,
+      "profile_url": "https://www.reddit.com/u/tetonpassboarder"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "SideProject",
+    "rank": 1,
+    "username": "Pristine-Elevator198",
+    "contributor_stats": {
+      "username": "Pristine-Elevator198",
+      "subreddit": "SideProject",
+      "posts_in_sub": 8,
+      "post_total_score": 20371,
+      "reddit_age_days": 449,
+      "link_karma": 196516,
+      "comment_karma": 469,
+      "total_karma": 196985,
+      "profile_url": "https://www.reddit.com/u/Pristine-Elevator198"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "SideProject",
+    "rank": 2,
+    "username": "nocturnality03",
+    "contributor_stats": {
+      "username": "nocturnality03",
+      "subreddit": "SideProject",
+      "posts_in_sub": 4,
+      "post_total_score": 14080,
+      "reddit_age_days": 1652,
+      "link_karma": 14017,
+      "comment_karma": 1516,
+      "total_karma": 15533,
+      "profile_url": "https://www.reddit.com/u/nocturnality03"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "SideProject",
+    "rank": 3,
+    "username": "officer_KD6-3-7",
+    "contributor_stats": {
+      "username": "officer_KD6-3-7",
+      "subreddit": "SideProject",
+      "posts_in_sub": 2,
+      "post_total_score": 12477,
+      "reddit_age_days": 2344,
+      "link_karma": 2862,
+      "comment_karma": 935,
+      "total_karma": 3797,
+      "profile_url": "https://www.reddit.com/u/officer_KD6-3-7"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "growthhacking",
+    "rank": 1,
+    "username": "IntelligentCan4",
+    "contributor_stats": {
+      "username": "IntelligentCan4",
+      "subreddit": "growthhacking",
+      "posts_in_sub": 10,
+      "post_total_score": 1140,
+      "reddit_age_days": 0,
+      "link_karma": 0,
+      "comment_karma": 0,
+      "total_karma": 0,
+      "profile_url": "https://www.reddit.com/u/IntelligentCan4"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "growthhacking",
+    "rank": 2,
+    "username": "Ecstatic-Tough6503",
+    "contributor_stats": {
+      "username": "Ecstatic-Tough6503",
+      "subreddit": "growthhacking",
+      "posts_in_sub": 9,
+      "post_total_score": 470,
+      "reddit_age_days": 309,
+      "link_karma": 23705,
+      "comment_karma": 2058,
+      "total_karma": 25763,
+      "profile_url": "https://www.reddit.com/u/Ecstatic-Tough6503"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  },
+  {
+    "subreddit": "growthhacking",
+    "rank": 3,
+    "username": "donaltramp699",
+    "contributor_stats": {
+      "username": "donaltramp699",
+      "subreddit": "growthhacking",
+      "posts_in_sub": 8,
+      "post_total_score": 544,
+      "reddit_age_days": 0,
+      "link_karma": 0,
+      "comment_karma": 0,
+      "total_karma": 0,
+      "profile_url": "https://www.reddit.com/u/donaltramp699"
+    },
+    "error": "Error code: 401 - {'code': 'INVALID_API_KEY', 'message': 'Invalid API key'}"
+  }
+]

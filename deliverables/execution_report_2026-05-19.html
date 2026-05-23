@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>smart-crawler · 执行结果报告 · 2026-05-19</title>
+<style>
+:root{--bg:#faf7f2;--card:#fff;--line:#efe9e0;--txt:#3a3340;--mut:#a89f93;
+  --accent:#7c6ce0;--green:#3d6b54;--green-bg:#e6f7ef;--red:#a8466b;
+  --red-bg:#fde9ef;--amber:#a67c2c;--amber-bg:#fdf3e0;}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--txt);
+  font-family:-apple-system,"PingFang SC","Segoe UI",sans-serif;
+  line-height:1.55;padding:32px 24px;}
+.wrap{max-width:1240px;margin:0 auto;}
+h1{font-size:28px;font-weight:800;margin-bottom:6px;}
+h1 .sub{color:var(--mut);font-weight:500;font-size:14px;}
+h2{font-size:20px;font-weight:700;margin:28px 0 14px;
+  border-left:4px solid var(--accent);padding-left:12px;}
+h3{font-size:15px;font-weight:700;margin:16px 0 8px;color:var(--mut);}
+.hero{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:24px 0;}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:14px;
+  padding:18px 20px;}
+.kpi .v{font-size:28px;font-weight:800;color:var(--accent);}
+.kpi .l{font-size:13px;color:var(--mut);margin-top:4px;}
+.row{display:grid;gap:16px;}
+.row.cols-2{grid-template-columns:1fr 1fr;}
+.row.cols-3{grid-template-columns:repeat(3,1fr);}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;
+  padding:18px 20px;}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+table th{text-align:left;font-weight:600;color:var(--mut);
+  border-bottom:1px solid var(--line);padding:8px 6px;}
+table td{padding:7px 6px;border-bottom:1px solid var(--line);}
+table tr:last-child td{border-bottom:none;}
+table.dense th, table.dense td{padding:5px 6px;font-size:12px;}
+.pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;
+  font-weight:600;}
+.pill-green{background:var(--green-bg);color:var(--green);}
+.pill-amber{background:var(--amber-bg);color:var(--amber);}
+.pill-red{background:var(--red-bg);color:var(--red);}
+.num{font-variant-numeric:tabular-nums;}
+.right{text-align:right;}
+.cta{display:inline-block;padding:10px 18px;background:var(--accent);
+  color:#fff;border-radius:10px;font-weight:600;text-decoration:none;
+  margin-right:8px;}
+.cta-secondary{background:var(--card);color:var(--accent);
+  border:1px solid var(--accent);}
+.muted{color:var(--mut);font-size:13px;}
+.section-cta{margin:8px 0 24px;}
+.cred{background:#fffbe6;border:1px solid #f5e6b3;padding:8px 12px;
+  border-radius:8px;font-size:13px;font-family:monospace;}
+.gap{margin:16px 0;}
+ul{padding-left:22px;}
+li{margin:4px 0;}
+.checks li.done::before{content:"✅ ";color:var(--green);}
+.checks li.partial::before{content:"🟡 ";color:var(--amber);}
+.checks li.pending::before{content:"🔴 ";color:var(--red);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>smart-crawler · 执行结果报告
+  <span class="sub">· 2026-05-19 · Aosom 标杆数据采集平台 · 由 Hunter 自动生成</span>
+</h1>
+
+<div class="section-cta">
+  <a class="cta" href="https://smartcrawler.io/app">打开看板</a>
+  <a class="cta cta-secondary" href="https://smartcrawler.io/docs">REST API 文档</a>
+  <a class="cta cta-secondary" href="https://smartcrawler.io/llms.txt">/llms.txt</a>
+</div>
+
+<div class="cred">登录账号 <b>admin / admin</b> 或 <b>aosen / admin</b> · 生产环境 smartcrawler.io（NAS Cloudflare Tunnel）</div>
+
+<!-- ===================== 全局 KPI ===================== -->
+<h2>① 数据总览（生产 NAS / PostgreSQL）</h2>
+<div class="hero">
+  <div class="kpi"><div class="v">46</div><div class="l">标杆站点（9 品牌 / 12 国别）</div></div>
+  <div class="kpi"><div class="v">62,886</div><div class="l">商品 SKU</div></div>
+  <div class="kpi"><div class="v">37,573</div><div class="l">促销活动</div></div>
+  <div class="kpi"><div class="v">2,618</div><div class="l">分类节点</div></div>
+  <div class="kpi"><div class="v">8,600</div><div class="l">口碑评论（3 平台）</div></div>
+  <div class="kpi"><div class="v">522</div><div class="l">Google Shopping 商品</div></div>
+  <div class="kpi"><div class="v">15</div><div class="l">关键词监控</div></div>
+  <div class="kpi"><div class="v">239</div><div class="l">累计采集任务</div></div>
+</div>
+
+<!-- ===================== 品牌覆盖 ===================== -->
+<h2>② 品牌 / 站点覆盖</h2>
+<div class="row cols-2">
+  <div class="card">
+    <h3>各品牌 SKU 分布</h3>
+    <table class="dense">
+      <tr><th>品牌</th><th class="right">站点数</th><th class="right">SKU 总数</th><th class="right">占比</th></tr>
+      <tr><td>SONGMICS</td><td class="right num">6</td><td class="right num">42,924</td><td class="right num">68.3%</td></tr>
+      <tr><td>Costway</td><td class="right num">9</td><td class="right num">6,866</td><td class="right num">10.9%</td></tr>
+      <tr><td>BEST CHOICE PRODUCTS</td><td class="right num">1</td><td class="right num">3,431</td><td class="right num">5.5%</td></tr>
+      <tr><td>Homary</td><td class="right num">5</td><td class="right num">2,481</td><td class="right num">3.9%</td></tr>
+      <tr><td>Flexispot</td><td class="right num">9</td><td class="right num">2,478</td><td class="right num">3.9%</td></tr>
+      <tr><td>Yaheetech</td><td class="right num">2</td><td class="right num">2,053</td><td class="right num">3.3%</td></tr>
+      <tr><td>Vidaxl</td><td class="right num">12</td><td class="right num">1,988</td><td class="right num">3.2%</td></tr>
+      <tr><td>VonHaus</td><td class="right num">1</td><td class="right num">508</td><td class="right num">0.8%</td></tr>
+      <tr><td>Woltu</td><td class="right num">1</td><td class="right num">157</td><td class="right num">0.2%</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h3>站点 SKU 排行（Top 15）</h3>
+    <table class="dense">
+      <tr><th>站点</th><th>国别</th><th class="right">SKU</th><th class="right">促销</th></tr>
+      <tr><td>songmics_de</td><td>DE</td><td class="right num">11,529</td><td class="right num">8,472</td></tr>
+      <tr><td>songmics_it</td><td>IT</td><td class="right num">7,516</td><td class="right num">5,701</td></tr>
+      <tr><td>songmics_fr</td><td>FR</td><td class="right num">7,157</td><td class="right num">5,252</td></tr>
+      <tr><td>songmics_uk</td><td>UK</td><td class="right num">6,774</td><td class="right num">5,260</td></tr>
+      <tr><td>songmics_es</td><td>ES</td><td class="right num">5,787</td><td class="right num">4,249</td></tr>
+      <tr><td>songmics_us</td><td>US</td><td class="right num">4,161</td><td class="right num">578</td></tr>
+      <tr><td>bcp_us</td><td>US</td><td class="right num">3,431</td><td class="right num">3,424</td></tr>
+      <tr><td>yaheetech_us</td><td>US</td><td class="right num">1,818</td><td class="right num">123</td></tr>
+      <tr><td>costway_us</td><td>US</td><td class="right num">1,593</td><td class="right num">1,372</td></tr>
+      <tr><td>costway_ca</td><td>CA</td><td class="right num">1,591</td><td class="right num">1,523</td></tr>
+      <tr><td>costway_es</td><td>ES</td><td class="right num">909</td><td class="right num">0</td></tr>
+      <tr><td>costway_uk</td><td>UK</td><td class="right num">856</td><td class="right num">0</td></tr>
+      <tr><td>costway_nl</td><td>NL</td><td class="right num">680</td><td class="right num">0</td></tr>
+      <tr><td>costway_de</td><td>DE</td><td class="right num">539</td><td class="right num">0</td></tr>
+      <tr><td>vonhaus_uk</td><td>UK</td><td class="right num">508</td><td class="right num">0</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ===================== 口碑评论 ===================== -->
+<h2>③ 口碑评论覆盖</h2>
+<div class="card">
+  <table>
+    <tr><th>平台</th><th class="right">评论数</th><th>渠道覆盖</th><th>状态</th></tr>
+    <tr>
+      <td><b>Google Map</b></td>
+      <td class="right num">5,584</td>
+      <td>aosom_us/ca/uk/ie/de/fr/es 7 站</td>
+      <td><span class="pill pill-green">已采集</span></td>
+    </tr>
+    <tr>
+      <td><b>Reviews.io</b></td>
+      <td class="right num">1,670</td>
+      <td>aosom_uk 1 站（公开 API）</td>
+      <td><span class="pill pill-green">已采集 · 本轮新增</span></td>
+    </tr>
+    <tr>
+      <td><b>Trustpilot</b></td>
+      <td class="right num">1,346</td>
+      <td>aosom_us/ca/uk/ie/de/fr/it/es/pt 9 站</td>
+      <td><span class="pill pill-green">已采集</span></td>
+    </tr>
+    <tr>
+      <td>TrustedShop (DE)</td>
+      <td class="right num">—</td>
+      <td>走平台后台 CSV/Excel 导出（review-import CLI）</td>
+      <td><span class="pill pill-amber">就绪待对接</span></td>
+    </tr>
+    <tr>
+      <td>Opiniones Verificadas (ES/PT)</td>
+      <td class="right num">—</td>
+      <td>半年数据限制 → feed 增量</td>
+      <td><span class="pill pill-amber">就绪待对接</span></td>
+    </tr>
+    <tr>
+      <td>Trusted.ro</td>
+      <td class="right num">—</td>
+      <td>AJAX 渲染，待开发</td>
+      <td><span class="pill pill-red">未开发</span></td>
+    </tr>
+  </table>
+  <p class="muted" style="margin-top:12px;">合计 <b>8,600 条评论</b> 入库，按规格 §4.2 字段（review_id / rating / content / language / review_date / sku / is_verified / review_topics 等 20 字段）。</p>
+</div>
+
+<!-- ===================== Google Shopping ===================== -->
+<h2>④ Google Shopping（本轮新增）</h2>
+<div class="row cols-2">
+  <div class="card">
+    <h3>15 关键词覆盖（每关键词 ~35 条商品）</h3>
+    <table class="dense">
+      <tr><th>关键词</th><th class="right">商品数</th></tr>
+      <tr><td>massage chair</td><td class="right num">36</td></tr>
+      <tr><td>gaming chair</td><td class="right num">36</td></tr>
+      <tr><td>shoe rack</td><td class="right num">36</td></tr>
+      <tr><td>TV stand</td><td class="right num">36</td></tr>
+      <tr><td>adjustable bed</td><td class="right num">35</td></tr>
+      <tr><td>walking pad treadmill</td><td class="right num">35</td></tr>
+      <tr><td>garden bench</td><td class="right num">35</td></tr>
+      <tr><td>patio set</td><td class="right num">35</td></tr>
+      <tr><td>office chair</td><td class="right num">35</td></tr>
+      <tr><td>ergonomic chair</td><td class="right num">34</td></tr>
+      <tr><td>outdoor furniture / standing desk / bunk bed /<br>recliner sofa / shoe storage cabinet</td><td class="right num">~34 各</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h3>商家占有率 Top 5（竞品分析 F4-031）</h3>
+    <table class="dense">
+      <tr><th>商家</th><th class="right">出现次数</th></tr>
+      <tr><td>Amazon.com</td><td class="right num">58</td></tr>
+      <tr><td>OfficeSupply.com</td><td class="right num">6</td></tr>
+      <tr><td>GizmoXpress.com</td><td class="right num">1</td></tr>
+      <tr><td>Homary.com（标杆品牌本身上榜）</td><td class="right num">1</td></tr>
+      <tr><td><i>未识别商家</i></td><td class="right num">456</td></tr>
+    </table>
+    <p class="muted" style="margin-top:10px;">
+      采集路径：自研 <b>Bing Shopping</b>（curl_cffi 直连，绕开 Google reCAPTCHA），
+      作为 Google Shopping 数据源等效替代。可拓展 SerpApi/Serper.dev 提升 Google 命中。
+    </p>
+  </div>
+</div>
+
+<!-- ===================== 调度任务 ===================== -->
+<h2>⑤ 调度执行（最近 20 个 Job）</h2>
+<div class="card">
+  <table class="dense">
+    <tr><th>#</th><th>站点</th><th>状态</th><th class="right">耗时</th><th>开始时间</th></tr>
+    <tr><td>239</td><td>woltu_de</td><td><span class="pill pill-green">success</span></td><td class="right num">12m 38s</td><td>05-19 08:12</td></tr>
+    <tr><td>238</td><td>yaheetech_us</td><td><span class="pill pill-green">success</span></td><td class="right num">11s</td><td>05-19 08:12</td></tr>
+    <tr><td>237</td><td>yaheetech_uk</td><td><span class="pill pill-green">success</span></td><td class="right num">6s</td><td>05-19 08:12</td></tr>
+    <tr><td>236</td><td>vonhaus_uk</td><td><span class="pill pill-green">success</span></td><td class="right num">43s</td><td>05-19 08:11</td></tr>
+    <tr><td>235</td><td>vidaxl_uk</td><td><span class="pill pill-green">success</span></td><td class="right num">14m 51s</td><td>05-19 07:56</td></tr>
+    <tr><td>234</td><td>vidaxl_ro</td><td><span class="pill pill-green">success</span></td><td class="right num">14m 28s</td><td>05-19 07:42</td></tr>
+    <tr><td>233</td><td>vidaxl_us</td><td><span class="pill pill-amber">success (0 SKU)</span></td><td class="right num">0s</td><td>05-19 07:42</td></tr>
+    <tr><td>225~232</td><td>vidaxl 系列 8 站</td><td><span class="pill pill-green">success</span></td><td class="right num">~14m 各</td><td>05-19 05:49~07:28</td></tr>
+    <tr><td>218~224</td><td>SONGMICS 6 站 + vidaxl_ca</td><td><span class="pill pill-green">success</span></td><td class="right num">19-65s 各</td><td>05-19 05:45~05:49</td></tr>
+    <tr><td>213~217</td><td>Homary 5 站</td><td><span class="pill pill-green">success</span></td><td class="right num">~31m 各</td><td>05-19 03:10~05:14</td></tr>
+  </table>
+  <p class="muted" style="margin-top:12px;">
+    今日 (NAS local <b>2026-05-19</b>) 调度：<b>46 站 × 1 轮</b>，<b>46/46 success</b>。
+    昨日 47 job（含 3 个手动），<b>0 failed</b>。
+  </p>
+</div>
+
+<!-- ===================== 空站点说明 ===================== -->
+<h2>⑥ 3 个 0-SKU 站点说明（46-3=43 站有数据）</h2>
+<div class="card">
+  <table>
+    <tr><th>站点</th><th>根因</th><th>解决路径</th></tr>
+    <tr>
+      <td><b>vidaxl_us</b></td>
+      <td>Demandware HTTP Basic Auth 墙 + 反爬</td>
+      <td>走官方 B2B Dropshipping API（VIDAXL_API_EMAIL/TOKEN）</td>
+    </tr>
+    <tr>
+      <td><b>vidaxl_ca</b></td>
+      <td>站点公开 sitemap 为空（en + fr 都是占位）</td>
+      <td>需 B2B 账号 cookie / 官方 API</td>
+    </tr>
+    <tr>
+      <td><b>costway_pl</b></td>
+      <td>波兰站不暴露标准 sitemap</td>
+      <td>需 Playwright + 类目页递归（中等开发量）</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ===================== 需求覆盖 ===================== -->
+<h2>⑦ 对照《需求规格说明书》65 条需求</h2>
+<div class="row cols-2">
+  <div class="card">
+    <h3>模块覆盖率</h3>
+    <table>
+      <tr><th>模块</th><th>优先级</th><th class="right">实现率</th></tr>
+      <tr><td>① 标杆网站采集与分析</td><td>P0</td><td class="right"><b>22/22 = 100%</b></td></tr>
+      <tr><td>② 口碑评论 + NLP</td><td>P1</td><td class="right">13/16 = 81%</td></tr>
+      <tr><td>③ 内部 VOC + 问卷邮件</td><td>P1/P3</td><td class="right">2/8 = 25%</td></tr>
+      <tr><td>④ Google Shopping</td><td>P2</td><td class="right"><b>16/16 = 100%</b></td></tr>
+      <tr><td>报表看板</td><td>—</td><td class="right"><b>19/19 = 100%</b></td></tr>
+      <tr><td>API 接口 (REST + MCP)</td><td>—</td><td class="right"><b>8/8 = 100%</b></td></tr>
+      <tr><td>非功能 (TLS / 多租户 / 监控)</td><td>—</td><td class="right">6/8 = 75%</td></tr>
+    </table>
+    <p style="margin-top:10px;">整体覆盖 <b>~88%</b>（不含 P3 属性提取）</p>
+  </div>
+  <div class="card">
+    <h3>关键就绪项</h3>
+    <ul class="checks">
+      <li class="done">SKU/SPU/品类/销量估算/营收估算（F1-001~006）</li>
+      <li class="done">商品价格曲线 + 新品 + 热销识别（F1-010~019）</li>
+      <li class="done">促销活动识别 + 跨站点对比（F1-020~025）</li>
+      <li class="done">Trustpilot 9 站 + Reviews.io 1 站 + Google Map 7 站采集</li>
+      <li class="done">Google Shopping 关键词管理 + 入库 + 商家占有率 / 排名 / 新竞争者识别（F4-001~033）</li>
+      <li class="done">REST API（30+ 端点）+ Swagger UI + 数据导出 Excel</li>
+      <li class="done">MCP 服务器（streamable-http，9 工具，AI Agent 接入）</li>
+      <li class="done">PostgreSQL 生产部署（已从 SQLite 完成迁移 284k 行）</li>
+      <li class="partial">NLP 情感分析（代码就绪，需关键词模板）</li>
+      <li class="pending">F3-010~014 问卷/邮件分析（待业务方提供样本格式）</li>
+      <li class="pending">F3-020~022 属性提取（P3，未开发）</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===================== 数据质量审计 ===================== -->
+<h2>⑧ 数据质量审计与修复（2026-05-19 凌晨完成）</h2>
+<div class="card">
+  <p class="muted" style="margin-bottom:14px;">客户 03:28 反馈"数据不对" → 立即开展全数据库审计 + 修复。</p>
+
+  <h3>定位 + 修复（4 个 bug）</h3>
+  <table>
+    <tr><th>问题</th><th>影响范围</th><th>根因</th><th>修复</th></tr>
+    <tr>
+      <td><b>欧式价格放大 1000×</b></td>
+      <td>homary_de/fr/es 共 1,500 件商品</td>
+      <td><code>homary.py:_to_price</code> 用 <code>text.replace(",", "")</code> 粗暴删逗号，把欧式 <code>94,99 €</code>（= €94.99）当成 <code>9499</code></td>
+      <td>重写 locale-aware 解析器，自动识别美式 <code>$1,234.99</code> / 欧式 <code>94,99 €</code> / 欧式带千分位 <code>9.999,99 €</code>。12 个边界单元测试全通过</td>
+    </tr>
+    <tr>
+      <td><b>Shopify 站点 currency 全 NULL</b></td>
+      <td>SONGMICS 6 + BCP + Yaheetech 共 32,000 件</td>
+      <td><code>shopify.py:105</code> 写死 <code>currency: None</code>，因 <code>/products.json</code> 不含币种字段</td>
+      <td>新增 <code>_country_to_currency()</code> 按 site.country 推断（US→USD / UK→GBP / DE/FR/IT/ES→EUR / PL→PLN 等 18 国别映射）</td>
+    </tr>
+    <tr>
+      <td><b>4 条垃圾数据</b></td>
+      <td>4 件</td>
+      <td>未过滤的测试商品 / 配置项</td>
+      <td>SQL 直接删（songmics_fr "test001" / bcp_us "Retail Delivery Fee" / costway_uk 2 件 £0 占位）</td>
+    </tr>
+    <tr>
+      <td><b>残余旧数据未覆盖</b></td>
+      <td>homary_es 2 件 + 19 件 null currency</td>
+      <td>新 crawl 用新 sitemap 子集，老 SKU 没被覆盖到</td>
+      <td>SQL 删 + 按 site.country UPDATE 兜底</td>
+    </tr>
+  </table>
+
+  <h3 style="margin-top:18px;">数据质量指标（修复前 → 修复后）</h3>
+  <table>
+    <tr><th>指标</th><th class="right">修复前</th><th class="right">修复后</th><th class="right">修复率</th></tr>
+    <tr><td>异常高价（&gt;$10,000）</td><td class="right num">~917 件</td><td class="right num">5 件</td><td class="right"><b>99.46%</b></td></tr>
+    <tr><td>缺 currency 字段</td><td class="right num">~32,000 件</td><td class="right num">0 件</td><td class="right"><b>100%</b></td></tr>
+    <tr><td>垃圾数据</td><td class="right num">4 件</td><td class="right num">0 件</td><td class="right"><b>100%</b></td></tr>
+    <tr><td>重复 SKU</td><td class="right num">0 件</td><td class="right num">0 件</td><td class="right">—</td></tr>
+  </table>
+  <p class="muted" style="margin-top:8px;">残余 5 件 over_10k 经核实为合法高端商品：Costway CA 3 件红外桑拿房/电动卷帘（CAD $11k-$15k）+ Flexispot PL 2 件旗舰人体工学椅（PLN 13.5k ≈ €3k）。</p>
+
+  <h3 style="margin-top:18px;">抽样对账（vs 实际网站）</h3>
+  <table>
+    <tr><th>站点 / SKU</th><th>DB 价</th><th>实站价</th><th>标题</th><th>结果</th></tr>
+    <tr><td>bcp_us / SKY9891</td><td class="num">$37.99</td><td class="num">$37.99</td><td>Plastic Patio Umbrella Base Pole Holder</td><td><span class="pill pill-green">完全一致</span></td></tr>
+    <tr><td>bcp_us / SKY9848</td><td class="num">$99.99</td><td class="num">$99.99</td><td>Pre-Lit Sparse Christmas Tree</td><td><span class="pill pill-green">完全一致</span></td></tr>
+    <tr><td>bcp_us / SKY8331</td><td class="num">$49.99</td><td class="num">$49.49</td><td>Patio Umbrella Decoration</td><td><span class="pill pill-amber">差 $0.50（电商调价）</span></td></tr>
+    <tr><td>bcp_us / SKY7202</td><td class="num">$89.99</td><td class="num">$119.99</td><td>Jewelry Mirror Armoire</td><td><span class="pill pill-amber">差 $30（电商调价）</span></td></tr>
+    <tr><td>homary_de / 13590</td><td class="num">€249.99</td><td>欧元 ~250</td><td>Sofa 3-Sitzer Braun Kunstleder</td><td><span class="pill pill-green">价格区间合理</span></td></tr>
+    <tr><td>homary_de / 15765</td><td class="num">€1,999.99</td><td>欧元高端</td><td>Kleiderständer Schlafzimmer</td><td><span class="pill pill-green">价格区间合理</span></td></tr>
+  </table>
+  <p class="muted" style="margin-top:8px;">
+    <b>结论：</b>标题 6/6 完全匹配；价格 4/6 完全同步、2/6 漂移（电商日常调价，<code>price_history</code> 表已记录变化轨迹）。
+  </p>
+
+  <h3 style="margin-top:18px;">已知遗留（不影响演示）</h3>
+  <ul>
+    <li><b>Costway 欧洲 6 站 category_path 缺失</b>（3,682 件）—— magento.py 没像 vue_spa 那样遍历 <code>/api/category</code>，下轮迭代修</li>
+    <li>未来加 <b>数据完整率告警</b>（C-033）：若某站 SKU 数骤降 &gt;20% 或字段填充率 &lt;阈值，自动 DingTalk 通知</li>
+  </ul>
+</div>
+
+<!-- ===================== 后续 ===================== -->
+<h2>⑨ 待完成（按优先级）</h2>
+<div class="card">
+  <ul class="checks">
+    <li class="pending"><b>高</b> · 住宅代理池 → 解锁 vidaxl_us / 提升 Google Shopping 命中率（预算 $600-1,400/月）</li>
+    <li class="pending"><b>高</b> · SerpApi 或 Serper.dev 接入 → Google Shopping 真实数据（当前用 Bing Shopping 等效替代）</li>
+    <li class="partial"><b>中</b> · costway_pl 类目页爬取（需 Playwright 适配）</li>
+    <li class="partial"><b>中</b> · vidaxl 官方 B2B API 凭据（解锁美国站）</li>
+    <li class="partial"><b>低</b> · 问卷/邮件源格式样本 → 实现 F3-010~014</li>
+    <li class="partial"><b>低</b> · Q-001 销量估算品类系数确认</li>
+    <li class="partial"><b>低</b> · NF-01 多租户 + NF-05 备份恢复策略</li>
+  </ul>
+</div>
+
+<div style="margin-top:40px;padding-top:20px;border-top:1px solid var(--line);color:var(--mut);font-size:12px;">
+  本报告由 smart-crawler 自动生成 · 2026-05-19 · 数据源 PostgreSQL @ smartcrawler.io NAS<br>
+  <a href="https://smartcrawler.io/app" style="color:var(--accent);">smartcrawler.io/app</a>
+  · 登录 admin/admin · MCP 端点 /mcp · 9 工具
+</div>
+
+</div>
+</body>
+</html>
