@@ -1,1079 +1,542 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>smart-crawler · 遨森标杆数据采集平台</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>smart-crawler · Admin Dashboard v8</title>
+<script src="https://unpkg.com/vue@3.4.27/dist/vue.global.prod.js"></script>
 <style>
-  :root{
-    --bg:#faf7f2; --card:#ffffff; --line:#efe9e0; --line2:#f3eee6;
-    --txt:#3a3340; --mut:#a89f93; --accent:#7c6ce0; --accent-sl:#efe9ff;
-    --accent2:#d76b8f; --accent2-sl:#fde9ef;
-    --green:#3d6b54; --green-bg:#e6f7ef; --red:#a8466b; --red-bg:#fde9ef;
-  }
-  *{margin:0;padding:0;box-sizing:border-box;}
-  body{background:var(--bg);color:var(--txt);
-    font-family:-apple-system,"PingFang SC","Segoe UI",sans-serif;
-    -webkit-font-smoothing:antialiased;}
-  #app{min-height:100vh;}
-  a{color:var(--accent);text-decoration:none;}
-  .mk{width:1.3em;height:1.3em;vertical-align:-.26em;margin-right:6px;}
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Inter','PingFang SC',-apple-system,BlinkMacSystemFont,sans-serif}
+html,body{background:#0a0612;color:#e5e7eb;font-size:14px;line-height:1.55;min-height:100vh}
+a{color:#a78bfa;text-decoration:none}
+button{font-family:inherit}
+input,select{font-family:inherit}
 
-  /* ===== 登录 ===== */
-  .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;}
-  .login-card{width:380px;background:var(--card);border-radius:20px;
-    padding:40px 36px;box-shadow:0 18px 50px rgba(124,108,224,.14);}
-  .login-card .logo{font-size:21px;font-weight:800;}
-  .login-card .logo span{color:var(--accent);}
-  .login-card .sub{color:var(--mut);font-size:12px;margin:7px 0 28px;}
-  .field{margin-bottom:14px;}
-  .field label{display:block;font-size:12px;color:var(--mut);margin-bottom:7px;}
-  .field input{width:100%;padding:12px 14px;background:#faf8f5;
-    border:1.5px solid var(--line);border-radius:12px;color:var(--txt);font-size:14px;}
-  .field input:focus{outline:none;border-color:var(--accent);background:#fff;}
-  .login-btn{width:100%;margin-top:10px;padding:12px;border:none;border-radius:12px;
-    background:var(--accent);color:#fff;font-weight:700;font-size:14px;cursor:pointer;}
-  .login-btn:hover{background:#6a5ad0;}
-  .login-btn:disabled{opacity:.5;cursor:not-allowed;}
-  .login-err{color:var(--red);font-size:12px;margin-top:12px;min-height:16px;}
-  .login-hint{color:#c8bfb2;font-size:11px;margin-top:20px;text-align:center;}
+/* LOGIN */
+.login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.login-card{background:#13111f;border:1px solid #29213a;border-radius:18px;padding:38px 36px;width:380px;max-width:100%;box-shadow:0 24px 70px rgba(0,0,0,.5)}
+.login-brand{font-size:1.6rem;font-weight:900;letter-spacing:-1px;background:linear-gradient(90deg,#a78bfa,#f472b6);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:5px}
+.login-sub{font-size:0.84rem;color:#94a3b8;margin-bottom:24px}
+.login-field{margin-bottom:14px}
+.login-field label{display:block;font-size:0.74rem;color:#94a3b8;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;font-weight:700}
+.login-field input{width:100%;background:#0d0a17;border:1px solid #29213a;border-radius:8px;padding:11px 14px;color:#fff;font-size:0.92rem;outline:none}
+.login-field input:focus{border-color:#a78bfa}
+.login-btn{width:100%;background:linear-gradient(135deg,#a78bfa,#f472b6);color:#fff;border:none;padding:11px;border-radius:8px;font-size:0.92rem;font-weight:700;cursor:pointer;margin-top:8px}
+.login-btn:disabled{opacity:.5;cursor:not-allowed}
+.login-err{color:#fda4af;font-size:0.78rem;margin-top:8px;min-height:18px}
 
-  /* ===== 顶栏 ===== */
-  .topbar{background:var(--card);border-bottom:1px solid var(--line);
-    padding:13px 24px;display:flex;align-items:center;gap:15px;flex-wrap:wrap;}
-  .logo{font-size:16px;font-weight:800;}
-  .logo span{color:var(--accent);}
-  select{padding:8px 12px;border:1.5px solid var(--line);border-radius:10px;
-    font-size:13px;background:#faf8f5;color:var(--txt);}
-  select:focus{outline:none;border-color:var(--accent);}
-  .site-url{color:var(--mut);font-size:12px;}
-  .spacer{flex:1;}
-  .who{color:var(--mut);font-size:12px;}
-  .who b{color:var(--accent);}
-  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
-    background:#3dc98a;margin-right:5px;vertical-align:middle;}
-  .btn{padding:8px 14px;border:1.5px solid var(--line);border-radius:10px;
-    background:var(--card);color:var(--txt);font-size:12px;cursor:pointer;}
-  .btn:hover{border-color:var(--accent);color:var(--accent);}
-  .btn.solid{background:var(--accent);color:#fff;border-color:var(--accent);
-    font-weight:600;}
-  .btn.solid:hover{background:#6a5ad0;}
-  .btn:disabled{opacity:.5;cursor:not-allowed;}
+/* TOP BAR */
+.topbar{position:sticky;top:0;z-index:100;background:rgba(10,6,18,.94);backdrop-filter:blur(12px);border-bottom:1px solid #29213a;padding:11px 22px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.brand{font-weight:900;letter-spacing:-0.4px;font-size:1.05rem;background:linear-gradient(90deg,#a78bfa,#f472b6);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.site-picker{display:flex;align-items:center;gap:8px;padding:5px 11px 5px 7px;border-radius:8px;background:#13111f;border:1px solid #29213a;cursor:pointer;font-size:0.82rem}
+.site-picker:hover{border-color:#a78bfa}
+.site-picker .ws-icon{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#a78bfa,#f472b6);display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:900;color:#fff}
+.site-picker select{background:transparent;border:none;color:#fff;font-weight:700;outline:none;cursor:pointer;font-size:0.82rem;max-width:160px}
 
-  /* ===== Tab ===== */
-  .tabs{background:var(--card);padding:0 24px;display:flex;gap:6px;
-    border-bottom:1px solid var(--line);}
-  .tab{padding:13px 18px;cursor:pointer;font-size:14px;color:var(--mut);
-    border-bottom:2.5px solid transparent;}
-  .tab:hover{color:var(--txt);}
-  .tab.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:700;}
-  .main{padding:22px 24px;}
+.tab-row{display:flex;gap:4px;flex:1;flex-wrap:wrap}
+.tab{padding:8px 13px;border-radius:8px;font-size:0.84rem;color:#94a3b8;cursor:pointer;font-weight:600;border:none;background:transparent;display:flex;align-items:center;gap:6px;transition:all .15s}
+.tab:hover{background:rgba(167,139,250,.08);color:#c4b5fd}
+.tab.active{background:rgba(167,139,250,.16);color:#fff;box-shadow:inset 0 -2px 0 #a78bfa}
 
-  /* ===== 指标卡（粉彩）===== */
-  .cards{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;}
-  .card{border-radius:16px;padding:18px;}
-  .card .label{font-size:12px;opacity:.75;}
-  .card .value{font-size:27px;font-weight:800;margin-top:9px;}
-  .card .sub{font-size:11px;opacity:.6;margin-top:5px;}
-  .c0{background:#eef0ff;color:#4a4866;}
-  .c1{background:#e6f7ef;color:#3d6b54;}
-  .c2{background:#fdeede;color:#a06f33;}
-  .c3{background:#fde9ef;color:#a8466b;}
-  .c4{background:#e4f1fb;color:#3b6f93;}
-  .c5{background:#fbf3da;color:#8a7320;}
-  .panel{background:var(--card);border-radius:16px;padding:20px;margin-top:16px;
-    box-shadow:0 2px 14px rgba(124,108,224,.05);}
-  .panel h3{font-size:14px;margin-bottom:14px;}
-  .panel h3 small{color:var(--mut);font-weight:400;margin-left:6px;}
-  #chart{width:100%;height:350px;}
+.usage-strip{font-size:0.74rem;color:#94a3b8;padding:5px 11px;border-radius:8px;background:rgba(16,185,129,.10);border:1px solid rgba(16,185,129,.25)}
+.usage-strip b{color:#6ee7b7;font-weight:700}
+.icon-btn{padding:7px 9px;border-radius:8px;color:#94a3b8;cursor:pointer;border:1px solid #29213a;background:#13111f;font-size:0.84rem}
+.icon-btn:hover{background:rgba(167,139,250,.10);color:#c4b5fd}
+.acct{display:flex;align-items:center;gap:8px;padding:5px 11px 5px 5px;border-radius:8px;background:#13111f;border:1px solid #29213a;font-size:0.78rem;cursor:pointer}
+.acct .avatar{width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,#a78bfa,#f472b6);display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:800;color:#fff}
 
-  /* ===== NEW: 数据覆盖率 tab ===== */
-  .cov-hero{background:linear-gradient(135deg,#1a1a2e,#0f3460);color:#fff;border-radius:14px;
-    padding:24px 28px;margin-bottom:16px;display:flex;align-items:center;gap:24px;position:relative;overflow:hidden;}
-  .cov-hero::before{content:'';position:absolute;top:-50px;right:-50px;width:200px;height:200px;
-    background:radial-gradient(circle,rgba(247,183,49,.2),transparent 70%);}
-  .cov-hero-num{font-size:3.2rem;font-weight:800;line-height:1;
-    background:linear-gradient(135deg,#fbbf24,#ef4444);-webkit-background-clip:text;-webkit-text-fill-color:transparent;position:relative;z-index:1;}
-  .cov-hero h3{font-size:1.2rem;font-weight:700;margin-bottom:5px;position:relative;z-index:1;}
-  .cov-hero p{color:#a5b4cb;font-size:0.9rem;position:relative;z-index:1;}
-  .cov-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px;}
-  .cov-sum-card{background:#fff;border:1px solid #eee;border-radius:10px;padding:14px 16px;}
-  .cov-sum-lbl{font-size:0.74rem;color:#999;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px;}
-  .cov-sum-val{font-size:1.5rem;font-weight:800;line-height:1;}
-  .cov-sum-val.green{color:#059669;}.cov-sum-val.warn{color:#d97706;}.cov-sum-val.red{color:#dc2626;}
-  .cov-filter-row{display:flex;gap:8px;margin-bottom:14px;}
-  .cov-filter-row .pill.crit{background:#fee2e2;color:#991b1b;}
-  .cov-filter-row .pill.warn{background:#fef3c7;color:#92400e;}
-  .cov-filter-row .pill.healthy{background:#d1fae5;color:#065f46;}
-  .cov-row{display:grid;grid-template-columns:180px 100px 100px 1fr 110px;align-items:center;gap:14px;
-    padding:11px 18px;border-bottom:1px solid #f3f4f6;background:#fff;}
-  .cov-row:first-child{border-radius:10px 10px 0 0;}
-  .cov-row.header{background:#f9fafb;font-size:0.74rem;color:#999;
-    text-transform:uppercase;letter-spacing:1px;font-weight:600;}
-  .cov-row.critical{background:rgba(254,226,226,.4);border-left:3px solid #dc2626;padding-left:15px;}
-  .cov-row.warning{background:rgba(254,243,199,.3);}
-  .cov-site-name{font-size:0.88rem;font-weight:600;}
-  .cov-site-url{font-size:0.72rem;color:#9ca3af;}
-  .cov-num{font-family:'SF Mono',monospace;font-size:0.84rem;color:#374151;}
-  .cov-bar-wrap{position:relative;}
-  .cov-bar{height:8px;background:#f3f4f6;border-radius:4px;overflow:hidden;}
-  .cov-bar-fill{height:100%;border-radius:4px;transition:width .3s;}
-  .cov-pct{position:absolute;top:-1px;right:0;font-size:0.74rem;font-weight:700;}
-  .cov-status-tag{font-size:0.74rem;font-weight:600;}
-  .cov-status-tag.critical{color:#dc2626;}.cov-status-tag.warning{color:#d97706;}
-  .cov-status-tag.healthy{color:#059669;}.cov-status-tag.empty{color:#9ca3af;}
+.page{max-width:1400px;margin:0 auto;padding:20px 22px 50px}
+.lead{font-size:1.7rem;font-weight:900;letter-spacing:-0.6px;margin-bottom:5px}
+.sub{font-size:0.86rem;color:#94a3b8;margin-bottom:16px}
 
-  /* ===== NEW: 批量下载抽屉 ===== */
-  .drawer-mask{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:50;}
-  .drawer{position:fixed;top:0;right:0;width:480px;max-width:100vw;height:100vh;background:#fff;
-    box-shadow:-12px 0 36px rgba(0,0,0,.18);z-index:51;display:flex;flex-direction:column;}
-  .drawer-head{padding:18px 22px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:10px;}
-  .drawer-head h3{flex:1;font-size:1.05rem;font-weight:700;}
-  .drawer-head .close{cursor:pointer;font-size:1.4rem;color:#999;width:30px;height:30px;
-    display:flex;align-items:center;justify-content:center;border-radius:6px;}
-  .drawer-head .close:hover{background:#f3f4f6;}
-  .drawer-body{flex:1;overflow-y:auto;padding:18px 22px;}
-  .drawer-section{margin-bottom:20px;}
-  .drawer-section-label{font-size:0.74rem;color:#6b7280;text-transform:uppercase;
-    letter-spacing:1px;font-weight:600;margin-bottom:9px;display:flex;align-items:center;gap:8px;}
-  .drawer-section-label .ct{margin-left:auto;background:#7c6ce0;color:#fff;padding:1px 8px;border-radius:9px;font-size:0.7rem;letter-spacing:0;text-transform:none;}
-  .cat-search{width:100%;padding:8px 12px;border:1px solid #e5e7eb;border-radius:8px;
-    font-size:0.85rem;margin-bottom:9px;outline:none;}
-  .cat-search:focus{border-color:#7c6ce0;}
-  .cat-list{background:#f9fafb;border:1px solid #e5e7eb;border-radius:9px;padding:8px;
-    max-height:340px;overflow-y:auto;}
-  .cat-item{padding:7px 11px;display:flex;align-items:center;gap:9px;cursor:pointer;
-    border-radius:5px;font-size:0.85rem;}
-  .cat-item:hover{background:#fff;}
-  .cat-item.checked{background:#f0eaff;color:#7c6ce0;font-weight:600;}
-  .cat-item input{accent-color:#7c6ce0;}
-  .cat-item .cnt{margin-left:auto;font-size:0.72rem;color:#9ca3af;background:#fff;padding:1px 7px;border-radius:9px;}
-  .drawer-summary{background:linear-gradient(135deg,#f0eaff,#e9defa);border:1px solid #d4c5f7;
-    border-radius:10px;padding:14px 16px;}
-  .drawer-sum-row{display:flex;justify-content:space-between;padding:3px 0;font-size:0.85rem;}
-  .drawer-sum-row strong{color:#1f2937;}
-  .drawer-sum-row.total{margin-top:7px;padding-top:9px;border-top:1px solid #d4c5f7;font-size:0.95rem;font-weight:700;color:#7c6ce0;}
-  .drawer-foot{padding:14px 22px;border-top:1px solid #eee;display:flex;gap:10px;}
-  .drawer-foot .btn{flex:1;justify-content:center;}
+.stats-hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:11px;margin-bottom:18px}
+.stat{background:#13111f;border:1px solid #29213a;border-radius:11px;padding:13px 16px}
+.stat .lbl{font-size:0.66rem;color:#52527a;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:3px;font-weight:700}
+.stat .val{font-size:1.55rem;font-weight:900;color:#fff;letter-spacing:-0.4px}
+.stat .delta{font-size:0.72rem;color:#6ee7b7;margin-top:2px}
+.stat .delta.warn{color:#fcd34d}
+.stat .delta.bad{color:#fda4af}
 
-  .btn-bulk{background:linear-gradient(135deg,#fbbf24,#f59e0b);color:#1f2937;
-    font-weight:700;display:inline-flex;align-items:center;gap:6px;}
-  .tab-badge{background:linear-gradient(90deg,#7c6ce0,#a78bfa);color:#fff;
-    padding:1px 7px;border-radius:8px;font-size:0.62rem;font-weight:700;margin-left:5px;letter-spacing:0.5px;}
-  .ts-cell{font-size:0.82rem;color:#9ca3af;white-space:nowrap;}
+.ask-shell{display:grid;grid-template-columns:1fr 280px;gap:16px;align-items:flex-start}
+.ask-main{display:flex;flex-direction:column;gap:12px}
+.ask-input{background:#13111f;border:2px solid #29213a;border-radius:12px;padding:12px 14px}
+.ask-input:focus-within{border-color:#a78bfa}
+.ask-input textarea{width:100%;background:transparent;border:none;outline:none;color:#fff;font-size:0.94rem;resize:none;min-height:38px;font-family:inherit}
+.ask-input textarea::placeholder{color:#52527a}
+.ask-input-row{display:flex;justify-content:space-between;align-items:center;margin-top:5px;font-size:0.7rem;color:#52527a}
+.kbd{background:#0a0612;border:1px solid #29213a;border-radius:4px;padding:1px 5px;font-family:'SF Mono',monospace;font-size:0.66rem}
+.btn-go{background:linear-gradient(135deg,#a78bfa,#f472b6);color:#fff;border:none;padding:6px 16px;border-radius:7px;font-size:0.78rem;font-weight:700;cursor:pointer}
 
-  /* drawer transitions */
-  .slide-enter-active,.slide-leave-active{transition:transform .25s ease;}
-  .slide-enter-from,.slide-leave-to{transform:translateX(100%);}
-  .fade-enter-active,.fade-leave-active{transition:opacity .2s;}
-  .fade-enter-from,.fade-leave-to{opacity:0;}
-  .btn[disabled]{opacity:.5;cursor:not-allowed;}
+.starters{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+.starter{background:#13111f;border:1px solid #29213a;border-radius:10px;padding:12px 14px;cursor:pointer;transition:all .15s}
+.starter:hover{border-color:#a78bfa;transform:translateY(-2px)}
+.starter .icon{font-size:1.2rem;margin-bottom:5px}
+.starter .title{font-size:0.84rem;font-weight:700;color:#fff;margin-bottom:3px}
+.starter .desc{font-size:0.72rem;color:#94a3b8;line-height:1.45}
 
-  /* ===== 筛选 ===== */
-  .filterbar{display:flex;gap:9px;align-items:center;margin-bottom:15px;
-    flex-wrap:wrap;}
-  .pill{padding:7px 15px;border-radius:20px;background:#f3eee6;cursor:pointer;
-    font-size:13px;color:var(--mut);}
-  .pill:hover{color:var(--txt);}
-  .pill.active{background:var(--accent-sl);color:var(--accent);font-weight:700;}
-  input[type=text],input[type=number]{padding:7px 12px;background:#faf8f5;
-    border:1.5px solid var(--line);border-radius:10px;font-size:13px;color:var(--txt);}
-  input:focus{outline:none;border-color:var(--accent);}
+.trace{background:#13111f;border:1px solid #29213a;border-radius:12px;padding:13px 14px;font-size:0.76rem}
+.trace h4{font-size:0.66rem;color:#52527a;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px}
 
-  /* ===== 表格 ===== */
-  table{width:100%;border-collapse:collapse;font-size:13px;}
-  th,td{padding:10px 11px;text-align:left;border-bottom:1px solid var(--line2);
-    vertical-align:middle;}
-  th{color:var(--mut);font-weight:600;font-size:12px;white-space:nowrap;}
-  tbody tr{border-radius:8px;}
-  tbody tr:hover{background:#faf8f5;}
-  td img{width:46px;height:46px;object-fit:cover;border-radius:10px;
-    background:#f3eee6;}
-  .badge{padding:3px 9px;border-radius:8px;font-size:11px;font-weight:600;}
-  .badge.new{background:#e4f1fb;color:#3b6f93;}
-  .badge.best{background:#fbf3da;color:#8a7320;}
-  .badge.deal{background:var(--accent2-sl);color:var(--accent2);}
-  .badge.on_sale,.badge.success{background:var(--green-bg);color:var(--green);}
-  .badge.out_of_stock,.badge.failed{background:var(--red-bg);color:var(--red);}
-  .badge.running,.badge.pending,.badge.queued{background:#e4f1fb;color:#3b6f93;}
-  .price{color:var(--accent);font-weight:700;}
-  .price-old{color:#c8bfb2;text-decoration:line-through;font-size:12px;}
-  .title-cell{max-width:300px;}
-  .title-cell a{color:var(--txt);}
-  .title-cell a:hover{color:var(--accent);}
-  .pager{display:flex;gap:7px;align-items:center;margin-top:15px;
-    justify-content:flex-end;font-size:13px;color:var(--mut);}
-  .pager button{padding:5px 12px;border:1.5px solid var(--line);border-radius:9px;
-    background:var(--card);cursor:pointer;color:var(--txt);}
-  .pager button:disabled{opacity:.4;cursor:not-allowed;}
-  .empty{text-align:center;color:#c8bfb2;padding:42px;font-size:13px;}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+.pill{display:inline-flex;align-items:center;gap:3px;font-size:0.62rem;font-weight:700;padding:2px 7px;border-radius:9px}
+.pill.ok{background:rgba(16,185,129,.14);color:#6ee7b7;border:1px solid rgba(16,185,129,.3)}
+.pill.warn{background:rgba(247,183,49,.14);color:#fcd34d;border:1px solid rgba(247,183,49,.3)}
+.pill.bad{background:rgba(251,113,133,.14);color:#fda4af;border:1px solid rgba(251,113,133,.3)}
+.pill.pending{background:rgba(96,165,250,.14);color:#93c5fd;border:1px solid rgba(96,165,250,.3)}
 
-  /* ===== 数据源卡片网格（NewAPI 风）===== */
-  .ds-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));
-    gap:14px;}
-  .ds-card{background:var(--card);border:1px solid var(--line);border-radius:15px;
-    padding:17px 18px;display:flex;flex-direction:column;gap:10px;
-    transition:border-color .15s,box-shadow .15s;}
-  .ds-card:hover{border-color:var(--accent);
-    box-shadow:0 6px 20px rgba(124,108,224,.1);}
-  .ds-top{display:flex;align-items:flex-start;gap:10px;}
-  .ds-ic{width:38px;height:38px;border-radius:10px;flex:none;display:flex;
-    align-items:center;justify-content:center;font-size:19px;}
-  .ds-ic.product{background:#eef0ff;} .ds-ic.review{background:#fde9ef;}
-  .ds-ic.shopping{background:#fbf3da;}
-  .ds-name{font-weight:800;font-size:14.5px;line-height:1.3;}
-  .ds-plat{color:var(--mut);font-size:11.5px;margin-top:2px;
-    font-family:ui-monospace,monospace;}
-  .ds-st{flex:none;font-size:11px;font-weight:700;padding:3px 9px;
-    border-radius:7px;}
-  .ds-st.online{background:var(--green-bg);color:var(--green);}
-  .ds-st.idle{background:#f3eee6;color:var(--mut);}
-  .ds-method{font-size:12.5px;color:var(--mut);line-height:1.55;
-    background:#faf8f5;border-radius:9px;padding:9px 11px;min-height:54px;}
-  .ds-method b{color:var(--accent);font-weight:600;}
-  .ds-foot{display:flex;align-items:baseline;gap:6px;
-    border-top:1px solid var(--line2);padding-top:9px;}
-  .ds-cnt{font-size:22px;font-weight:850;color:var(--txt);}
-  .ds-unit{font-size:12px;color:var(--mut);}
-  .ds-freq{margin-left:auto;font-size:11px;color:var(--mut);
-    background:#f3eee6;border-radius:6px;padding:3px 8px;}
+.cat-filters{display:flex;gap:8px;flex-wrap:wrap;background:#13111f;border:1px solid #29213a;border-radius:11px;padding:11px 12px;margin-bottom:12px}
+.cat-filters select,.cat-filters input{background:#0d0a17;border:1px solid #29213a;border-radius:6px;padding:6px 10px;color:#cbd5e1;font-size:0.8rem;outline:none}
+
+.cat-table-wrap{background:#13111f;border:1px solid #29213a;border-radius:12px;overflow:hidden}
+.cat-table{width:100%;border-collapse:collapse;font-size:0.8rem}
+.cat-table th{text-align:left;padding:8px 12px;background:#0d0a17;color:#52527a;font-size:0.62rem;letter-spacing:1px;text-transform:uppercase;font-weight:700;border-bottom:1px solid #1f1429}
+.cat-table td{padding:9px 12px;border-bottom:1px solid #1f1429;color:#cbd5e1}
+.cat-table tr:hover{background:rgba(167,139,250,.05)}
+.thumb{width:32px;height:32px;border-radius:6px;background:linear-gradient(135deg,#475569,#1f2937);display:flex;align-items:center;justify-content:center;font-size:0.84rem}
+
+.cov-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:11px;margin-top:6px}
+.cov-tile{background:#13111f;border:1px solid #29213a;border-radius:11px;padding:13px 14px}
+.cov-tile.critical{border-color:rgba(251,113,133,.3)}
+.cov-tile.warning{border-color:rgba(247,183,49,.3)}
+.cov-tile.healthy{border-color:rgba(16,185,129,.3)}
+.cov-tile h6{font-size:0.84rem;font-weight:800;color:#fff;margin-bottom:3px}
+.cov-tile .country{font-size:0.64rem;color:#52527a;letter-spacing:1px;margin-bottom:6px}
+.cov-tile .num{font-size:1.3rem;font-weight:900;color:#c4b5fd;margin-bottom:2px}
+.cov-tile .pct{font-size:0.72rem;color:#94a3b8;margin-bottom:6px}
+.cov-tile .bar{height:4px;background:#29213a;border-radius:3px;overflow:hidden}
+.cov-tile .bar div{height:100%;background:linear-gradient(90deg,#10b981,#6ee7b7);transition:width .3s}
+.cov-tile.warning .bar div{background:linear-gradient(90deg,#fbbf24,#fcd34d)}
+.cov-tile.critical .bar div{background:linear-gradient(90deg,#fb7185,#fda4af)}
+.cov-tile button{margin-top:8px;width:100%;background:rgba(167,139,250,.10);border:1px solid rgba(167,139,250,.25);color:#c4b5fd;padding:5px;border-radius:6px;font-size:0.72rem;font-weight:600;cursor:pointer}
+.cov-tile button:hover{background:rgba(167,139,250,.20)}
+
+.jobs-list{background:#13111f;border:1px solid #29213a;border-radius:12px;overflow:hidden;margin-top:12px}
+.job-row{display:grid;grid-template-columns:50px 1fr 100px 80px 80px 120px;gap:10px;padding:9px 14px;border-bottom:1px solid #1f1429;font-size:0.8rem;color:#cbd5e1;align-items:center}
+.job-row.head{background:#0d0a17;color:#52527a;font-size:0.62rem;text-transform:uppercase;letter-spacing:1px;font-weight:700}
+.job-row:hover:not(.head){background:rgba(167,139,250,.05)}
+
+.set-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.set-block{background:#13111f;border:1px solid #29213a;border-radius:11px;padding:16px}
+.set-block h3{font-size:0.94rem;font-weight:800;margin-bottom:9px;color:#fff;display:flex;justify-content:space-between;align-items:center}
+.key-row{padding:9px 0;border-bottom:1px solid #1f1429;display:flex;justify-content:space-between;align-items:center;font-size:0.8rem}
+.key-row .info{display:flex;flex-direction:column;gap:3px}
+.key-prefix{font-family:'SF Mono',monospace;font-size:0.7rem;color:#a78bfa}
+.meta{font-size:0.66rem;color:#52527a}
+
+.toast{position:fixed;bottom:24px;right:24px;background:linear-gradient(135deg,#a78bfa,#f472b6);color:#fff;padding:11px 18px;border-radius:10px;box-shadow:0 18px 50px rgba(167,139,250,.45);font-size:0.84rem;font-weight:700;z-index:500;animation:toastIn .25s}
+@keyframes toastIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+
+@media(max-width:1100px){
+  .ask-shell{grid-template-columns:1fr}
+  .set-grid{grid-template-columns:1fr}
+}
 </style>
 </head>
 <body>
-<div id="app">
-
-  <!-- ========== 登录 ========== -->
-  <div v-if="!token" class="login-wrap">
-    <div class="login-card">
-      <div class="logo"><svg class="mk" viewBox="0 0 50 50"><g fill="none" stroke="#7c6ce0" stroke-width="1.7" stroke-linecap="round"><circle cx="25" cy="25" r="20"/><circle cx="25" cy="25" r="12.5"/><circle cx="25" cy="25" r="5"/><path d="M25 4v42M4 25h42M10.5 10.5l29 29M39.5 10.5l-29 29"/></g><circle cx="39.5" cy="10.5" r="4.2" fill="#d76b8f"/></svg>smart<span>·</span>crawler</div>
-      <div class="sub">遨森标杆数据采集平台</div>
-      <div class="field"><label>账号</label>
-        <input type="text" v-model="loginForm.username" @keyup.enter="doLogin"
-               placeholder="请输入账号" autofocus /></div>
-      <div class="field"><label>密码</label>
-        <input type="password" v-model="loginForm.password" @keyup.enter="doLogin"
-               placeholder="请输入密码" /></div>
-      <button class="login-btn" @click="doLogin" :disabled="logging">
-        {{ logging ? '登录中…' : '登 录' }}</button>
-      <div class="login-err">{{ loginErr }}</div>
-      <div class="login-hint">Aosom 竞品情报 · 授权访问</div>
-    </div>
-  </div>
-
-  <!-- ========== 主体 ========== -->
-  <template v-else>
-  <div class="topbar">
-    <div class="logo"><svg class="mk" viewBox="0 0 50 50"><g fill="none" stroke="#7c6ce0" stroke-width="1.7" stroke-linecap="round"><circle cx="25" cy="25" r="20"/><circle cx="25" cy="25" r="12.5"/><circle cx="25" cy="25" r="5"/><path d="M25 4v42M4 25h42M10.5 10.5l29 29M39.5 10.5l-29 29"/></g><circle cx="39.5" cy="10.5" r="4.2" fill="#d76b8f"/></svg>smart<span>·</span>crawler</div>
-    <select v-model="currentSite" @change="loadAll">
-      <option v-for="s in sites" :key="s.site" :value="s.site">
-        {{ s.brand }} · {{ s.country }}{{ s.sku_count? '（'+s.sku_count+'）':'' }}
-      </option>
-    </select>
-    <span class="site-url" v-if="site">{{ site.url }}</span>
-    <div class="spacer"></div>
-    <span class="who"><span class="dot"></span>{{ user.display_name }}</span>
-    <span class="who" v-if="site && site.last_crawled">更新 {{ fmt(site.last_crawled) }}</span>
-    <button class="btn" @click="exportExcel">⬇ 导出 Excel</button>
-    <button class="btn" @click="logout">退出</button>
-  </div>
-
-  <div class="tabs">
-    <div v-for="t in tabList" :key="t.k" class="tab"
-         :class="{active:tab===t.k}" @click="switchTab(t.k)">{{ t.label
-      }}<span v-if="t.badge" class="tab-badge">{{ t.badge }}</span></div>
-  </div>
-
-  <div class="main">
-    <!-- 总体分析 -->
-    <div v-show="tab==='overview'">
-      <div class="cards">
-        <div class="card c0"><div class="label">在售 SKU</div>
-          <div class="value">{{ num(ov.cards.sku_count) }}</div>
-          <div class="sub">站点全部在售 SKU</div></div>
-        <div class="card c1"><div class="label">新增产品</div>
-          <div class="value">{{ num(ov.cards.new_product_count) }}</div>
-          <div class="sub">New Arrivals</div></div>
-        <div class="card c2"><div class="label">30 天销量</div>
-          <div class="value">{{ num(ov.cards.thirty_day_sales) }}</div>
-          <div class="sub">评论增量倒推 · 预估</div></div>
-        <div class="card c3"><div class="label">30 天收入</div>
-          <div class="value">{{ money(ov.cards.thirty_day_revenue) }}</div>
-          <div class="sub">销量 × 售价 · 预估</div></div>
-        <div class="card c4"><div class="label">30 天流量</div>
-          <div class="value">—</div>
-          <div class="sub">需第三方数据接入</div></div>
-        <div class="card c5"><div class="label">转化率</div>
-          <div class="value">—</div>
-          <div class="sub">需第三方数据接入</div></div>
-      </div>
-      <div class="panel">
-        <h3>趋势分析 <small>SKU 数 / 新品 / 预估销量 / 预估营收</small></h3>
-        <div id="chart"></div>
-        <div class="empty" v-if="ov.trends.length<=1">
-          趋势图需多日采集数据积累 · 当前 {{ ov.trends.length }} 个采集日</div>
-      </div>
-    </div>
-
-    <!-- 产品分析 -->
-    <div v-show="tab==='products'">
-      <div class="panel">
-        <div class="filterbar">
-          <span class="pill" :class="{active:pTab==='all'}" @click="setPTab('all')">
-            所有产品 {{ counts.all }}</span>
-          <span class="pill" :class="{active:pTab==='bestseller'}"
-            @click="setPTab('bestseller')">畅销 {{ counts.bestseller }}</span>
-          <span class="pill" :class="{active:pTab==='new'}" @click="setPTab('new')">
-            最新 {{ counts.new }}</span>
-          <input type="text" v-model="search" placeholder="搜索标题 / SKU"
-            @keyup.enter="loadProducts(1)" style="width:190px" />
-          <input type="number" v-model.number="minP" placeholder="最低价" style="width:78px"/>
-          <input type="number" v-model.number="maxP" placeholder="最高价" style="width:78px"/>
-          <button class="btn solid" @click="loadProducts(1)">筛选</button>
-          <button class="btn btn-bulk" @click="openBulkDownload"
-            style="margin-left:auto" title="按品类批量下载">📦 批量下载</button>
-        </div>
-        <table>
-          <thead><tr>
-            <th>#</th><th>图片</th><th>产品标题</th><th>SKU</th><th>属性</th>
-            <th>标签</th><th>售价</th><th>原价</th><th>30天销量</th><th>30天营收</th>
-            <th>评分</th><th>评论</th><th>状态</th><th>品类</th><th>落库时间</th>
-          </tr></thead>
-          <tbody>
-            <tr v-for="(p,i) in products" :key="p.id">
-              <td>{{ (page-1)*pageSize+i+1 }}</td>
-              <td><img :src="p.image" loading="lazy" referrerpolicy="no-referrer"/></td>
-              <td class="title-cell"><a :href="p.product_url" target="_blank">
-                {{ p.title }}</a></td>
-              <td>{{ p.sku }}</td>
-              <td>{{ attrText(p.attributes) }}</td>
-              <td><span v-if="p.label" class="badge"
-                :class="p.is_new?'new':'best'">{{ p.label }}</span></td>
-              <td><span class="price">{{ money(p.sale_price) }}</span></td>
-              <td><span v-if="p.original_price>p.sale_price" class="price-old">
-                {{ money(p.original_price) }}</span></td>
-              <td>{{ p.thirty_day_sales ?? '—' }}</td>
-              <td>{{ p.thirty_day_revenue?money(p.thirty_day_revenue):'—' }}</td>
-              <td>{{ p.ratings ?? '—' }}</td>
-              <td>{{ p.review_count ?? '—' }}</td>
-              <td><span class="badge" :class="p.status">{{ statusText(p.status) }}</span></td>
-              <td>{{ p.category_path || '—' }}</td>
-              <td class="ts-cell" :title="p.created_time">{{ fmt(p.created_time) }}</td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="empty" v-if="!products.length">暂无数据 · 请先采集该站点</div>
-        <div class="pager">
-          <span>共 {{ total }} 条</span>
-          <select v-model.number="pageSize" @change="loadProducts(1)">
-            <option :value="20">20</option><option :value="50">50</option>
-            <option :value="100">100</option></select>
-          <button :disabled="page<=1" @click="loadProducts(page-1)">‹ 上一页</button>
-          <span>{{ page }} / {{ Math.max(1,Math.ceil(total/pageSize)) }}</span>
-          <button :disabled="page>=Math.ceil(total/pageSize)"
-            @click="loadProducts(page+1)">下一页 ›</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 销售促销 -->
-    <div v-show="tab==='promotions'">
-      <div class="panel">
-        <h3>促销活动 <small>售价低于原价的在售商品</small></h3>
-        <table>
-          <thead><tr>
-            <th>#</th><th>SKU</th><th>产品标题</th><th>图片</th><th>类型</th>
-            <th>折扣</th><th>原价</th><th>活动价</th><th>检测时间</th>
-          </tr></thead>
-          <tbody>
-            <tr v-for="(p,i) in promotions" :key="p.id">
-              <td>{{ i+1 }}</td><td>{{ p.sku }}</td>
-              <td class="title-cell">{{ p.product_title }}</td>
-              <td><img :src="p.product_image" loading="lazy"
-                referrerpolicy="no-referrer"/></td>
-              <td>{{ p.promotion_type }}</td>
-              <td><span class="badge deal">-{{ p.discount_percent }}%</span></td>
-              <td><span class="price-old">{{ money(p.original_price) }}</span></td>
-              <td><span class="price">{{ money(p.promotion_price) }}</span></td>
-              <td>{{ fmt(p.detected_time) }}</td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="empty" v-if="!promotions.length">当前站点未检测到价格促销</div>
-      </div>
-    </div>
-
-    <!-- 数据覆盖率 (NEW) -->
-    <div v-show="tab==='coverage'">
-      <div class="cov-hero">
-        <div class="cov-hero-num">{{ (coverage.summary && coverage.summary.overall_coverage_pct) || 0 }}%</div>
-        <div style="flex:1">
-          <h3>整体数据覆盖率</h3>
-          <p>已采集 <strong style="color:#fff">{{ num(coverage.summary && coverage.summary.total_current_sku) }}</strong> SKU /
-             估算全站 <strong style="color:#fff">{{ num(coverage.summary && coverage.summary.total_estimated_full) }}</strong> SKU</p>
-          <p style="margin-top:5px"><strong style="color:#fb7185">⚠ {{ (coverage.summary && coverage.summary.critical_count) || 0 }} 个关键站点</strong> · 覆盖率 &lt;5%（多为 Vidaxl 12 站）</p>
-        </div>
-      </div>
-
-      <div class="cov-summary">
-        <div class="cov-sum-card"><div class="cov-sum-lbl">总站点</div>
-          <div class="cov-sum-val">{{ (coverage.summary && coverage.summary.total_sites) || 0 }}</div></div>
-        <div class="cov-sum-card"><div class="cov-sum-lbl">健康 &ge;50%</div>
-          <div class="cov-sum-val green">{{ (coverage.summary && coverage.summary.healthy_count) || 0 }}</div></div>
-        <div class="cov-sum-card"><div class="cov-sum-lbl">警告 5-50%</div>
-          <div class="cov-sum-val warn">{{ (coverage.summary && coverage.summary.warning_count) || 0 }}</div></div>
-        <div class="cov-sum-card"><div class="cov-sum-lbl">关键 &lt;5%</div>
-          <div class="cov-sum-val red">{{ (coverage.summary && coverage.summary.critical_count) || 0 }}</div></div>
-      </div>
-
-      <div class="panel" style="padding:14px 0">
-        <div class="cov-filter-row" style="padding:0 18px">
-          <span class="pill" :class="{active:coverageFilter==='all'}" @click="coverageFilter='all'">所有 {{ coverage.summary && coverage.summary.total_sites || 0 }}</span>
-          <span class="pill crit" :class="{active:coverageFilter==='critical'}" @click="coverageFilter='critical'">关键 {{ coverage.summary && coverage.summary.critical_count || 0 }}</span>
-          <span class="pill warn" :class="{active:coverageFilter==='warning'}" @click="coverageFilter='warning'">警告 {{ coverage.summary && coverage.summary.warning_count || 0 }}</span>
-          <span class="pill healthy" :class="{active:coverageFilter==='healthy'}" @click="coverageFilter='healthy'">健康 {{ coverage.summary && coverage.summary.healthy_count || 0 }}</span>
-        </div>
-
-        <div class="cov-row header">
-          <div>站点</div><div>当前 SKU</div><div>估算全量</div><div>覆盖率</div><div>状态</div>
-        </div>
-        <div v-for="s in coverageFiltered()" :key="s.site" class="cov-row" :class="s.status">
-          <div>
-            <div class="cov-site-name">{{ s.brand }} · {{ s.country }}</div>
-            <div class="cov-site-url">{{ s.site }}</div>
-          </div>
-          <div class="cov-num">{{ num(s.current) }}</div>
-          <div class="cov-num">{{ num(s.estimated_full) }}</div>
-          <div class="cov-bar-wrap">
-            <div class="cov-bar"><div class="cov-bar-fill" :style="{width:Math.min(100,s.coverage_pct||0)+'%',background:coverageBarColor(s)}"></div></div>
-            <span class="cov-pct" :style="{color:s.status==='critical'?'#dc2626':s.status==='warning'?'#d97706':'#059669'}">{{ s.coverage_pct == null ? '—' : s.coverage_pct+'%' }}</span>
-          </div>
-          <div class="cov-status-tag" :class="s.status">
-            <span v-if="s.status==='critical'">⚠ 关键</span>
-            <span v-else-if="s.status==='warning'">⚠ 警告</span>
-            <span v-else-if="s.status==='healthy'">✅ 健康</span>
-            <span v-else>— 未知</span>
-          </div>
-        </div>
-        <div class="empty" v-if="!coverageFiltered().length" style="padding:30px">无站点匹配此筛选</div>
-      </div>
-    </div>
-
-    <!-- 数据源 -->
-    <div v-show="tab==='datasources'">
-      <div class="panel">
-        <h3>数据源总览
-          <small>{{ datasources.length }} 个源 · 商品站 / 评论平台 / Google Shopping</small>
-        </h3>
-        <div class="filterbar">
-          <span class="pill" :class="{active:dsTab==='all'}" @click="dsTab='all'">
-            全部 {{ datasources.length }}</span>
-          <span class="pill" :class="{active:dsTab==='product'}" @click="dsTab='product'">
-            商品站 {{ dsCount('product') }}</span>
-          <span class="pill" :class="{active:dsTab==='review'}" @click="dsTab='review'">
-            评论平台 {{ dsCount('review') }}</span>
-          <span class="pill" :class="{active:dsTab==='shopping'}" @click="dsTab='shopping'">
-            Google Shopping {{ dsCount('shopping') }}</span>
-          <span style="margin-left:auto;color:var(--mut);font-size:12px;">
-            在线 {{ dsOnline }} · 累计 {{ num(dsTotalCount) }} 条样本</span>
-        </div>
-        <div class="ds-grid">
-          <div class="ds-card" v-for="d in dsFiltered" :key="d.id">
-            <div class="ds-top">
-              <div class="ds-ic" :class="d.type">
-                {{ d.type==='product'?'🛒':d.type==='review'?'💬':'🔍' }}</div>
-              <div style="flex:1;min-width:0;">
-                <div class="ds-name">{{ d.name }}</div>
-                <div class="ds-plat">{{ d.platform }}</div>
-              </div>
-              <span class="ds-st" :class="d.status">
-                {{ d.status==='online'?'● 在线':'○ 待采' }}</span>
-            </div>
-            <div class="ds-method">{{ d.method }}</div>
-            <div class="ds-foot">
-              <span class="ds-cnt">{{ num(d.count) }}</span>
-              <span class="ds-unit">{{ d.unit }}</span>
-              <span class="ds-freq">⟳ {{ d.freq }}</span>
-            </div>
-          </div>
-        </div>
-        <div class="empty" v-if="!datasources.length">数据源加载中…</div>
-      </div>
-    </div>
-
-    <!-- 采集任务 -->
-    <div v-show="tab==='jobs'">
-      <div class="grid2">
-        <div class="card c0"><div class="label">已配置站点</div>
-          <div class="value">{{ sites.length }}</div>
-          <div class="sub">9 品牌 · 12 国</div></div>
-        <div class="card c1"><div class="label">代理池</div>
-          <div class="value">{{ proxy.residential||0 }}+{{ proxy.datacenter||0 }}</div>
-          <div class="sub">住宅 + 数据中心 IP</div></div>
-      </div>
-      <div class="panel">
-        <h3>采集任务看板
-          <button class="btn solid" style="float:right" @click="trigger"
-            :disabled="triggering">▶ 采集当前站点</button>
-          <button class="btn" style="float:right;margin-right:8px"
-            @click="loadJobs">⟳ 刷新</button></h3>
-        <table>
-          <thead><tr>
-            <th>#</th><th>站点</th><th>状态</th><th>商品数</th><th>新品</th>
-            <th>促销</th><th>成功率</th><th>耗时(s)</th><th>开始时间</th>
-          </tr></thead>
-          <tbody>
-            <tr v-for="j in jobs" :key="j.id">
-              <td>{{ j.id }}</td><td>{{ j.site }}</td>
-              <td><span class="badge" :class="j.status">{{ j.status }}</span></td>
-              <td>{{ j.products_count }}</td><td>{{ j.new_count }}</td>
-              <td>{{ j.promotion_count }}</td>
-              <td>{{ j.success_rate!=null?j.success_rate+'%':'—' }}</td>
-              <td>{{ j.duration_sec ?? '—' }}</td>
-              <td>{{ fmt(j.started_at) }}</td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="empty" v-if="!jobs.length">暂无采集任务记录</div>
-      </div>
-    </div>
-
-    <!-- API 接入 -->
-    <div v-show="tab==='api'">
-      <div class="panel">
-        <h3>数据输出 API <small>面向 AI Agent 的结构化数据接口 · v1</small></h3>
-        <p style="color:var(--mut);font-size:13px;line-height:1.7;">
-          Agent / 外部系统用 <b>API 密钥</b>调用 <code>/api/v1/*</code> 拉取结构化数据，
-          统一信封、稳定 schema。鉴权头：<code>X-API-Key: sck_…</code><br/>
-          常用端点：<code>GET /api/v1/products</code> ·
-          <code>/api/v1/promotions</code> · <code>/api/v1/site/{site}</code> ·
-          完整文档 <a href="/docs" target="_blank">/docs</a></p>
-      </div>
-      <div class="panel">
-        <h3>API 密钥
-          <button class="btn solid" style="float:right" @click="createKey">
-            + 新建密钥</button></h3>
-        <div v-if="newKey" style="background:#e6f7ef;border-radius:10px;
-          padding:12px;margin-bottom:12px;font-size:13px;">
-          ✓ 新密钥（仅此一次显示，请立即保存）：<br/>
-          <code style="color:var(--green);font-weight:700;">{{ newKey }}</code>
-        </div>
-        <table>
-          <thead><tr>
-            <th>#</th><th>名称</th><th>密钥前缀</th><th>状态</th>
-            <th>调用次数</th><th>最后使用</th><th>操作</th>
-          </tr></thead>
-          <tbody>
-            <tr v-for="k in apiKeys" :key="k.id">
-              <td>{{ k.id }}</td><td>{{ k.name }}</td>
-              <td>{{ k.key_prefix }}</td>
-              <td><span class="badge" :class="k.active?'on_sale':'out_of_stock'">
-                {{ k.active?'启用':'已撤销' }}</span></td>
-              <td>{{ k.request_count }}</td>
-              <td>{{ fmt(k.last_used) }}</td>
-              <td><button v-if="k.active" class="btn" @click="revokeKey(k.id)">
-                撤销</button></td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="empty" v-if="!apiKeys.length">暂无 API 密钥</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 批量下载抽屉 -->
-  <transition name="fade">
-    <div v-if="drawerOpen" class="drawer-mask" @click="closeBulkDownload"></div>
-  </transition>
-  <transition name="slide">
-    <div v-if="drawerOpen" class="drawer">
-      <div class="drawer-head">
-        <h3>📦 批量按站点 + 品类下载</h3>
-        <span style="font-size:0.78rem;color:#999;background:#f3f4f6;padding:2px 9px;border-radius:10px">{{ drawerSites.length }} 站</span>
-        <span class="close" @click="closeBulkDownload">×</span>
-      </div>
-      <div class="drawer-body">
-
-        <!-- ① 选站点 -->
-        <div class="drawer-section">
-          <div class="drawer-section-label">① 选择站点
-            <span class="ct" v-if="drawerSites.length">已选 {{ drawerSites.length }}</span>
-          </div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;max-height:160px;overflow-y:auto;
-                       background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:9px">
-            <span v-for="s in sites" :key="s.site"
-              @click="toggleDrawerSite(s.site)"
-              :style="{
-                padding:'5px 12px',borderRadius:'14px',fontSize:'0.78rem',cursor:'pointer',
-                background: drawerSiteChecked(s.site) ? '#7c6ce0' : '#fff',
-                color: drawerSiteChecked(s.site) ? '#fff' : '#374151',
-                border: '1px solid '+(drawerSiteChecked(s.site)?'#7c6ce0':'#e5e7eb'),
-                fontWeight: drawerSiteChecked(s.site)?'600':'500'
-              }">
-              {{ s.site }} <span :style="{opacity:0.6,fontSize:'0.7rem',marginLeft:'4px'}">{{ num(s.sku_count) }}</span>
-            </span>
-          </div>
-          <div style="margin-top:8px;display:flex;gap:8px;font-size:0.74rem">
-            <a href="#" @click.prevent="drawerSites=sites.map(s=>s.site);loadDrawerCats()" style="color:#7c6ce0">全选</a>
-            <a href="#" @click.prevent="drawerSites=[];loadDrawerCats()" style="color:#9ca3af">清空</a>
-            <a href="#" @click.prevent="drawerSites=sites.filter(s=>s.brand==='Vidaxl').map(s=>s.site);loadDrawerCats()" style="color:#7c6ce0">所有 Vidaxl</a>
-            <a href="#" @click.prevent="drawerSites=sites.filter(s=>s.brand==='Costway').map(s=>s.site);loadDrawerCats()" style="color:#7c6ce0">所有 Costway</a>
-          </div>
-        </div>
-
-        <!-- ② 选品类（树形）-->
-        <div class="drawer-section">
-          <div class="drawer-section-label">② 选择品类（可选）
-            <span class="ct" v-if="drawerCatsSelected.length">已选 {{ drawerCatsSelected.length }}</span>
-          </div>
-          <input class="cat-search" v-model="drawerCatFilter" placeholder="🔍 搜索品类名..."/>
-          <div class="cat-list">
-            <div v-if="drawerLoading" style="padding:18px;text-align:center;color:#999">加载品类中...</div>
-            <div v-else-if="!drawerSites.length" style="padding:18px;text-align:center;color:#999">请先选站点</div>
-            <div v-else-if="!drawerCatTree().length" style="padding:18px;text-align:center;color:#999">
-              <div>选中的 {{ drawerSites.length }} 个站点都无品类数据</div>
-              <div style="font-size:0.74rem;margin-top:4px;color:#bbb">将下载这些站点的全部商品（无品类过滤）</div>
-            </div>
-            <div v-else>
-              <!-- 树形递归（仅 1 级嵌套，已足够），无树时降级平铺 -->
-              <template v-for="c in drawerCatTree()" :key="c.category_id||c.name">
-                <div class="cat-item" :class="{checked:drawerCatChecked(c.name)}">
-                  <span v-if="c.children && c.children.length" class="chevron"
-                    @click="toggleExpand(c.category_id||c.name)"
-                    style="cursor:pointer;color:#7c6ce0;width:14px;display:inline-block;">
-                    {{ drawerExpanded[c.category_id||c.name] ? '▾' : '▸' }}
-                  </span>
-                  <span v-else style="width:14px;display:inline-block"></span>
-                  <input type="checkbox" :checked="drawerCatChecked(c.name)" @click.stop="toggleDrawerCat(c.name)"/>
-                  <span @click="toggleDrawerCat(c.name)" style="cursor:pointer;flex:1">{{ c.name }}</span>
-                  <span class="cnt" :title="c.sites.join(', ')">{{ num(c.product_count) }}<span v-if="c.sites&&c.sites.length>1" style="opacity:.6"> ×{{c.sites.length}}站</span></span>
-                </div>
-                <div v-if="c.children && c.children.length && drawerExpanded[c.category_id||c.name]" style="margin-left:22px">
-                  <div v-for="cc in c.children" :key="cc.category_id||cc.name"
-                    class="cat-item" :class="{checked:drawerCatChecked(cc.name)}"
-                    @click="toggleDrawerCat(cc.name)">
-                    <span style="width:14px;display:inline-block"></span>
-                    <input type="checkbox" :checked="drawerCatChecked(cc.name)" @click.stop="toggleDrawerCat(cc.name)"/>
-                    <span>{{ cc.name }}</span>
-                    <span class="cnt">{{ num(cc.product_count) }}</span>
-                  </div>
-                </div>
-              </template>
-            </div>
-          </div>
-          <div v-if="drawerNoCatsSites().length" style="margin-top:8px;font-size:0.74rem;color:#d97706;line-height:1.5">
-            ⚠️ {{ drawerNoCatsSites().length }} 个站点无品类数据，将下载全部商品
-          </div>
-        </div>
-
-        <!-- ③ 文件格式 -->
-        <div class="drawer-section">
-          <div class="drawer-section-label">③ 文件格式</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-            <div v-for="f in [{k:'xlsx',icon:'📊',name:'Excel',desc:'6+ Sheet'},
-                              {k:'csv',icon:'📄',name:'CSV',desc:'UTF-8 · 纯数据'},
-                              {k:'json',icon:'{}',name:'JSON',desc:'原始结构化'},
-                              {k:'zip',icon:'📦',name:'ZIP',desc:'分站点多文件'}]"
-              :key="f.k" @click="setDrawerFormat(f.k)"
-              :style="{
-                padding:'10px 12px',borderRadius:'9px',cursor:'pointer',display:'flex',gap:'10px',alignItems:'center',
-                background: drawerFormat===f.k ? '#f0eaff' : '#f9fafb',
-                border: '1.5px solid '+(drawerFormat===f.k?'#7c6ce0':'#e5e7eb')
-              }">
-              <div :style="{width:'28px',height:'28px',borderRadius:'6px',display:'flex',alignItems:'center',justifyContent:'center',background:'#fff',fontSize:'0.95rem',fontWeight:700}">{{ f.icon }}</div>
-              <div style="flex:1">
-                <div :style="{fontSize:'0.85rem',fontWeight:600,color:drawerFormat===f.k?'#5b21b6':'#1f2937'}">{{ f.name }}</div>
-                <div style="font-size:0.7rem;color:#6b7280">{{ f.desc }}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- ④ 附加内容 -->
-        <div v-if="drawerFormat==='xlsx' || drawerFormat==='zip'" class="drawer-section">
-          <div class="drawer-section-label">④ 附加内容</div>
-          <div v-for="o in [{k:'drawerIncludePrice',name:'包含历史价格曲线',hint:'最近 90 天 · PriceHistory 每 SKU 多行'},
-                            {k:'drawerIncludeVoc',name:'包含 VOC 评论',hint:'Trustpilot + Reviews.io · 含 sentiment'},
-                            {k:'drawerIncludeImages',name:'包含商品图片 URL',hint:'外链 · 不下载图片本体'},
-                            {k:'drawerSplitByCategory',name:'按品类拆分子表',hint:'每个一级品类一个 Sheet'}]"
-            :key="o.k"
-            @click="toggleDrawerOption(o.k)"
-            :style="{padding:'10px 14px',background:'#f9fafb',border:'1px solid #e5e7eb',borderRadius:'8px',marginBottom:'6px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}">
-            <div style="flex:1">
-              <div style="font-size:0.85rem;font-weight:600">{{ o.name }}</div>
-              <div style="font-size:0.7rem;color:#9ca3af;margin-top:2px">{{ o.hint }}</div>
-            </div>
-            <div :style="{width:'34px',height:'18px',borderRadius:'10px',position:'relative',transition:'background .2s',background: this[o.k] ? '#7c6ce0' : '#d1d5db'}">
-              <div :style="{position:'absolute',top:'2px',width:'14px',height:'14px',background:'#fff',borderRadius:'50%',transition:'left .2s',left:this[o.k]?'18px':'2px'}"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- ⑤ 预览 7 项 -->
-        <div class="drawer-section">
-          <div class="drawer-section-label">⑤ 下载预览
-            <span v-if="drawerPreviewLoading" class="ct" style="background:#fbbf24;color:#fff">加载中...</span>
-          </div>
-          <div class="drawer-summary">
-            <div class="drawer-sum-row"><span>选中品类</span><strong>{{ drawerPreview.category_count ?? drawerCatsSelected.length ?? 0 }} 个</strong></div>
-            <div class="drawer-sum-row"><span>商品总数</span><strong>{{ num(drawerPreview.sku_count || 0) }} SKU</strong></div>
-            <div class="drawer-sum-row"><span>促销商品</span><strong>{{ num(drawerPreview.promo_count || 0) }} 个</strong></div>
-            <div v-if="drawerIncludePrice" class="drawer-sum-row"><span>价格序列</span><strong>{{ num(drawerPreview.price_history_rows || 0) }} 条</strong></div>
-            <div v-if="drawerIncludeVoc" class="drawer-sum-row"><span>评论条数</span><strong>{{ num(drawerPreview.review_count || 0) }} 条</strong></div>
-            <div class="drawer-sum-row total"><span>预计文件大小</span><strong>{{ drawerPreview.file_size_mb || '?' }} MB</strong></div>
-            <div class="drawer-sum-row" style="color:#9ca3af;font-size:0.78rem"><span>预计耗时</span><span>{{ drawerPreview.duration_sec || '?' }} 秒</span></div>
-          </div>
-        </div>
-      </div>
-      <div class="drawer-foot">
-        <button class="btn" @click="closeBulkDownload">取消</button>
-        <button class="btn solid" @click="confirmBulkDownload"
-          :disabled="!drawerSites.length">⬇ 开始下载</button>
-      </div>
-    </div>
-  </transition>
-  </template>
-</div>
+<div id="app"></div>
 
 <script>
-const { createApp } = Vue;
-createApp({
-  data(){return{
-    token: localStorage.getItem("sc_token")||"",
-    user: JSON.parse(localStorage.getItem("sc_user")||"{}"),
-    loginForm:{username:"",password:""}, logging:false, loginErr:"",
-    sites:[], currentSite:"", tab:"overview", pTab:"all",
-    tabList:[{k:"overview",label:"总体分析"},{k:"products",label:"产品分析"},
-      {k:"promotions",label:"销售促销"},{k:"coverage",label:"数据覆盖率",badge:"NEW"},
-      {k:"datasources",label:"数据源"},
-      {k:"jobs",label:"采集任务"},{k:"api",label:"API 接入"}],
-    datasources:[], dsTab:"all",
-    apiKeys:[], newKeyName:"", newKey:"",
-    ov:{cards:{},trends:[]}, products:[], total:0, page:1, pageSize:20,
-    counts:{all:0,bestseller:0,new:0}, search:"", minP:null, maxP:null,
-    promotions:[], jobs:[], proxy:{}, triggering:false, chart:null,
-    // 批量下载抽屉
-    drawerOpen:false, drawerLoading:false,
-    drawerSites:[],          // 选中的站点
-    drawerCatsBySite:{},     // {site: [{name, product_count, source, parent_id, level}]}
-    drawerCatsSelected:[],   // 选中的品类名
-    drawerCatFilter:"",      // 品类搜索框
-    drawerExpanded:{},       // 树形展开状态 {category_id: true}
-    drawerFormat:"xlsx",     // 文件格式 xlsx|csv|json|zip
-    drawerIncludePrice:true, // toggle: 含价格曲线
-    drawerIncludeVoc:true,   // toggle: 含 VOC 评论
-    drawerIncludeImages:false,// toggle: 含图片 URL
-    drawerSplitByCategory:true,// toggle: 按品类拆 sheet
-    drawerPreview:{},        // 预览统计 7 项
-    drawerPreviewLoading:false,
-    drawerPreviewTimer:null,
-    // 覆盖率仪表盘
-    coverage:{sites:[],summary:{}}, coverageLoaded:false, coverageFilter:"all",
-  };},
-  computed:{
-    site(){ return this.sites.find(s=>s.site===this.currentSite); },
-    dsFiltered(){ return this.dsTab==='all'?this.datasources
-      :this.datasources.filter(d=>d.type===this.dsTab); },
-    dsOnline(){ return this.datasources.filter(d=>d.status==='online').length; },
-    dsTotalCount(){ return this.datasources.reduce((a,d)=>a+(d.count||0),0); },
-  },
-  async mounted(){ if(this.token) await this.boot(); },
-  methods:{
-    num(v){return (v??0).toLocaleString();},
-    money(v){return v==null?"—":"$"+Number(v).toLocaleString(undefined,
-      {minimumFractionDigits:2,maximumFractionDigits:2});},
-    fmt(v){return v?v.replace("T"," ").slice(0,16):"—";},
-    attrText(a){return a?Object.entries(a).map(([k,x])=>k+":"+x).join(" / "):"—";},
-    statusText(s){return{on_sale:"在售",out_of_stock:"缺货",
-      discontinued:"下架"}[s]||s;},
-    async api(path,opts){
-      const o=opts||{}; o.headers=Object.assign(
-        {"Authorization":"Bearer "+this.token},o.headers||{});
-      const r=await fetch(path,o);
-      if(r.status===401){ this.logout(); throw new Error("登录已过期"); }
-      return r.json();
-    },
-    async doLogin(){
-      this.logging=true; this.loginErr="";
-      try{
-        const r=await fetch("/api/login",{method:"POST",
-          headers:{"Content-Type":"application/json"},
-          body:JSON.stringify(this.loginForm)});
-        if(!r.ok){ this.loginErr="账号或密码错误"; return; }
-        const d=await r.json();
-        this.token=d.token; this.user={display_name:d.display_name,role:d.role};
-        localStorage.setItem("sc_token",d.token);
-        localStorage.setItem("sc_user",JSON.stringify(this.user));
-        await this.boot();
-      }catch(e){ this.loginErr="登录失败："+e.message; }
-      finally{ this.logging=false; }
-    },
-    logout(){ this.token=""; localStorage.removeItem("sc_token");
-      localStorage.removeItem("sc_user"); },
-    async boot(){
-      this.sites=await this.api("/api/sites");
-      if(this.sites.length){
-        this.currentSite=(this.sites.find(s=>s.sku_count>0)||this.sites[0]).site;
-        await this.loadAll();
-      }
-    },
-    async loadAll(){
-      await Promise.all([this.loadOverview(),this.loadCounts(),
-        this.loadProducts(1),this.loadPromotions(),this.loadJobs(),this.loadProxy()]);
-    },
-    switchTab(k){ this.tab=k;
-      if(k==='overview') this.$nextTick(this.renderChart);
-      if(k==='api') this.loadKeys();
-      if(k==='datasources'&&!this.datasources.length) this.loadDatasources();
-      if(k==='coverage'&&!this.coverageLoaded) this.loadCoverage(); },
-    dsCount(t){ return this.datasources.filter(d=>d.type===t).length; },
-    async loadDatasources(){
-      try{ this.datasources=await this.api("/api/datasources"); }
-      catch(e){ this.datasources=[]; }
-    },
-    async loadOverview(){
-      this.ov=await this.api(`/api/sites/${this.currentSite}/overview`);
-      this.$nextTick(this.renderChart);
-    },
-    async loadCounts(){
-      for(const t of["all","bestseller","new"]){
-        const r=await this.api(`/api/products?site=${this.currentSite}`+
-          `&tab=${t}&page_size=1`);
-        this.counts[t]=r.total;
-      }
-    },
-    setPTab(t){ this.pTab=t; this.loadProducts(1); },
-    async loadProducts(p){
-      this.page=p;
-      let u=`/api/products?site=${this.currentSite}&tab=${this.pTab}`+
-        `&page=${p}&page_size=${this.pageSize}`;
-      if(this.search) u+=`&search=${encodeURIComponent(this.search)}`;
-      if(this.minP!=null) u+=`&min_price=${this.minP}`;
-      if(this.maxP!=null) u+=`&max_price=${this.maxP}`;
-      const r=await this.api(u);
-      this.products=r.items; this.total=r.total;
-    },
-    async loadPromotions(){
-      const r=await this.api(`/api/promotions?site=${this.currentSite}`);
-      this.promotions=r.items;
-    },
-    async loadJobs(){ this.jobs=await this.api("/api/jobs"); },
-    async loadProxy(){ try{ this.proxy=await this.api("/api/proxy-status"); }
-      catch(e){ this.proxy={}; } },
-    async loadKeys(){ try{ this.apiKeys=await this.api("/api/keys"); }
-      catch(e){ this.apiKeys=[]; } },
-    async createKey(){
-      const name=prompt("密钥名称（用途备注）：","Agent 接入");
-      if(!name) return;
-      const r=await this.api("/api/keys",{method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({name})});
-      this.newKey=r.key||""; this.loadKeys();
-    },
-    async revokeKey(id){
-      if(!confirm("确认撤销该密钥？撤销后立即失效。")) return;
-      await this.api(`/api/keys/${id}`,{method:"DELETE"});
-      this.loadKeys();
-    },
-    async trigger(){
-      this.triggering=true;
-      await this.api(`/api/jobs/trigger?site=${this.currentSite}`,{method:"POST"});
-      setTimeout(()=>{ this.triggering=false; this.loadJobs(); },1500);
-      alert("采集任务已加入后台队列，稍后点「刷新」查看结果。");
-    },
-    exportExcel(){
-      window.open(`/api/export/products?site=${this.currentSite}`+
-        `&token=${encodeURIComponent(this.token)}`,"_blank");
-    },
+const { createApp, ref, computed, onMounted } = Vue;
 
-    // ====== 批量按品类下载抽屉（支持多站点 + 多品类）======
-    async openBulkDownload(){
-      this.drawerOpen=true;
-      // 默认选当前站
-      if(!this.drawerSites.length) this.drawerSites=[this.currentSite];
-      await this.loadDrawerCats();
-    },
-    closeBulkDownload(){ this.drawerOpen=false; },
-    async loadDrawerCats(){
-      this.drawerLoading=true;
-      try{
-        if(!this.drawerSites.length){ this.drawerCatsBySite={}; return; }
-        const sites=this.drawerSites.join(",");
-        this.drawerCatsBySite=await this.api(`/api/categories/cross?sites=${sites}`);
-      }catch(e){ this.drawerCatsBySite={}; }
-      this.drawerLoading=false;
-      this.refreshDrawerPreview();
-    },
-    toggleDrawerSite(site){
-      const i=this.drawerSites.indexOf(site);
-      if(i>=0) this.drawerSites.splice(i,1);
-      else this.drawerSites.push(site);
-      this.loadDrawerCats();
-    },
-    drawerSiteChecked(site){ return this.drawerSites.includes(site); },
-    toggleDrawerCat(name){
-      const i=this.drawerCatsSelected.indexOf(name);
-      if(i>=0) this.drawerCatsSelected.splice(i,1);
-      else this.drawerCatsSelected.push(name);
-      this.refreshDrawerPreview();
-    },
-    drawerCatChecked(name){ return this.drawerCatsSelected.includes(name); },
-    drawerAllCats(){
-      // 合并所有选中站的品类（按 name 去重，product_count 累加）
-      const m={};
-      for(const site in this.drawerCatsBySite){
-        for(const c of this.drawerCatsBySite[site]||[]){
-          if(!c.name) continue;
-          if(!m[c.name]) m[c.name]={
-            name:c.name, product_count:0, sites:[],
-            category_id:c.category_id, parent_id:c.parent_id, level:c.level
-          };
-          m[c.name].product_count+=(c.product_count||0);
-          m[c.name].sites.push(site);
-        }
-      }
-      return Object.values(m).sort((a,b)=>b.product_count-a.product_count);
-    },
-    drawerCatTree(){
-      // 建树：按 parent_id/level 组织。无 parent_id 时降级为平铺
-      const cats=this.drawerAllCats();
-      const f=this.drawerCatFilter.toLowerCase();
-      // 平铺降级：没 category_id 时直接返回过滤后的列表（flat）
-      const hasTree=cats.some(c=>c.category_id);
-      if(!hasTree){
-        return cats.filter(c=>!f||c.name.toLowerCase().includes(f))
-                   .map(c=>({...c,children:[],isFlat:true}));
-      }
-      // 建树
-      const byId={}, roots=[];
-      cats.forEach(c=>{byId[c.category_id]={...c,children:[]}});
-      cats.forEach(c=>{
-        const node=byId[c.category_id];
-        if(c.parent_id && byId[c.parent_id]) byId[c.parent_id].children.push(node);
-        else roots.push(node);
-      });
-      // 搜索：过滤树（保留路径）
-      if(f){
-        const matches=cat=>{
-          if(cat.name.toLowerCase().includes(f)) return true;
-          cat.children=cat.children.filter(matches);
-          return cat.children.length>0;
-        };
-        return roots.filter(matches);
-      }
-      return roots;
-    },
-    drawerFilteredCats(){
-      // 兼容旧代码：调用 tree
-      return this.drawerCatTree();
-    },
-    toggleExpand(catId){
-      this.drawerExpanded={...this.drawerExpanded,
-        [catId]:!this.drawerExpanded[catId]};
-    },
-    drawerNoCatsSites(){
-      return this.drawerSites.filter(s=>!(this.drawerCatsBySite[s]||[]).length);
-    },
-    refreshDrawerPreview(){
-      // debounce 300ms
-      if(this.drawerPreviewTimer) clearTimeout(this.drawerPreviewTimer);
-      this.drawerPreviewTimer=setTimeout(()=>this.loadDrawerPreview(),300);
-    },
-    async loadDrawerPreview(){
-      if(!this.drawerSites.length){ this.drawerPreview={}; return; }
-      this.drawerPreviewLoading=true;
-      try{
-        const params=new URLSearchParams({
-          token:this.token,
-          sites:this.drawerSites.join("|"),
-          include_price_history:this.drawerIncludePrice,
-          include_voc:this.drawerIncludeVoc,
+const App = {
+  setup() {
+    const token = ref(localStorage.getItem('sc_token') || '');
+    const user = ref({});
+    const loginForm = ref({ username: 'aosen', password: '' });
+    const loginErr = ref('');
+    const logging = ref(false);
+
+    async function doLogin() {
+      loginErr.value = ''; logging.value = true;
+      try {
+        const r = await fetch('/api/login', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(loginForm.value)
         });
-        if(this.drawerCatsSelected.length){
-          params.set("categories",this.drawerCatsSelected.join("|"));
-        }
-        const r=await fetch(`/api/export/preview?${params}`);
-        this.drawerPreview=await r.json();
-      }catch(e){ this.drawerPreview={}; }
-      this.drawerPreviewLoading=false;
-    },
-    setDrawerFormat(f){ this.drawerFormat=f; this.refreshDrawerPreview(); },
-    toggleDrawerOption(key){
-      this[key]=!this[key];
-      this.refreshDrawerPreview();
-    },
-    confirmBulkDownload(){
-      if(!this.drawerSites.length){ alert("请至少选 1 个站点"); return; }
-      const params=new URLSearchParams({
-        token:this.token,
-        sites:this.drawerSites.join("|"),
-        format:this.drawerFormat,
-        include_price_history:this.drawerIncludePrice,
-        include_voc:this.drawerIncludeVoc,
-        include_images:this.drawerIncludeImages,
-        split_by_category:this.drawerSplitByCategory,
-      });
-      if(this.drawerCatsSelected.length){
-        params.set("categories",this.drawerCatsSelected.join("|"));
-      }
-      window.open(`/api/export/products?${params}`,"_blank");
-      setTimeout(()=>this.closeBulkDownload(),300);
-    },
+        const d = await r.json();
+        if (!r.ok) { loginErr.value = d.detail || '登录失败'; return; }
+        token.value = d.token; user.value = d;
+        localStorage.setItem('sc_token', d.token);
+        localStorage.setItem('sc_user', JSON.stringify(d));
+        await loadAll();
+      } catch(e) { loginErr.value = '网络错误'; }
+      finally { logging.value = false; }
+    }
+    function logout() {
+      localStorage.removeItem('sc_token'); localStorage.removeItem('sc_user');
+      token.value = ''; user.value = {};
+    }
+    function authH() { return { 'Authorization': 'Bearer ' + token.value }; }
 
-    // ====== 数据覆盖率 ======
-    async loadCoverage(){
-      try{
-        this.coverage=await this.api("/api/coverage");
-        this.coverageLoaded=true;
-      }catch(e){ this.coverage={sites:[],summary:{}}; }
-    },
-    coverageFiltered(){
-      const f=this.coverageFilter;
-      if(f==='all') return this.coverage.sites||[];
-      return (this.coverage.sites||[]).filter(s=>s.status===f);
-    },
-    coverageBarColor(s){
-      if(s.status==='critical') return 'linear-gradient(90deg,#fb7185,#dc2626)';
-      if(s.status==='warning') return 'linear-gradient(90deg,#fbbf24,#f59e0b)';
-      if(s.status==='healthy') return 'linear-gradient(90deg,#10b981,#059669)';
-      return '#9ca3af';
-    },
-    renderChart(){
-      const el=document.getElementById("chart");
-      if(!el||!this.ov.trends||!this.ov.trends.length) return;
-      if(!this.chart) this.chart=echarts.init(el,null,{renderer:"canvas"});
-      const t=this.ov.trends;
-      this.chart.setOption({
-        backgroundColor:"transparent",
-        textStyle:{color:"#a89f93"},
-        tooltip:{trigger:"axis",backgroundColor:"#fff",borderColor:"#efe9e0",
-          textStyle:{color:"#3a3340"}},
-        legend:{data:["SKU数","新品","预估销量","预估营收"],
-          textStyle:{color:"#a89f93"}},
-        grid:{left:52,right:52,top:42,bottom:34},
-        xAxis:{type:"category",data:t.map(x=>x.date),
-          axisLine:{lineStyle:{color:"#efe9e0"}},axisLabel:{color:"#a89f93"}},
-        yAxis:[{type:"value",splitLine:{lineStyle:{color:"#f3eee6"}},
-          axisLabel:{color:"#a89f93"}},
-          {type:"value",splitLine:{show:false},axisLabel:{color:"#a89f93"}}],
-        color:["#7c6ce0","#3dc98a","#e0a04a","#d76b8f"],
-        series:[
-          {name:"SKU数",type:"line",smooth:true,symbol:"circle",symbolSize:6,
-            data:t.map(x=>x.sku_count)},
-          {name:"新品",type:"line",smooth:true,symbol:"circle",symbolSize:6,
-            data:t.map(x=>x.new_product_count)},
-          {name:"预估销量",type:"line",smooth:true,symbol:"circle",symbolSize:6,
-            data:t.map(x=>x.estimated_sales)},
-          {name:"预估营收",type:"line",smooth:true,symbol:"circle",symbolSize:6,
-            yAxisIndex:1,data:t.map(x=>x.estimated_revenue)},
-        ],
-      });
-    },
+    const tab = ref('overview');
+    const sites = ref([]);
+    const selectedSite = ref('');
+    const coverage = ref({ summary:{}, sites:[] });
+    const jobs = ref([]);
+    const products = ref({ items:[], total:0 });
+    const proxyStatus = ref({});
+    const billing = ref({ keys:[] });
+    const apiKeys = ref([]);
+    const toast = ref('');
+    function showToast(m) { toast.value = m; setTimeout(()=> toast.value='', 2000); }
+
+    const askResult = ref(null);
+    const askRunning = ref(false);
+    const askInput = ref('');
+    const starters = [
+      { icon:'📊', title:'总览快照', desc:'46 站覆盖率 + 总 SKU', key:'overview' },
+      { icon:'🆕', title:'今日 delta', desc:'昨日新增/变化', key:'new' },
+      { icon:'⚠️', title:'失败 jobs', desc:'worker 异常列表', key:'failed' },
+      { icon:'🔔', title:'代理池', desc:'10 代理调用统计', key:'proxy' },
+      { icon:'🚀', title:'触发抓取', desc:'手动跑特定 site', key:'trigger' },
+    ];
+    async function runStarter(key) {
+      askRunning.value = true;
+      askResult.value = { type:key, data:null };
+      try {
+        if (key === 'overview') {
+          const r = await fetch('/api/coverage', { headers: authH() });
+          askResult.value.data = await r.json();
+        } else if (key === 'new') {
+          const r = await fetch('/api/daily-delta/latest', { headers: authH() });
+          askResult.value.data = await r.json();
+        } else if (key === 'failed') {
+          const r = await fetch('/api/jobs?limit=30', { headers: authH() });
+          const all = await r.json();
+          askResult.value.data = (Array.isArray(all)?all:all.items||[]).filter(j=>j.status==='failed').slice(0,15);
+        } else if (key === 'proxy') {
+          const r = await fetch('/api/proxy/status', { headers: authH() });
+          askResult.value.data = await r.json();
+        } else if (key === 'trigger') {
+          askResult.value.data = { msg:'在 Coverage 页点 "触发" 按钮' };
+        }
+      } catch(e) { showToast('查询失败'); }
+      finally { askRunning.value = false; }
+    }
+
+    async function loadSites() {
+      const r = await fetch('/api/sites', { headers: authH() });
+      sites.value = await r.json();
+      if (!selectedSite.value && sites.value.length) selectedSite.value = sites.value[0].site;
+    }
+    async function loadCoverage() {
+      const r = await fetch('/api/coverage', { headers: authH() });
+      coverage.value = await r.json();
+    }
+    async function loadJobs() {
+      const r = await fetch('/api/jobs?limit=60', { headers: authH() });
+      const d = await r.json();
+      jobs.value = Array.isArray(d) ? d : (d.items || []);
+    }
+    async function loadProducts() {
+      if (!selectedSite.value) return;
+      try {
+        const r = await fetch(`/api/products?site=${selectedSite.value}&page_size=30`, { headers: authH() });
+        products.value = await r.json();
+      } catch(e) {}
+    }
+    async function loadProxy() {
+      try {
+        const r = await fetch('/api/proxy/status', { headers: authH() });
+        proxyStatus.value = await r.json();
+      } catch(e) {}
+    }
+    async function loadBilling() {
+      try {
+        const r = await fetch('/api/billing/usage', { headers: authH() });
+        billing.value = await r.json();
+      } catch(e) {}
+    }
+    async function loadKeys() {
+      try {
+        const r = await fetch('/api/keys', { headers: authH() });
+        apiKeys.value = await r.json();
+      } catch(e) {}
+    }
+    async function loadAll() {
+      const cached = localStorage.getItem('sc_user');
+      if (cached) try { user.value = JSON.parse(cached); } catch {}
+      await Promise.all([loadSites(), loadCoverage(), loadJobs(), loadProxy(), loadBilling(), loadKeys()]);
+    }
+    async function triggerSite(site) {
+      const r = await fetch(`/api/jobs/trigger?site=${site}`, { method:'POST', headers: authH() });
+      if (r.ok) showToast('已触发 ' + site);
+      else showToast('触发失败');
+      setTimeout(loadJobs, 1500);
+    }
+    function exportCSV() {
+      window.open(`/api/export/products?token=${token.value}&site=${selectedSite.value}&format=csv`, '_blank');
+    }
+
+    const totalSku = computed(() => coverage.value.summary?.total_current_sku || 0);
+    const coveragePct = computed(() => coverage.value.summary?.overall_coverage_pct || 0);
+    const healthySites = computed(() => coverage.value.summary?.healthy_count || 0);
+    const criticalSites = computed(() => coverage.value.summary?.critical_count || 0);
+    const warningSites = computed(() => coverage.value.summary?.warning_count || 0);
+    const runningJobs = computed(() => jobs.value.filter(j=>j.status==='running').length);
+    const successJobs = computed(() => jobs.value.filter(j=>j.status==='success').length);
+    const proxyOk = computed(() => proxyStatus.value?.available || 0);
+    const proxyTotal = computed(() => proxyStatus.value?.total || 0);
+    const sortedCov = computed(() => (coverage.value.sites || []).slice().sort((a,b)=>b.coverage_pct - a.coverage_pct));
+
+    onMounted(()=> { if (token.value) loadAll(); });
+
+    return {
+      token, user, loginForm, loginErr, logging, doLogin, logout,
+      tab, sites, selectedSite, coverage, jobs, products, proxyStatus, apiKeys, billing,
+      toast, showToast, starters, askInput, askResult, askRunning, runStarter,
+      loadProducts, loadCoverage, loadJobs, triggerSite, exportCSV,
+      totalSku, coveragePct, healthySites, criticalSites, warningSites,
+      runningJobs, successJobs, proxyOk, proxyTotal, sortedCov
+    };
   },
-}).mount("#app");
+  template: `
+    <div v-if="!token" class="login-wrap">
+      <div class="login-card">
+        <div class="login-brand">⚡ smart-crawler</div>
+        <div class="login-sub">Aosom 竞品情报 · 授权访问</div>
+        <div class="login-field">
+          <label>账号</label>
+          <input v-model="loginForm.username" placeholder="aosen" @keyup.enter="doLogin"/>
+        </div>
+        <div class="login-field">
+          <label>密码</label>
+          <input v-model="loginForm.password" type="password" placeholder="密码" @keyup.enter="doLogin"/>
+        </div>
+        <button class="login-btn" :disabled="logging" @click="doLogin">{{ logging ? '登录中…' : '登录' }}</button>
+        <div class="login-err">{{ loginErr }}</div>
+      </div>
+    </div>
+
+    <template v-else>
+      <div class="topbar">
+        <div class="brand">⚡ smart-crawler</div>
+        <div class="site-picker">
+          <div class="ws-icon">{{ (user.display_name||'A').charAt(0).toUpperCase() }}</div>
+          <select v-model="selectedSite" @change="loadProducts">
+            <option v-for="s in sites" :key="s.site" :value="s.site">{{ s.site }} · {{ s.brand }}</option>
+          </select>
+        </div>
+        <div class="tab-row">
+          <button class="tab" :class="{active: tab==='overview'}" @click="tab='overview'">📊 总览</button>
+          <button class="tab" :class="{active: tab==='ask'}" @click="tab='ask'">💬 Ask</button>
+          <button class="tab" :class="{active: tab==='catalog'}" @click="tab='catalog';loadProducts()">📦 Catalog</button>
+          <button class="tab" :class="{active: tab==='coverage'}" @click="tab='coverage';loadCoverage()">🌐 Coverage</button>
+          <button class="tab" :class="{active: tab==='jobs'}" @click="tab='jobs';loadJobs()">⚙️ Jobs</button>
+          <button class="tab" :class="{active: tab==='settings'}" @click="tab='settings'">🔧 Settings</button>
+        </div>
+        <div class="usage-strip">SKU <b>{{ totalSku.toLocaleString() }}</b> · <b>{{ coveragePct }}%</b></div>
+        <button class="icon-btn" @click="exportCSV" title="导出 CSV">📥</button>
+        <div class="acct" @click="logout" title="点击退出">
+          <div class="avatar">{{ (user.display_name||'A').charAt(0).toUpperCase() }}</div>
+          <span>{{ user.display_name || user.username || 'admin' }}</span>
+        </div>
+      </div>
+
+      <div v-if="tab==='overview'" class="page">
+        <div class="lead">系统总览 · 实时数据</div>
+        <div class="sub">smart-crawler 控制台 · 客户视角统一界面</div>
+
+        <div class="stats-hero">
+          <div class="stat"><div class="lbl">总 SKU</div><div class="val">{{ totalSku.toLocaleString() }}</div><div class="delta">{{ coveragePct }}% 覆盖</div></div>
+          <div class="stat"><div class="lbl">健康站点</div><div class="val">{{ healthySites }} / {{ sites.length }}</div><div class="delta">100% 覆盖</div></div>
+          <div class="stat"><div class="lbl">警告</div><div class="val">{{ warningSites }}</div><div class="delta warn">50-90%</div></div>
+          <div class="stat"><div class="lbl">关键缺口</div><div class="val">{{ criticalSites }}</div><div class="delta bad">&lt; 50%</div></div>
+          <div class="stat"><div class="lbl">Worker</div><div class="val">{{ runningJobs }}</div><div class="delta">{{ successJobs }} 成功</div></div>
+          <div class="stat"><div class="lbl">代理池</div><div class="val">{{ proxyOk }}/{{ proxyTotal }}</div><div class="delta">健康</div></div>
+        </div>
+
+        <div style="margin-top:18px">
+          <h3 style="font-size:1rem;font-weight:800;color:#fff;margin-bottom:10px">站点覆盖率 TOP 20</h3>
+          <div class="cov-grid">
+            <div v-for="s in sortedCov.slice(0, 20)" :key="s.site" class="cov-tile" :class="s.status">
+              <h6>{{ s.site }}</h6>
+              <div class="country">{{ s.brand }} · {{ s.country }}</div>
+              <div class="num">{{ (s.current||0).toLocaleString() }}</div>
+              <div class="pct">{{ s.coverage_pct }}% · 满 {{ (s.estimated_full||0).toLocaleString() }}</div>
+              <div class="bar"><div :style="{width: Math.min(s.coverage_pct||0, 100)+'%'}"></div></div>
+              <button @click="triggerSite(s.site)">▶ 触发抓取</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="tab==='ask'" class="page">
+        <div class="lead">问 smart-crawler 一句话</div>
+        <div class="sub">点 starter 查实时数据</div>
+
+        <div class="ask-shell">
+          <div class="ask-main">
+            <div class="ask-input">
+              <textarea v-model="askInput" placeholder="(预览版 · 点 starter 直接查实时数据)"></textarea>
+              <div class="ask-input-row">
+                <span>v9 上 NL → SQL，现在用 starter</span>
+                <button class="btn-go" @click="runStarter('overview')">▶ 总览</button>
+              </div>
+            </div>
+
+            <div v-if="!askResult" class="starters">
+              <div v-for="s in starters" :key="s.key" class="starter" @click="runStarter(s.key)">
+                <div class="icon">{{ s.icon }}</div>
+                <div class="title">{{ s.title }}</div>
+                <div class="desc">{{ s.desc }}</div>
+              </div>
+            </div>
+
+            <div v-if="askResult" style="background:#13111f;border:1px solid #29213a;border-radius:12px;padding:14px;font-size:0.82rem">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                <span style="color:#a78bfa;font-weight:700">{{ askResult.type }}</span>
+                <button @click="askResult=null" style="background:transparent;border:1px solid #29213a;color:#94a3b8;padding:3px 10px;border-radius:6px;cursor:pointer;font-size:0.72rem">清除</button>
+              </div>
+              <pre style="background:#0d0a17;padding:11px;border-radius:7px;color:#cbd5e1;overflow-x:auto;font-size:0.74rem;line-height:1.55;max-height:520px">{{ JSON.stringify(askResult.data, null, 2) }}</pre>
+            </div>
+          </div>
+
+          <div class="trace">
+            <h4>实时数据</h4>
+            <div style="font-size:0.78rem;line-height:1.8">
+              <div>📦 SKU: <b style="color:#fff">{{ totalSku.toLocaleString() }}</b></div>
+              <div>🌐 覆盖: <b style="color:#fff">{{ coveragePct }}%</b></div>
+              <div>⚙️ 跑中: <b style="color:#fff">{{ runningJobs }}</b></div>
+              <div>🔔 代理: <b style="color:#fff">{{ proxyOk }}/{{ proxyTotal }}</b></div>
+              <div>🏪 站点: <b style="color:#fff">{{ sites.length }}</b></div>
+              <div>✅ 完成: <b style="color:#fff">{{ successJobs }}</b></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="tab==='catalog'" class="page">
+        <div class="lead">商品 Catalog</div>
+        <div class="sub">{{ products.total ? products.total.toLocaleString() + ' 条' : '加载中' }} · {{ selectedSite }}</div>
+
+        <div class="cat-filters">
+          <select v-model="selectedSite" @change="loadProducts">
+            <option v-for="s in sites" :key="s.site" :value="s.site">{{ s.site }}</option>
+          </select>
+          <button class="btn-go" @click="loadProducts">🔄 刷新</button>
+          <button class="btn-go" @click="exportCSV">📥 导出 CSV</button>
+        </div>
+
+        <div class="cat-table-wrap">
+          <table class="cat-table">
+            <thead><tr><th></th><th>SKU</th><th>商品</th><th>价格</th><th>评分</th><th>30d</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr v-for="p in (products.items||[]).slice(0,30)" :key="p.id || p.sku">
+                <td><div class="thumb">📦</div></td>
+                <td><code style="font-size:0.72rem;color:#a78bfa">{{ p.sku }}</code></td>
+                <td>{{ (p.title||'').slice(0,60) }}</td>
+                <td>{{ p.sale_price ? '$' + p.sale_price : '—' }}</td>
+                <td>{{ p.ratings || '—' }}</td>
+                <td>{{ p.thirty_day_sales || 0 }}</td>
+                <td><span class="pill" :class="p.status==='on_sale'?'ok':p.status==='out_of_stock'?'bad':'warn'">{{ p.status||'?' }}</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div v-if="tab==='coverage'" class="page">
+        <div class="lead">数据覆盖率 · 全 {{ sites.length }} 站</div>
+        <div class="sub">总 SKU {{ totalSku.toLocaleString() }} / 满 {{ (coverage.summary?.total_estimated_full||0).toLocaleString() }} = {{ coveragePct }}%</div>
+
+        <div class="stats-hero">
+          <div class="stat"><div class="lbl">健康</div><div class="val">{{ healthySites }}</div><div class="delta">≥ 90%</div></div>
+          <div class="stat"><div class="lbl">警告</div><div class="val">{{ warningSites }}</div><div class="delta warn">50-90%</div></div>
+          <div class="stat"><div class="lbl">关键</div><div class="val">{{ criticalSites }}</div><div class="delta bad">&lt; 50%</div></div>
+        </div>
+
+        <div class="cov-grid">
+          <div v-for="s in sortedCov" :key="s.site" class="cov-tile" :class="s.status">
+            <h6>{{ s.site }}</h6>
+            <div class="country">{{ s.brand }} · {{ s.country }}</div>
+            <div class="num">{{ (s.current||0).toLocaleString() }}</div>
+            <div class="pct">{{ s.coverage_pct }}% · 满 {{ (s.estimated_full||0).toLocaleString() }}</div>
+            <div class="bar"><div :style="{width: Math.min(s.coverage_pct||0, 100)+'%'}"></div></div>
+            <button @click="triggerSite(s.site)">▶ 触发</button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="tab==='jobs'" class="page">
+        <div class="lead">采集任务 · Worker 状态</div>
+        <div class="sub">{{ runningJobs }} 跑中 · {{ successJobs }} 成功 · 共 {{ jobs.length }} 显示</div>
+        <button class="btn-go" @click="loadJobs" style="margin-bottom:10px">🔄 刷新</button>
+
+        <div class="jobs-list">
+          <div class="job-row head"><div>#</div><div>SITE</div><div>STATUS</div><div>SKU</div><div>耗时</div><div>完成</div></div>
+          <div v-for="j in jobs.slice(0,40)" :key="j.id" class="job-row">
+            <div>{{ j.id }}</div>
+            <div>{{ j.site }}</div>
+            <div><span class="pill" :class="j.status==='success'?'ok':j.status==='running'?'warn':j.status==='failed'?'bad':'pending'">{{ j.status }}</span></div>
+            <div>{{ j.products_count||0 }}</div>
+            <div>{{ j.duration_sec ? Math.round(j.duration_sec)+'s' : '—' }}</div>
+            <div>{{ (j.finished_at||j.started_at||'').slice(11,16)||'—' }}</div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="tab==='settings'" class="page">
+        <div class="lead">设置</div>
+        <div class="sub">API Keys · Billing · 代理池 · 文档</div>
+
+        <div class="set-grid">
+          <div class="set-block">
+            <h3>🔑 API Keys</h3>
+            <div v-for="k in apiKeys" :key="k.id" class="key-row">
+              <div class="info">
+                <b>{{ k.name }}</b>
+                <span class="key-prefix">{{ k.key_prefix }}</span>
+                <span class="meta">{{ (k.request_count||0).toLocaleString() }} 次调用</span>
+              </div>
+            </div>
+            <div v-if="!apiKeys.length" style="color:#52527a;font-size:0.78rem;padding:14px 0;text-align:center">暂无 key</div>
+          </div>
+
+          <div class="set-block">
+            <h3>💰 Billing · 30 天用量</h3>
+            <div v-for="k in (billing.keys||[])" :key="k.id" class="key-row">
+              <div class="info">
+                <b>{{ k.name }}</b>
+                <span class="key-prefix">{{ k.key_prefix }}</span>
+                <span class="meta">{{ (k.request_count||0).toLocaleString() }} 次</span>
+              </div>
+            </div>
+            <div v-if="!(billing.keys||[]).length" style="color:#52527a;font-size:0.78rem;padding:14px 0;text-align:center">暂无 usage</div>
+          </div>
+
+          <div class="set-block">
+            <h3>🌐 代理池 ({{ proxyOk }}/{{ proxyTotal }})</h3>
+            <div v-for="p in (proxyStatus.details||[]).slice(0,5)" :key="p.url" class="key-row">
+              <div class="info">
+                <span class="key-prefix">{{ (p.url||'').slice(7, 45) }}…</span>
+                <span class="meta">ok={{ p.success_count }} fail={{ p.fail_count }}</span>
+              </div>
+              <span class="pill" :class="p.fail_count>3?'bad':'ok'">{{ p.fail_count>3?'⚠':'✓' }}</span>
+            </div>
+            <div v-if="!(proxyStatus.details||[]).length" style="color:#52527a;font-size:0.78rem;padding:14px 0;text-align:center">代理 status 未加载</div>
+          </div>
+
+          <div class="set-block">
+            <h3>📚 文档 · 工具</h3>
+            <div style="font-size:0.84rem;line-height:1.9">
+              <div>📊 <a href="/d/morning_report_2026-05-25.html" target="_blank">24h 战报</a></div>
+              <div>🎯 <a href="/d/customer_dashboard_v7_unified.html" target="_blank">v7 客户视角 Dashboard</a></div>
+              <div>📋 <a href="/d/aosen_80pct_daily_plan.html" target="_blank">遨森 80% 方案</a></div>
+              <div>🌐 <a href="/d/platform_expansion_roadmap.html" target="_blank">平台扩展路线图</a></div>
+              <div>🔬 <a href="/d/scrapling_design_research.html" target="_blank">Scrapling 研究</a></div>
+              <div>📚 <a href="/llms.txt" target="_blank">llms.txt (AI 入口)</a></div>
+              <div>🧪 <a href="/api/v1/" target="_blank">REST API v1 索引</a></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="toast" class="toast">{{ toast }}</div>
+    </template>
+  `
+};
+
+createApp(App).mount('#app');
 </script>
 </body>
 </html>

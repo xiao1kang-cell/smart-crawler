@@ -40,7 +40,37 @@ def get_crawler(site: Site) -> BaseCrawler:
     if platform == "overstock":
         from .overstock import OverstockCrawler
         return OverstockCrawler(site)
+    if platform == "westelm":
+        from .westelm import WestElmCrawler
+        return WestElmCrawler(site)
     if platform == "idealo":
         from .idealo import IdealoCrawler
         return IdealoCrawler(site)
+    if platform == "bol":
+        from .bol import BolCrawler
+        return BolCrawler(site)
+    if platform == "cdiscount":
+        from .cdiscount import CdiscountCrawler
+        return CdiscountCrawler(site)
+    if platform == "ikea":
+        from .ikea import IkeaCrawler
+        return IkeaCrawler(site)
+    if platform == "allegro":
+        from .allegro import AllegroCrawler
+        return AllegroCrawler(site)
+    if platform == "otto":
+        from .otto import OttoCrawler
+        return OttoCrawler(site)
+    if platform == "article":
+        from .article import ArticleCrawler
+        return ArticleCrawler(site)
+    if platform == "cratebarrel":
+        from .cratebarrel import CrateBarrelCrawler
+        return CrateBarrelCrawler(site)
+    if platform == "houzz":
+        from .houzz import HouzzCrawler
+        return HouzzCrawler(site)
+    if platform == "ebay":
+        from .ebay import EbayCrawler
+        return EbayCrawler(site)
     raise ValueError(f"未知平台: {platform}")

@@ -1,0 +1,428 @@
+"""Crate&Barrel 采集器 —— 美国中高端家居电商，Salesforce Commerce Cloud
+（Demandware）站，Akamai Bot Manager (sec-if-cpt / akam-sw.js) 防护。
+
+实地验证（2026-05-24，本机直连 99.x.x.x，无代理）：
+
+公开可达（curl_cffi 直连 200 OK）：
+  - https://www.crateandbarrel.com/robots.txt → 暴露
+    `Sitemap: https://www.crateandbarrel.com/assets/sitemap-index.xml`
+  - sitemap-index.xml 内含 28 个子 sitemap，PDP 相关 3 个：
+      · sitemap-pdp.xml      20,000 条在售 SKU（首选）
+      · sitemap-pdp1.xml      6,079 条 SKU
+      · sitemap-nla-pdp.xml  11,092 条 NLA（No Longer Available）SKU，跳过
+  - 子 sitemap 是 Google Image Sitemap 扩展格式（image:image），每条 url 节点内置：
+      · <loc>            PDP URL（`/<slug>/s<digits>`）
+      · <image:loc>      高清主图（cb.scene7.com/is/image/Crate/<assetKey>）
+      · <image:title>    完整商品名 + 图片角标（'XXX - image 0 of 12'）
+  - 即 sitemap 本身就给出 SKU + 标题 + 主图 + slug → 不进 PDP 也能产出 1000 SKU。
+
+被 Akamai 拦截（curl_cffi）：
+  - 任何 PDP（`/<slug>/sNNNNN`）请求返回 200 + ~6.5 KB 的 akam-sw.js 挑战页
+    （内容：`<div id="sec-if-cpt-container">` + akamai service worker 注册脚本 +
+    XHR 拦截 `location.reload(true)`）。无 product JSON-LD / og:meta / 价格。
+    全部 curl_cffi impersonate（chrome/chrome120/chrome131/safari17_0）相同结果。
+  - 完整 Sec-Fetch-* + Referer + Sec-Ch-Ua + homepage warmup 也照旧吃挑战页。
+  - 同 IP 反复触发后，StealthyFetcher (Camoufox) 进 PDP 直接 403 (~340 字节)。
+  - 结论：本机直连 100% 无法拿到 PDP 真实正文；需住宅代理池 +
+    StealthyFetcher（headless Camoufox）才能突破，单页成本 30-60s。
+
+策略（与 overstock.py 对齐）：
+  1. 顺序读 sitemap-pdp.xml → sitemap-pdp1.xml（跳过 nla-pdp），累积去重
+     直到 limit（默认 1000）。
+  2. 单条 sitemap 节点即产出一行 product dict —— 字段够齐用于「商品标杆库」。
+  3. CRATEBARREL_TRY_PDP=1 时尝试 PDP 兜底丰富（价格 / 评分 / 描述 /
+     完整图组），用 StealthyFetcher 解 JSON-LD。默认关。
+  4. CRATEBARREL_LIMIT=N 控制目标 SKU 数（默认 1000）。
+
+可拿字段（sitemap-only 路径）：
+  sku / spu       → URL 末段 'sNNNNN' 去前缀
+  title           → image:title 截断 ' - image X of Y' 后部分
+  image_urls      → [image:loc]（scene7 资产 URL，可拼 ?wid=2000 取高分辨率）
+  product_url     → loc
+  slug            → URL 第一段（用于二次定位）
+  site / brand    → 站点配置
+
+价格 / 描述 / 分类路径 / 库存：sitemap 不带，PDP 兜底打开时才有。
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+from urllib.parse import urlparse
+
+from curl_cffi import requests as creq
+
+from ..antiban import BlockedError
+from .base import BaseCrawler, CrawlResult
+
+DEFAULT_LIMIT = int(os.environ.get("CRATEBARREL_LIMIT", "1000"))
+SITEMAP_INDEX = "https://www.crateandbarrel.com/assets/sitemap-index.xml"
+TRY_PDP_ENRICH = os.environ.get("CRATEBARREL_TRY_PDP", "0") == "1"
+PDP_ENRICH_BUDGET = int(os.environ.get("CRATEBARREL_PDP_BUDGET", "50"))
+
+# 子 sitemap 命名 —— 在售优先，跳过 NLA（No Longer Available）
+_PDP_SITEMAP_PREFER = ("sitemap-pdp.xml", "sitemap-pdp1.xml")
+_PDP_SITEMAP_SKIP = ("sitemap-nla-pdp.xml",)
+
+_LOC_RE = re.compile(r"<loc>\s*(.*?)\s*</loc>")
+_URL_BLOCK_RE = re.compile(r"<url>(.*?)</url>", re.S)
+_IMG_LOC_RE = re.compile(r"<image:loc>\s*(.*?)\s*</image:loc>")
+_IMG_TITLE_RE = re.compile(r"<image:title>\s*(.*?)\s*</image:title>", re.S)
+# PDP URL 末段：/sNNNNN（数字 SKU）
+_PROD_URL_RE = re.compile(r"^https?://www\.crateandbarrel\.com/([^/?#]+)/s(\d+)/?$")
+# image:title 形如 'Anneli Upholstered King Bed - image 0 of 12'
+_IMG_TITLE_TAIL_RE = re.compile(r"\s*-\s*image\s+\d+\s+of\s+\d+\s*$", re.I)
+# Akamai 挑战页标志（PDP 触发反爬时返回 200 但正文 <10KB 含这些 token）
+_AKAMAI_MARKERS = (
+    "sec-if-cpt-container",
+    "sec-bc-tile-container",
+    "akam-sw.js",
+    "akamServiceWorkerInvoked",
+    "Pardon Our Interruption",
+    "Access Denied",
+)
+
+
+class CrateBarrelCrawler(BaseCrawler):
+    platform = "cratebarrel"
+
+    def __init__(self, site, limit: int | None = None):
+        super().__init__(site)
+        self.base = site.url.rstrip("/")
+        self.limit = limit if limit is not None else DEFAULT_LIMIT
+
+    # ------------------------------------------------------------------
+    # session
+    # ------------------------------------------------------------------
+    def _session(self, warmup: bool = False) -> creq.Session:
+        """Build curl_cffi session. Akamai BMP 只放行带浏览器特征 + warmup 过的 session。
+
+        实测：homepage / sitemap 不挑剔，但裸 session 直接打 PDP 会 100% 挑战。
+        我们走 sitemap-only 路径，所以 warmup 主要为后续 PDP enrich 兜底。
+        """
+        s = creq.Session(impersonate="chrome")
+        s.headers.update({
+            "User-Agent": self.ua(),
+            "Accept": "text/html,application/xhtml+xml,application/xml;"
+                      "q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Upgrade-Insecure-Requests": "1",
+        })
+        if self.proxy:
+            s.proxies = {"http": self.proxy, "https": self.proxy}
+        if warmup:
+            try:
+                s.get(self.base + "/", timeout=30)   # 拿 Akamai cookies
+            except Exception:
+                pass
+        # sitemap 请求换 XML accept
+        return s
+
+    # ------------------------------------------------------------------
+    # main
+    # ------------------------------------------------------------------
+    def crawl(self) -> CrawlResult:
+        result = CrawlResult()
+        sess = self._session()
+
+        # ---- Step 1：sitemap_index ----
+        try:
+            sess.headers["Accept"] = "application/xml,text/xml,*/*"
+            idx = sess.get(SITEMAP_INDEX, timeout=30)
+            self.guard(idx.status_code, "sitemap_index")
+            if idx.status_code != 200:
+                result.notes.append(
+                    f"⚠ sitemap_index 不可达（{idx.status_code}）")
+                return result
+        except BlockedError:
+            raise
+        except Exception as exc:
+            result.notes.append(f"⚠ sitemap_index 异常: {exc}")
+            return result
+
+        all_subs = _LOC_RE.findall(idx.text)
+        # 先 prefer（在售）再其他 PDP 类，跳过 NLA
+        prefer = [u for u in all_subs
+                  if u.rsplit("/", 1)[-1] in _PDP_SITEMAP_PREFER]
+        # 兜底：意外的其他 sitemap-pdp*.xml（防 C&B 加新分片）
+        extra_pdp = [u for u in all_subs
+                     if u.rsplit("/", 1)[-1].startswith("sitemap-pdp")
+                     and u not in prefer
+                     and u.rsplit("/", 1)[-1] not in _PDP_SITEMAP_SKIP]
+        sub_sitemaps = prefer + extra_pdp
+        result.notes.append(
+            f"sitemap_index: 共 {len(all_subs)} 个子 sitemap，"
+            f"PDP 类 {len(sub_sitemaps)}（跳过 NLA）")
+        self.snapshot("sitemap_index", idx.text)
+
+        # ---- Step 2：扫子 sitemap → 商品 dict ----
+        seen: set[str] = set()
+        for sm_url in sub_sitemaps:
+            if len(result.products) >= self.limit:
+                break
+            try:
+                sm = sess.get(sm_url, timeout=60)
+                self.guard(sm.status_code, f"sub:{sm_url}")
+                if sm.status_code != 200:
+                    result.notes.append(
+                        f"⚠ {sm_url.rsplit('/',1)[-1]} {sm.status_code}")
+                    continue
+            except BlockedError:
+                raise
+            except Exception as exc:
+                result.notes.append(
+                    f"⚠ {sm_url.rsplit('/',1)[-1]} 异常: {exc}")
+                continue
+
+            self.snapshot(sm_url.rsplit("/", 1)[-1], sm.text[:500_000])
+
+            parsed = 0
+            for blk in _URL_BLOCK_RE.finditer(sm.text):
+                if len(result.products) >= self.limit:
+                    break
+                row = self._parse_sitemap_entry(blk.group(1))
+                if not row or row["sku"] in seen:
+                    continue
+                seen.add(row["sku"])
+                result.products.append(row)
+                parsed += 1
+
+            result.notes.append(
+                f"{sm_url.rsplit('/',1)[-1]}: +{parsed} SKU "
+                f"（累计 {len(result.products)}）")
+            self.sleep()
+
+        # ---- Step 3（可选）：PDP 兜底丰富 ----
+        if TRY_PDP_ENRICH and result.products:
+            budget = min(PDP_ENRICH_BUDGET, len(result.products))
+            ok = self._enrich_from_pdp(result.products[:budget])
+            result.notes.append(
+                f"PDP 兜底尝试 {budget}，成功 {ok}（住宅代理 + Camoufox 才能突破）")
+
+        result.notes.append(
+            f"采集 {len(result.products)} 个去重 SKU（sitemap-only 路径，"
+            f"价格/描述/分类需 CRATEBARREL_TRY_PDP=1 + 住宅代理）")
+        return result
+
+    # ------------------------------------------------------------------
+    # 单条 sitemap url 节点 → product dict
+    # ------------------------------------------------------------------
+    def _parse_sitemap_entry(self, block: str) -> dict | None:
+        m_loc = _LOC_RE.search(block)
+        if not m_loc:
+            return None
+        url = m_loc.group(1).strip()
+        mu = _PROD_URL_RE.match(url.rstrip("/"))
+        if not mu:
+            return None
+        slug, sku = mu.group(1), mu.group(2)
+
+        # 主图（sitemap 给一张主图）
+        img = None
+        m_img = _IMG_LOC_RE.search(block)
+        if m_img:
+            img = m_img.group(1).strip()
+
+        # 标题：image:title 去掉 ' - image X of Y' 尾巴
+        title = None
+        m_t = _IMG_TITLE_RE.search(block)
+        if m_t:
+            raw = m_t.group(1).strip()
+            title = _IMG_TITLE_TAIL_RE.sub("", raw).strip()
+        # 退化：slug → 'Anneli Upholstered King Bed'
+        if not title:
+            title = slug.replace("-", " ").strip().title()
+        if not title:
+            return None
+
+        return {
+            "sku": str(sku),
+            "spu": str(sku),
+            "title": title,
+            "description": None,             # PDP 才有
+            "image_urls": [img] if img else [],
+            "category_path": None,            # 需 PDP BreadcrumbList
+            "sale_price": None,
+            "original_price": None,
+            "currency": "USD",
+            "status": "on_sale",              # 出现在 sitemap-pdp（非 nla）即在售
+            "product_url": url,
+            "site": self.site.site,
+            "brand": self.site.brand,
+        }
+
+    # ------------------------------------------------------------------
+    # PDP 兜底（默认关）—— 试 curl_cffi → 命中 Akamai 则 StealthyFetcher
+    # ------------------------------------------------------------------
+    def _enrich_from_pdp(self, rows: list[dict]) -> int:
+        """对前 N 行尝试进 PDP 抓 JSON-LD，补价格/评分/描述。
+
+        - curl_cffi 99% 拿到 Akamai 挑战页（identified by _is_akamai_challenge）
+        - StealthyFetcher (Camoufox) 在住宅代理 + 持久 profile 下可突破
+        - 单页平均 30-60s，1000 SKU 全开销 ~10-16h，故默认仅 fallback 前 50 条
+        """
+        try:
+            from scrapling.fetchers import StealthyFetcher
+            from ._stealth_config import stealth_kwargs
+        except Exception:
+            return 0
+
+        sess = self._session(warmup=True)
+        ok = 0
+        kw = stealth_kwargs(
+            proxy=self.proxy,
+            country="US",
+            persist_profile_key=f"cratebarrel_{self.site.site}",
+            timeout_ms=60000,
+            real_chrome=False,
+            solve_cloudflare=False,   # Akamai 不是 Cloudflare
+        )
+        for row in rows:
+            html: str | None = None
+            url = row["product_url"]
+            # 路径 1：curl_cffi（成本最低）
+            try:
+                r = sess.get(url, timeout=30)
+                if r.status_code == 200 and not self._is_akamai_challenge(r.text):
+                    html = r.text
+            except Exception:
+                pass
+            # 路径 2：StealthyFetcher 兜底
+            if html is None:
+                try:
+                    page = StealthyFetcher.fetch(url, **kw)
+                    if (getattr(page, "status", None) == 200
+                            and page.html_content
+                            and not self._is_akamai_challenge(page.html_content)):
+                        html = page.html_content
+                except Exception:
+                    pass
+
+            if not html:
+                continue
+
+            self.snapshot(row["sku"], html)
+            ld = self._extract_jsonld_product(html)
+            if ld:
+                self._merge_from_jsonld(row, ld)
+                ok += 1
+            else:
+                # 退化：og: meta
+                self._merge_from_og(row, html)
+            self.sleep()
+        return ok
+
+    @staticmethod
+    def _is_akamai_challenge(html: str) -> bool:
+        """识别 Akamai BMP 挑战页 / 拒绝页。"""
+        if not html:
+            return True
+        if len(html) < 10_000:        # 正常 PDP > 200KB；挑战页 ~6.5KB
+            return True
+        return any(m in html for m in _AKAMAI_MARKERS)
+
+    @staticmethod
+    def _extract_jsonld_product(html: str) -> dict | None:
+        for m in re.finditer(
+                r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>',
+                html, re.S):
+            try:
+                data = json.loads(m.group(1).strip())
+            except json.JSONDecodeError:
+                continue
+            candidates = data if isinstance(data, list) else [data]
+            # @graph 容器
+            for c in list(candidates):
+                if isinstance(c, dict) and isinstance(c.get("@graph"), list):
+                    candidates.extend(c["@graph"])
+            for c in candidates:
+                if not isinstance(c, dict):
+                    continue
+                t = c.get("@type")
+                if t == "Product" or (isinstance(t, list) and "Product" in t):
+                    return c
+        return None
+
+    def _merge_from_jsonld(self, row: dict, ld: dict) -> None:
+        # 价格 / 货币 / 库存
+        offers = ld.get("offers") or {}
+        if isinstance(offers, list):
+            offers = offers[0] if offers else {}
+        price = self._num(offers.get("price")
+                          or offers.get("lowPrice"))
+        if price is not None:
+            row["sale_price"] = price
+            row["original_price"] = self._num(
+                offers.get("highPrice")) or price
+        cur = offers.get("priceCurrency")
+        if cur:
+            row["currency"] = cur
+        avail = str(offers.get("availability", "")).lower()
+        if "outofstock" in avail or "out of stock" in avail:
+            row["status"] = "out_of_stock"
+
+        # 评分
+        rating = ld.get("aggregateRating") or {}
+        if isinstance(rating, dict):
+            r = self._num(rating.get("ratingValue"))
+            if r is not None:
+                row["ratings"] = r
+            rc = rating.get("reviewCount") or rating.get("ratingCount")
+            if rc is not None:
+                try:
+                    row["review_count"] = int(rc)
+                except (TypeError, ValueError):
+                    pass
+
+        # 描述
+        desc = ld.get("description")
+        if desc and not row.get("description"):
+            row["description"] = desc
+
+        # SKU 优先用 JSON-LD 的（更准），仍保留 sitemap 路径派生的 SKU 作为 spu
+        sku2 = ld.get("sku") or ld.get("mpn")
+        if sku2:
+            row["sku"] = str(sku2).strip()
+
+        # 图组：合并 JSON-LD 的 image 数组
+        imgs = ld.get("image")
+        if imgs:
+            if isinstance(imgs, str):
+                imgs = [imgs]
+            merged = list(row.get("image_urls") or [])
+            for u in imgs:
+                if u and u not in merged:
+                    merged.append(u)
+            row["image_urls"] = merged[:10]
+
+    def _merge_from_og(self, row: dict, html: str) -> None:
+        """JSON-LD 缺失时退化：靠 og:price:amount / og:title。"""
+        def meta(prop: str) -> str | None:
+            m = re.search(
+                r'<meta[^>]+(?:property|name)="' + re.escape(prop)
+                + r'"[^>]+content="([^"]+)"', html, re.I)
+            return m.group(1) if m else None
+
+        price = self._num(meta("product:price:amount")
+                          or meta("og:price:amount"))
+        if price is not None:
+            row["sale_price"] = price
+            row["original_price"] = price
+        cur = meta("product:price:currency") or meta("og:price:currency")
+        if cur:
+            row["currency"] = cur
+        og_desc = meta("og:description")
+        if og_desc and not row.get("description"):
+            row["description"] = og_desc
+
+    @staticmethod
+    def _num(v):
+        if v is None:
+            return None
+        m = re.search(r"[\d.]+", str(v).replace(",", ""))
+        try:
+            return float(m.group()) if m else None
+        except ValueError:
+            return None

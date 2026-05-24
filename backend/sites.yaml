@@ -86,3 +86,33 @@ sites:
   # ========== Idealo.de（德国价格比较 · W1）==========
   # Agent 实测：Akamai BotManager · 必须 residential + impersonate=chrome（不能改 UA）
   - {site: idealo_de, brand: Idealo, country: DE, url: "https://www.idealo.de/", platform: idealo, proxy_tier: residential, max_products: 1000}
+
+  # ========== Otto.de（DE 电商 Top 2 · W2）==========
+  - {site: otto_de, brand: Otto, country: DE, url: "https://www.otto.de/", platform: otto, proxy_tier: residential, max_products: 1000}
+
+  # ========== Bol.com（NL/BE 最大电商 · W2）==========
+  - {site: bol_nl, brand: Bol, country: NL, url: "https://www.bol.com/", platform: bol, proxy_tier: residential, max_products: 1000}
+
+  # ========== CDiscount（FR 电商 · W2）==========
+  - {site: cdiscount_fr, brand: CDiscount, country: FR, url: "https://www.cdiscount.com/", platform: cdiscount, proxy_tier: residential, max_products: 1000}
+
+  # ========== IKEA Online（US 主站 · W2）==========
+  - {site: ikea_us, brand: IKEA, country: US, url: "https://www.ikea.com/us/en/", platform: ikea, proxy_tier: residential, max_products: 1000}
+
+  # ========== Crate&Barrel（US 中高端家居 · W2）==========
+  - {site: cratebarrel_us, brand: Crate&Barrel, country: US, url: "https://www.crateandbarrel.com/", platform: cratebarrel, proxy_tier: residential, max_products: 1000}
+
+  # ========== West Elm（US 高端家居 · W2）==========
+  - {site: westelm_us, brand: WestElm, country: US, url: "https://www.westelm.com/", platform: westelm, proxy_tier: residential, max_products: 1000}
+
+  # ========== Allegro.pl（PL 200M+ SKU · W3）==========
+  - {site: allegro_pl, brand: Allegro, country: PL, url: "https://allegro.pl/", platform: allegro, proxy_tier: residential, max_products: 1000}
+
+  # ========== Article.com（US/CA 独立家居 · W2）==========
+  - {site: article_us, brand: Article, country: US, url: "https://www.article.com/", platform: article, proxy_tier: none, max_products: 1000}
+
+  # ========== Houzz（高端家居社区 · W2）==========
+  - {site: houzz_us, brand: Houzz, country: US, url: "https://www.houzz.com/", platform: houzz, proxy_tier: residential, max_products: 1000}
+
+  # ========== eBay.com（家居 marketplace · W3）==========
+  - {site: ebay_us, brand: eBay, country: US, url: "https://www.ebay.com/", platform: ebay, proxy_tier: residential, max_products: 1000}
