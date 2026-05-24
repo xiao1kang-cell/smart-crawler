@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from .api.routes import public_router, router as api_router
 from .api.output import router as v1_router
 from .api.discovery import router as discovery_router
-from .config import FRONTEND_DIR
+from .config import FRONTEND_DIR, PROJECT_DIR
 from .db import init_db
 from .mcp_server import mcp
 
@@ -127,3 +127,26 @@ def dashboard():
 @app.get("/favicon.svg")
 def favicon():
     return FileResponse(FRONTEND_DIR / "favicon.svg")
+
+
+@app.get("/d/{path:path}")
+def deliverables(path: str):
+    from pathlib import Path
+    from fastapi import HTTPException
+    safe = Path(path)
+    if ".." in safe.parts or safe.is_absolute():
+        raise HTTPException(400, "invalid path")
+    base = (PROJECT_DIR / "deliverables").resolve()
+    target = (base / safe).resolve()
+    if not str(target).startswith(str(base)):
+        raise HTTPException(400, "path escape")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(404)
+    media_type = {
+        ".html": "text/html; charset=utf-8",
+        ".md": "text/markdown; charset=utf-8",
+        ".json": "application/json",
+        ".csv": "text/csv",
+        ".txt": "text/plain; charset=utf-8",
+    }.get(target.suffix.lower(), "application/octet-stream")
+    return FileResponse(target, media_type=media_type)
