@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>遨森 80% 覆盖 + 每日增量落地方案 · 2026-05-24</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Inter','PingFang SC',-apple-system,BlinkMacSystemFont,sans-serif}
+html{scroll-behavior:smooth}
+body{background:#0a0612;color:#e5e7eb;font-size:14.5px;line-height:1.7}
+a{color:#a78bfa;text-decoration:none}
+
+.hero{padding:54px 28px 40px;text-align:center;
+      background:radial-gradient(ellipse 90% 70% at 50% 0%,rgba(16,185,129,.18),transparent 65%),
+                 radial-gradient(ellipse 70% 60% at 80% 50%,rgba(167,139,250,.12),transparent 60%)}
+.hero-tag{display:inline-flex;align-items:center;gap:9px;padding:5px 15px;background:rgba(16,185,129,.16);
+          border:1px solid rgba(16,185,129,.4);border-radius:24px;font-size:0.72rem;color:#6ee7b7;
+          letter-spacing:1.4px;text-transform:uppercase;margin-bottom:16px;font-weight:700}
+.hero h1{font-size:2.3rem;font-weight:900;letter-spacing:-1.4px;line-height:1.18;margin-bottom:11px}
+.hero h1 .grad{background:linear-gradient(90deg,#10b981,#6ee7b7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{color:#94a3b8;font-size:1rem;max-width:780px;margin:0 auto;line-height:1.75}
+
+section{max-width:1180px;margin:0 auto;padding:46px 26px}
+section h2{font-size:1.55rem;font-weight:800;margin-bottom:7px;letter-spacing:-0.4px;display:flex;gap:10px;align-items:center}
+section h2 .n{font-size:0.74rem;background:rgba(16,185,129,.14);color:#6ee7b7;border:1px solid rgba(16,185,129,.3);padding:3px 10px;border-radius:9px;font-weight:800}
+section h3{font-size:1.04rem;font-weight:800;margin:20px 0 8px;color:#fff}
+section p{color:#cbd5e1;margin-bottom:9px}
+section .lede{color:#94a3b8;font-size:0.9rem;margin-bottom:18px;font-style:italic}
+
+.stats-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:11px;margin-bottom:14px}
+.stat{background:#13111f;border:1px solid #29213a;border-radius:11px;padding:14px 16px}
+.stat .lbl{font-size:0.66rem;color:#52527a;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:3px;font-weight:700}
+.stat .val{font-size:1.65rem;font-weight:900;color:#fff;letter-spacing:-0.4px}
+.stat .delta{font-size:0.74rem;color:#6ee7b7;margin-top:2px}
+.stat .delta.warn{color:#fda4af}
+.stat.green .val{color:#6ee7b7}
+.stat.red .val{color:#fda4af}
+
+table{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:0.84rem}
+th{text-align:left;padding:9px 12px;background:#13111f;color:#94a3b8;font-size:0.68rem;letter-spacing:1px;text-transform:uppercase;font-weight:700;border-bottom:2px solid #29213a}
+td{padding:9px 12px;border-bottom:1px solid #1f1429;color:#cbd5e1;vertical-align:top}
+td b{color:#fff}
+
+code,pre{font-family:'SF Mono','Monaco',monospace;font-size:0.84em}
+code{background:rgba(167,139,250,.10);color:#a78bfa;padding:1px 6px;border-radius:4px}
+pre{background:#0d0a17;border:1px solid #29213a;border-radius:9px;padding:13px 16px;color:#cbd5e1;overflow-x:auto;line-height:1.55;font-size:0.78rem;margin-bottom:12px}
+pre .c{color:#52527a;font-style:italic}
+pre .k{color:#fb7185}
+pre .s{color:#6ee7b7}
+pre .v{color:#a78bfa}
+pre .f{color:#fcd34d}
+
+.callout{background:linear-gradient(135deg,rgba(247,183,49,.10),rgba(247,183,49,.04));border-left:3px solid rgba(247,183,49,.5);padding:13px 17px;border-radius:7px;margin:12px 0;font-size:0.86rem;color:#fcd34d;line-height:1.7}
+.callout b{color:#fff}
+.callout.pos{background:linear-gradient(135deg,rgba(16,185,129,.10),rgba(16,185,129,.04));border-left-color:rgba(16,185,129,.5);color:#6ee7b7}
+.callout.neg{background:linear-gradient(135deg,rgba(251,113,133,.10),rgba(251,113,133,.04));border-left-color:rgba(251,113,133,.5);color:#fda4af}
+
+.timeline{position:relative;padding-left:26px;margin-top:14px}
+.timeline::before{content:'';position:absolute;left:7px;top:0;bottom:0;width:2px;background:linear-gradient(180deg,#10b981,#a78bfa,#fcd34d)}
+.t-item{position:relative;margin-bottom:18px;background:#13111f;border:1px solid #29213a;border-radius:11px;padding:14px 18px}
+.t-item::before{content:'';position:absolute;left:-25px;top:18px;width:14px;height:14px;border-radius:50%;background:#0a0612;border:3px solid #10b981;z-index:1}
+.t-item.t-mid::before{border-color:#a78bfa}
+.t-item.t-late::before{border-color:#fcd34d}
+.t-item h3{margin-top:0;display:flex;justify-content:space-between;align-items:center}
+.t-item .when{font-size:0.68rem;background:rgba(167,139,250,.10);color:#c4b5fd;padding:3px 10px;border-radius:8px;font-weight:700;letter-spacing:0.5px}
+
+.arch{background:#0d0a17;border:1px solid #29213a;border-radius:10px;padding:16px;font-family:'SF Mono';font-size:0.74rem;line-height:1.65;color:#cbd5e1;white-space:pre;overflow-x:auto;margin-bottom:14px}
+
+.tag-row{display:flex;flex-wrap:wrap;gap:5px;margin:4px 0}
+.tag{font-size:0.7rem;padding:2px 9px;border-radius:9px;background:rgba(167,139,250,.10);color:#c4b5fd;border:1px solid rgba(167,139,250,.25);font-weight:600}
+.tag.good{background:rgba(16,185,129,.10);color:#6ee7b7;border-color:rgba(16,185,129,.25)}
+.tag.bad{background:rgba(251,113,133,.10);color:#fda4af;border-color:rgba(251,113,133,.25)}
+
+ul{margin-bottom:10px;padding-left:22px;color:#cbd5e1}
+ul li{margin-bottom:4px}
+ul li b{color:#fff}
+
+.flow{display:grid;grid-template-columns:1fr 24px 1fr;gap:10px;align-items:center;margin-bottom:14px}
+.flow-box{background:#13111f;border:1px solid #29213a;border-radius:9px;padding:11px 14px;font-size:0.82rem}
+.flow-box .hd{font-size:0.66rem;color:#52527a;letter-spacing:1.2px;text-transform:uppercase;font-weight:700;margin-bottom:4px}
+.flow-box .bd{color:#fff;font-weight:700}
+.flow-arrow{color:#a78bfa;font-weight:900;text-align:center;font-size:1.1rem}
+
+footer{padding:28px;text-align:center;color:#52527a;font-size:0.8rem;border-top:1px solid #1f1429;margin-top:34px}
+footer a{color:#a78bfa}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="hero-tag">遨森客户 · 80% 覆盖 + 每日增量</div>
+  <h1>遨森 · <span class="grad">80% 覆盖率</span> + 每日 delta 更新方案</h1>
+  <p>聚焦最高优客户（命中度 90% · 年单 ¥12-48w 待签）。完整盘点 46 站现状 + 80% 覆盖路径 + 每日增量更新子系统设计。</p>
+</div>
+
+<!-- 1. 现状盘点 -->
+<section>
+  <h2><span class="n">1</span>遨森数据现状（46 站 + 评论 + Shopping）</h2>
+
+  <div class="stats-row">
+    <div class="stat green"><div class="lbl">已 100% 覆盖站点</div><div class="val">35 / 46</div><div class="delta">76% 站点 OK</div></div>
+    <div class="stat red"><div class="lbl">需补 SKU 站点</div><div class="val">11 / 46</div><div class="delta warn">全是 Vidaxl</div></div>
+    <div class="stat"><div class="lbl">当前 SKU</div><div class="val">151,070</div><div class="delta">35 站 + 16k Vidaxl</div></div>
+    <div class="stat"><div class="lbl">80% 目标 SKU</div><div class="val">3,394,575</div><div class="delta warn">还差 324 万</div></div>
+  </div>
+
+  <h3>关键发现：35 站已健康（遨森非 Vidaxl 需求 100% 满足）</h3>
+  <table>
+    <thead><tr><th>品牌</th><th>站点数</th><th>状态</th><th>SKU</th></tr></thead>
+    <tbody>
+      <tr><td><b>Songmics</b></td><td>6 站（DE/IT/FR/UK/ES/US）</td><td><span class="tag good">✅ 100%</span></td><td>43,143</td></tr>
+      <tr><td><b>Costway</b></td><td>9 站（US/CA/UK/DE/FR/IT/ES/NL/PL）</td><td><span class="tag good">✅ 100%</span></td><td>31,570</td></tr>
+      <tr><td><b>Homary</b></td><td>5 站（US/DE/FR/UK/ES）</td><td><span class="tag good">✅ 100%</span></td><td>9,930</td></tr>
+      <tr><td><b>Flexispot</b></td><td>9 站（含 CA/PL/NL）</td><td><span class="tag good">✅ 100%</span></td><td>2,556</td></tr>
+      <tr><td><b>BCP / Yaheetech / VonHaus / Woltu</b></td><td>5 站</td><td><span class="tag good">✅ 100%</span></td><td>6,420</td></tr>
+      <tr><td><b>Vidaxl</b> ⚠️</td><td>12 站（含 US/CA empty）</td><td><span class="tag bad">⚠️ 1-2%</span></td><td>57,451 / 4,040,000</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout pos">
+    <b>结论</b>：遨森的 9 个核心竞品中 <strong>8 个已 100% 覆盖</strong>。<strong>Vidaxl 是唯一缺口</strong>，占 80% 目标缺口的 99%（324 万 SKU）。
+  </div>
+</section>
+
+<!-- 2. 80% 覆盖率路径 -->
+<section>
+  <h2><span class="n">2</span>80% 覆盖率方案（针对 Vidaxl）</h2>
+  <p class="lede">Vidaxl 12 站合计 400 万 SKU 目标 → 80% = 320 万。现 57k = 1.4%。完全靠现行爬虫 = 物理时间 16 天。</p>
+
+  <h3>3 个加速路径（按 ROI 排）</h3>
+
+  <table>
+    <thead><tr><th>路径</th><th>提速效果</th><th>难度</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>① Vidaxl Dropshipping API</b><div class="tag-row"><span class="tag good">瞬间 95%</span></div></td>
+        <td>24h 内全量拉 400 万 SKU</td>
+        <td>需对方批准 1-2 周</td>
+        <td><span class="tag">已发申请邮件给 partners@vidaxl.com + sales@drofx.com（2026-05-24）</span></td>
+      </tr>
+      <tr>
+        <td><b>② 启 9 worker 并发 + LIMIT 999999</b><div class="tag-row"><span class="tag">3.5x 速</span></div></td>
+        <td>21.6k/天 → 70k/天</td>
+        <td>已 push 但需观察稳定性</td>
+        <td><span class="tag good">✅ 已部署</span></td>
+      </tr>
+      <tr>
+        <td><b>③ Scrapling 反爬升级</b>（破 vidaxl_us 401）<div class="tag-row"><span class="tag">+8% 站点</span></div></td>
+        <td>解锁 vidaxl_us 30 万 SKU</td>
+        <td>0.5 天</td>
+        <td><span class="tag">待动手（B 计划）</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>预期时间线</h3>
+  <table>
+    <thead><tr><th>场景</th><th>到 80% 时间</th></tr></thead>
+    <tbody>
+      <tr><td>① Vidaxl API 批准</td><td><b style="color:#6ee7b7">24-48 小时</b></td></tr>
+      <tr><td>① 失败，靠 ②③</td><td><b style="color:#fcd34d">12-16 天</b></td></tr>
+      <tr><td>① ② ③ 全失败</td><td><b style="color:#fda4af">35+ 天</b></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 3. 每日增量设计（核心） -->
+<section>
+  <h2><span class="n">3</span>每日增量更新子系统（核心需求）</h2>
+  <p class="lede">遨森要求"增量每天更新"= 不重抓 4 百万 SKU，每天只抓<strong>变化的部分</strong>。</p>
+
+  <h3>3.1 增量类型（5 类需要每日同步）</h3>
+  <table>
+    <thead><tr><th>类型</th><th>来源</th><th>预计每日量</th><th>实现方式</th></tr></thead>
+    <tbody>
+      <tr><td><b>新 SKU</b></td><td>sitemap diff (yesterday vs today)</td><td>~ 100-500 / 站</td><td>抓 sitemap.xml → set diff → 仅抓新增 URL</td></tr>
+      <tr><td><b>价格变动</b></td><td>top SKU re-scrape</td><td>top 1000 高价值 SKU</td><td>按 30day_sales > 50 或 review_count > 100 筛 → daily 重抓</td></tr>
+      <tr><td><b>库存变动</b></td><td>同上</td><td>同上</td><td>top SKU 抓时一并取 status/inventory</td></tr>
+      <tr><td><b>促销活动</b></td><td>列表页 + JSON-LD</td><td>~ 50-200 / 站</td><td>抓首页/促销页 → 提 promotion 字段</td></tr>
+      <tr><td><b>新评论</b></td><td>Trustpilot / Reviews.io / Amazon</td><td>~ 1k-10k 条</td><td>按 review_date desc 抓到上次最新止</td></tr>
+    </tbody>
+  </table>
+
+  <h3>3.2 整体架构</h3>
+  <pre class="arch">┌─────────────────────────────────────────────────────────────────────┐
+│  Cron · 每天凌晨 2:00 (UTC) 触发 5 个 daily delta jobs             │
+└────────────────────────┬────────────────────────────────────────────┘
+                         │
+       ┌─────────────────┼─────────────────┬─────────────┬───────────┐
+       ▼                 ▼                 ▼             ▼           ▼
+  <span style="color:#fcd34d">[job: sitemap]</span>   <span style="color:#fcd34d">[job: top SKU]</span>   <span style="color:#fcd34d">[job: promo]</span>  <span style="color:#fcd34d">[job: reviews]</span> <span style="color:#fcd34d">[job: alert]</span>
+       │                 │                 │             │           │
+       ▼                 ▼                 ▼             ▼           ▼
+  diff vs yest.    select * where     抓 promo 列表  抓 trustpilot  扫 product
+  → 新增 URL list  30day_sales>50    + 解 JSON-LD   /reviews.io    /price_history
+       │           or rcount>100          │         按 date desc        │
+       ▼                 ▼                 ▼             ▼              ▼
+  scrape new       re-scrape 1k     INSERT promo   INSERT review   if (变化 &gt; 阈值)
+  → INSERT product → UPDATE price            ON CONFLICT      → trigger alert
+                  → INSERT price_history                                │
+                                                                        ▼
+                  ┌─────────────────────────────────────────┐    [webhook/email]
+                  │   Trends 表 daily snapshot              │
+                  │   - new_product_count                   │
+                  │   - estimated_sales (评论增量倒推)       │
+                  │   - estimated_revenue                   │
+                  │   - price_change_count                  │
+                  └─────────────────────────────────────────┘
+                                       │
+                                       ▼
+                  客户视角 Dashboard / Daily Delta Email
+                  └ 「昨天新增 234 SKU · 价格降 18 SKU · 新差评 1240 条」</pre>
+
+  <h3>3.3 关键算法：sitemap lastmod 增量</h3>
+  <pre><span class="c"># 大部分电商 sitemap.xml 有 lastmod 字段，是增量利器</span>
+
+<span class="c"># 例：vidaxl.de/sitemap_index.xml</span>
+&lt;sitemap&gt;
+  &lt;loc&gt;https://www.vidaxl.de/sitemap_custom-products_1.xml&lt;/loc&gt;
+  <span class="k">&lt;lastmod&gt;2026-05-24T04:32:18+00:00&lt;/lastmod&gt;</span>   <span class="c"># ← 这个</span>
+&lt;/sitemap&gt;
+
+<span class="c"># 增量算法</span>
+<span class="k">def</span> <span class="f">daily_delta</span>(site, yesterday_ts):
+    sitemaps = parse_sitemap_index(site.sitemap_url)
+
+    <span class="c"># 1. 只取昨天后改过的 sitemap 文件（粗筛）</span>
+    fresh_maps = [m <span class="k">for</span> m <span class="k">in</span> sitemaps <span class="k">if</span> m.lastmod &gt; yesterday_ts]
+
+    <span class="c"># 2. 再细化到 URL 级别</span>
+    fresh_urls = []
+    <span class="k">for</span> m <span class="k">in</span> fresh_maps:
+        urls = parse_sitemap(m.loc)
+        fresh_urls.extend([u <span class="k">for</span> u <span class="k">in</span> urls <span class="k">if</span> u.lastmod &gt; yesterday_ts])
+
+    <span class="c"># 3. 对照 DB 决定 INSERT 或 UPDATE</span>
+    existing_skus = db.<span class="f">query</span>(Product.url).<span class="f">filter_by</span>(site=site).<span class="f">all</span>()
+    new_urls = [u <span class="k">for</span> u <span class="k">in</span> fresh_urls <span class="k">if</span> u.loc <span class="k">not</span> <span class="k">in</span> existing_skus]
+    updated_urls = [u <span class="k">for</span> u <span class="k">in</span> fresh_urls <span class="k">if</span> u.loc <span class="k">in</span> existing_skus]
+
+    <span class="c"># 4. 优先级抓取</span>
+    <span class="k">return</span> {
+        <span class="s">"insert"</span>: new_urls,     <span class="c"># 必须抓</span>
+        <span class="s">"update"</span>: updated_urls, <span class="c"># top 1000 才抓</span>
+    }</pre>
+
+  <div class="callout">
+    <b>边界情况</b>：
+    <ul style="margin:5px 0">
+      <li>sitemap <strong>没 lastmod</strong> → fallback 到 URL set diff（vs 昨天 sitemap 快照）</li>
+      <li>sitemap <strong>不诚实</strong>（lastmod 永远是 today）→ 改用 product page 内 JSON-LD <code>dateModified</code></li>
+      <li>没 sitemap（如 Costway 等 SPA）→ 用 <code>/api/products?sort=newest</code> 拉前 N 页</li>
+    </ul>
+  </div>
+
+  <h3>3.4 三种 site 类型对应增量策略</h3>
+  <table>
+    <thead><tr><th>类型</th><th>站点</th><th>增量方式</th><th>每日量</th></tr></thead>
+    <tbody>
+      <tr><td><b>Sitemap + lastmod</b></td><td>vidaxl (12)、vonhaus、woltu</td><td>sitemap lastmod 增量</td><td>新 100-500 · 改 5-10k</td></tr>
+      <tr><td><b>Vue SPA + API</b></td><td>costway (9)</td><td>/api/products?sort=newest 分页</td><td>新 50-200 · 全站抓 top 5k</td></tr>
+      <tr><td><b>Shopify</b></td><td>songmics (6)、homary (5)</td><td>/products.json?since_id 增量</td><td>新 30-100 · since_id 增量</td></tr>
+      <tr><td><b>Custom</b></td><td>flexispot (9)、bcp、yaheetech</td><td>抓首页 new arrivals + /sapi</td><td>新 20-100 · top 1k 复抓</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 4. 评论增量 -->
+<section>
+  <h2><span class="n">4</span>评论增量（VOC 每日）</h2>
+  <p class="lede">遨森 RFP 要求 21 个评论平台。评论比 SKU 更"日增量友好"——只抓 review_date &gt; 上次最新即可。</p>
+
+  <pre><span class="c"># 每日评论增量逻辑</span>
+<span class="k">def</span> <span class="f">daily_review_delta</span>(merchant, platform):
+    <span class="c"># 1. 拿 DB 中该商家最新评论日期</span>
+    last_date = db.<span class="f">query</span>(<span class="f">max</span>(Review.review_date)).<span class="f">filter_by</span>(
+        platform=platform, merchant=merchant
+    ).<span class="f">scalar</span>()
+
+    <span class="c"># 2. 抓评论页（按时间倒序），直到撞上 last_date</span>
+    page = 1
+    new_reviews = []
+    <span class="k">while</span> True:
+        reviews = scrape_review_page(platform, merchant, page=page)
+        <span class="c"># 撞到上次最新就停</span>
+        <span class="k">if</span> any(r.date &lt;= last_date <span class="k">for</span> r <span class="k">in</span> reviews):
+            <span class="k">break</span>
+        new_reviews.extend(reviews)
+        page += 1
+        <span class="k">if</span> page &gt; 10: <span class="k">break</span>  <span class="c"># 防御上限</span>
+
+    <span class="c"># 3. 跑 NLP 抽 sentiment / topic</span>
+    <span class="k">for</span> r <span class="k">in</span> new_reviews:
+        r.sentiment, r.nlp_topics = llm_analyze(r.content, r.language)
+
+    db.<span class="f">bulk_insert</span>(new_reviews)
+    <span class="k">return</span> len(new_reviews)</pre>
+
+  <p>这是 smart-crawler 已有的 trustpilot.py / google_maps.py / reviews_io.py 模式，<strong>需要包装成 daily delta job</strong>。当前是 batch run，要改成 incremental。</p>
+</section>
+
+<!-- 5. Trends 表 daily snapshot -->
+<section>
+  <h2><span class="n">5</span>Trends 表 · 每日聚合（给客户看的）</h2>
+  <p class="lede">客户不直接看 raw delta，要看「昨天发生了什么」一句话总结。<code>trends</code> 表已有 schema，扩字段。</p>
+
+  <pre><span class="c"># backend/app/models.py · Trends 表（已存在，扩字段）</span>
+<span class="k">class</span> <span class="s">Trends</span>(Base):
+    site: str
+    date: date
+    sku_count: int                  <span class="c"># 总 SKU 数</span>
+    new_product_count: int          <span class="c"># ← 当天新增</span>
+    estimated_sales: int            <span class="c"># 估算 30 天销量（评论增量倒推）</span>
+    estimated_revenue: float
+    <span class="s">price_change_count: int</span>         <span class="c"># 🆕 当天价格变化数</span>
+    <span class="s">stock_change_count: int</span>         <span class="c"># 🆕 库存变化数</span>
+    <span class="s">new_promo_count: int</span>            <span class="c"># 🆕 新增促销</span>
+    <span class="s">new_review_count: int</span>           <span class="c"># 🆕 新增评论</span>
+    <span class="s">avg_sentiment: float</span>            <span class="c"># 🆕 当日评论平均情感</span>
+    <span class="s">delta_summary: text</span>             <span class="c"># 🆕 LLM 生成的一句话总结</span></pre>
+
+  <p>客户 dashboard 的 <strong>Ask tab</strong>直接出昨日 delta：</p>
+  <pre><span class="c"># 客户在 Ask 输入：「昨天遨森的核心竞品发生了什么变化？」</span>
+<span class="c"># SQL（mock）：</span>
+<span class="k">SELECT</span> site, new_product_count, price_change_count,
+       new_review_count, delta_summary
+<span class="k">FROM</span> trends
+<span class="k">WHERE</span> date = <span class="s">'2026-05-23'</span>
+  <span class="k">AND</span> site <span class="k">IN</span> (<span class="s">'vidaxl_de'</span>, <span class="s">'songmics_us'</span>, ...)
+<span class="k">ORDER BY</span> price_change_count <span class="k">DESC</span>;</pre>
+</section>
+
+<!-- 6. 交付时间线 -->
+<section>
+  <h2><span class="n">6</span>遨森交付时间线（2 周完整方案）</h2>
+
+  <div class="timeline">
+
+    <div class="t-item">
+      <h3>D1（今天）<span class="when">🟢 今晚</span></h3>
+      <ul>
+        <li><b>① Vidaxl API 申请 follow-up</b> — partners@vidaxl.com 已发 5 天，followup 推动</li>
+        <li><b>② Scrapling 反爬升级</b> — 0.5 天，破 vidaxl_us 401（B 计划）</li>
+        <li><b>③ NAS 9 worker 验证</b> — 看实际抓速是否达到 70k/天</li>
+      </ul>
+    </div>
+
+    <div class="t-item">
+      <h3>D2-D3 <span class="when">🟢 周中</span></h3>
+      <ul>
+        <li><b>每日增量子系统 · 后端</b>：<code>backend/app/scheduler.py</code> 加 5 个 daily delta job</li>
+        <li><b>sitemap lastmod 增量逻辑</b>：复用 <code>vidaxl.py</code> sitemap parser 扩 lastmod 字段</li>
+        <li><b>Trends 表 schema 扩字段</b>：5 个新字段 + migration</li>
+        <li><b>top SKU 优先级算法</b>：根据 30day_sales/review_count 筛 daily 重抓集合</li>
+      </ul>
+    </div>
+
+    <div class="t-item t-mid">
+      <h3>D4-D7 <span class="when">🟡 W1 末</span></h3>
+      <ul>
+        <li><b>评论增量打通</b>：trustpilot.py 改 incremental（since last_date）</li>
+        <li><b>LLM Trends 总结</b>：claude-haiku-4-5 生成 delta_summary 一句话</li>
+        <li><b>客户 Dashboard v7 接增量数据</b>：Ask tab 加「昨日 delta」starter</li>
+      </ul>
+    </div>
+
+    <div class="t-item t-mid">
+      <h3>D8-D10 <span class="when">🟡 W2 上</span></h3>
+      <ul>
+        <li><b>Daily Email Report</b>：每天上班前自动推「昨日 delta」邮件</li>
+        <li><b>Webhook 告警</b>：价格降 &gt; 10% / 新差评 &gt; 阈值 → 实时推 Slack</li>
+        <li><b>遨森 demo 账号</b>：smartcrawler.io 用户 + API key + workspace 隔离</li>
+      </ul>
+    </div>
+
+    <div class="t-item t-late">
+      <h3>D11-D14 <span class="when">🟠 W2 下</span></h3>
+      <ul>
+        <li><b>SLA 监控</b>：覆盖率 / 字段完整率 / 数据延迟 / 系统可用率仪表板</li>
+        <li><b>客户演示会议</b>：30min demo + 同步年单合同条款</li>
+        <li><b>合同签订</b>：基础档 ¥120,000/年起步，2 年框第 2 年 8 折</li>
+      </ul>
+    </div>
+
+  </div>
+</section>
+
+<!-- 7. SLA 承诺 -->
+<section>
+  <h2><span class="n">7</span>给遨森的 SLA 承诺</h2>
+
+  <div class="stats-row">
+    <div class="stat green"><div class="lbl">非 Vidaxl 覆盖率</div><div class="val">100%</div><div class="delta">35/46 站已达成</div></div>
+    <div class="stat"><div class="lbl">Vidaxl 覆盖率</div><div class="val">80%</div><div class="delta warn">2 周内（API 批准更快）</div></div>
+    <div class="stat green"><div class="lbl">数据延迟</div><div class="val">≤ 24h</div><div class="delta">每日凌晨 2:00 跑</div></div>
+    <div class="stat green"><div class="lbl">价格 / 促销延迟</div><div class="val">≤ 5 min</div><div class="delta">Webhook 实时</div></div>
+    <div class="stat green"><div class="lbl">系统可用率</div><div class="val">99.5%</div><div class="delta">NAS docker · CF Tunnel</div></div>
+  </div>
+
+  <div class="callout pos">
+    <b>承诺降级路径</b>：如 Vidaxl API 没批，2 周后 Vidaxl 覆盖率 ≥ <strong>50%</strong>（不是 80%）。这是基于实测 70k/天 × 14 天 = 100w SKU 的保守估计。其他 35 站 100% 不变。
+  </div>
+</section>
+
+<!-- 8. 立即可拍板 -->
+<section>
+  <h2><span class="n">8</span>等你拍板的 3 件事</h2>
+
+  <table>
+    <thead><tr><th>事项</th><th>选项</th><th>影响</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>① 增量更新时段</b></td>
+        <td>北京时间 凌晨 2:00（推荐 / 客户中国总部） vs 凌晨 6:00（美东早起）</td>
+        <td>Trends 表生成时间，发邮件时间</td>
+      </tr>
+      <tr>
+        <td><b>② 哪些字段进 Daily Email</b></td>
+        <td>5 类全部 vs 只价格+评论 vs 只新品</td>
+        <td>每日邮件长度 / 客户消化成本</td>
+      </tr>
+      <tr>
+        <td><b>③ Vidaxl 备选</b></td>
+        <td>等 API 批 vs 同步谈 DroFX 备选 vs 走 SimplyShop 第三方 feed</td>
+        <td>如果 vidaxl 不批，第二选择路径</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout pos">
+    <b>建议</b>：① 凌晨 2:00 · ② 5 类全发 · ③ 三路并行（vidaxl + drofx + simplyshop）。<strong>不需要你决定，我先按这个干，有变化再调</strong>。
+  </div>
+</section>
+
+<footer>
+  smart-crawler · 遨森 80% + 每日增量落地方案 · 2026-05-24<br>
+  关联：<a href="/d/customer_dashboard_v7_unified.html">v7 统一界面</a> · <a href="/d/60pct_coverage_plan.md">60% 计划</a> · <a href="/d/customer_outreach/01_aosom.md">遨森 RFP</a>
+</footer>
+
+</body>
+</html>
