@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>smart-crawler · 统一客户产品界面 · v7</title>
+<script src="https://unpkg.com/vue@3.4.27/dist/vue.global.prod.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Inter','PingFang SC',-apple-system,BlinkMacSystemFont,sans-serif}
+html,body{background:#0a0612;color:#e5e7eb;font-size:14px;line-height:1.55;min-height:100vh}
+a{color:#a78bfa;text-decoration:none}
+button{font-family:inherit}
+
+/* ============= 顶部说明栏 (only in demo, real product 没有) ============= */
+.demo-bar{background:linear-gradient(90deg,rgba(247,183,49,.15),rgba(167,139,250,.10));border-bottom:1px solid rgba(247,183,49,.3);padding:9px 22px;text-align:center;font-size:0.78rem;color:#fcd34d}
+.demo-bar b{color:#fff}
+.demo-bar .switcher{margin-left:14px;display:inline-flex;gap:5px}
+.demo-bar .switcher button{padding:3px 11px;border-radius:7px;font-size:0.74rem;font-weight:700;cursor:pointer;border:1px solid rgba(247,183,49,.4);background:transparent;color:#fcd34d}
+.demo-bar .switcher button:hover{background:rgba(247,183,49,.15)}
+.demo-bar .switcher button.active{background:#fcd34d;color:#0a0612}
+
+/* ============= TOP BAR ============= */
+.topbar{position:sticky;top:0;z-index:100;background:rgba(10,6,18,.94);backdrop-filter:blur(12px);border-bottom:1px solid #29213a;padding:11px 22px;display:flex;align-items:center;gap:16px}
+.brand{font-weight:900;letter-spacing:-0.4px;font-size:1.05rem;background:linear-gradient(90deg,#a78bfa,#f472b6);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+
+.workspace{display:flex;align-items:center;gap:8px;padding:5px 10px 5px 7px;border-radius:8px;background:#13111f;border:1px solid #29213a;cursor:pointer;font-size:0.82rem;transition:all .15s}
+.workspace:hover{border-color:#a78bfa}
+.workspace .ws-icon{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:900;color:#fff;flex-shrink:0}
+.workspace .ws-name{font-weight:700}
+.workspace .ws-arrow{color:#52527a;font-size:0.7rem;margin-left:3px}
+
+.tab-row{display:flex;gap:4px;flex:1}
+.tab{padding:8px 14px;border-radius:8px;font-size:0.84rem;color:#94a3b8;cursor:pointer;font-weight:600;border:none;background:transparent;display:flex;align-items:center;gap:6px;transition:all .15s}
+.tab:hover{background:rgba(167,139,250,.08);color:#c4b5fd}
+.tab.active{background:rgba(167,139,250,.16);color:#fff;box-shadow:inset 0 -2px 0 #a78bfa}
+
+.usage-strip{font-size:0.74rem;color:#94a3b8;padding:5px 12px;border-radius:8px;background:rgba(16,185,129,.10);border:1px solid rgba(16,185,129,.25)}
+.usage-strip b{color:#6ee7b7;font-weight:700}
+.icon-btn{padding:7px 9px;border-radius:8px;color:#94a3b8;cursor:pointer;border:1px solid #29213a;background:#13111f;font-size:0.84rem;position:relative}
+.icon-btn:hover{background:rgba(167,139,250,.10);color:#c4b5fd}
+.icon-btn .badge{position:absolute;top:-4px;right:-4px;background:#fb7185;color:#fff;font-size:0.58rem;border-radius:9px;padding:1px 5px;font-weight:700;min-width:14px;text-align:center}
+
+.acct{display:flex;align-items:center;gap:8px;padding:5px 11px 5px 5px;border-radius:8px;background:#13111f;border:1px solid #29213a;font-size:0.78rem;cursor:pointer}
+.acct .avatar{width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,#a78bfa,#f472b6);display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:800;color:#fff}
+
+/* ============= LAYOUT ============= */
+.page{max-width:1380px;margin:0 auto;padding:20px 22px 50px}
+.lead{font-size:1.7rem;font-weight:900;letter-spacing:-0.6px;margin-bottom:5px}
+.lead .ws-tag{font-size:0.74rem;background:rgba(167,139,250,.14);color:#c4b5fd;border:1px solid rgba(167,139,250,.3);padding:3px 10px;border-radius:8px;font-weight:700;margin-left:10px;vertical-align:middle}
+.sub{font-size:0.86rem;color:#94a3b8;margin-bottom:16px}
+
+/* ============= STATS HERO ============= */
+.stats-hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:11px;margin-bottom:18px}
+.stat{background:#13111f;border:1px solid #29213a;border-radius:11px;padding:13px 16px}
+.stat .lbl{font-size:0.66rem;color:#52527a;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:3px;font-weight:700}
+.stat .val{font-size:1.55rem;font-weight:900;color:#fff;letter-spacing:-0.4px}
+.stat .delta{font-size:0.72rem;color:#6ee7b7;margin-top:2px}
+.stat .delta.down{color:#fda4af}
+
+/* ============= ASK ============= */
+.ask-shell{display:grid;grid-template-columns:200px 1fr 260px;gap:16px;align-items:flex-start}
+.ask-history{background:#13111f;border:1px solid #29213a;border-radius:12px;padding:13px;font-size:0.8rem}
+.ask-history h4{font-size:0.66rem;color:#52527a;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px}
+.ask-history .item{padding:7px 9px;border-radius:6px;color:#cbd5e1;cursor:pointer;margin-bottom:3px;border-left:2px solid transparent;font-size:0.78rem}
+.ask-history .item:hover{background:rgba(167,139,250,.08);border-left-color:#a78bfa}
+.ask-history .item .time{font-size:0.64rem;color:#52527a;margin-top:2px}
+
+.ask-main{display:flex;flex-direction:column;gap:12px}
+.ask-input{background:#13111f;border:2px solid #29213a;border-radius:12px;padding:12px 14px;transition:border-color .15s}
+.ask-input:focus-within{border-color:#a78bfa;box-shadow:0 0 0 4px rgba(167,139,250,.10)}
+.ask-input textarea{width:100%;background:transparent;border:none;outline:none;color:#fff;font-size:0.94rem;resize:none;min-height:38px;font-family:inherit}
+.ask-input textarea::placeholder{color:#52527a}
+.ask-input-row{display:flex;justify-content:space-between;align-items:center;margin-top:5px;font-size:0.7rem;color:#52527a}
+.kbd{background:#0a0612;border:1px solid #29213a;border-radius:4px;padding:1px 5px;font-family:'SF Mono',monospace;font-size:0.66rem}
+.btn-go{background:linear-gradient(135deg,#a78bfa,#f472b6);color:#fff;border:none;padding:6px 16px;border-radius:7px;font-size:0.78rem;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:5px}
+.btn-go:disabled{opacity:.45;cursor:not-allowed}
+
+.starters{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.starter{background:#13111f;border:1px solid #29213a;border-radius:10px;padding:12px 14px;cursor:pointer;transition:all .15s}
+.starter:hover{border-color:#a78bfa;transform:translateY(-2px);box-shadow:0 12px 28px rgba(167,139,250,.18)}
+.starter .icon{font-size:1.2rem;margin-bottom:5px}
+.starter .title{font-size:0.84rem;font-weight:700;color:#fff;margin-bottom:3px}
+.starter .desc{font-size:0.72rem;color:#94a3b8;line-height:1.45}
+
+.result-card{background:#13111f;border:1px solid #29213a;border-radius:12px;overflow:hidden}
+.result-head{padding:11px 14px;border-bottom:1px solid #1f1429;display:flex;justify-content:space-between;align-items:center;font-size:0.8rem}
+.result-meta{color:#94a3b8;font-size:0.72rem;display:flex;gap:12px}
+.result-meta b{color:#c4b5fd}
+.result-actions{display:flex;gap:5px}
+.result-actions button{padding:4px 10px;border-radius:6px;background:rgba(167,139,250,.10);border:1px solid rgba(167,139,250,.25);color:#c4b5fd;font-size:0.72rem;font-weight:600;cursor:pointer}
+.result-actions button:hover{background:rgba(167,139,250,.18)}
+
+.result-table{width:100%;border-collapse:collapse;font-size:0.8rem}
+.result-table th{text-align:left;padding:8px 13px;background:#0d0a17;color:#52527a;font-size:0.64rem;letter-spacing:1px;text-transform:uppercase;font-weight:700;border-bottom:1px solid #1f1429}
+.result-table td{padding:10px 13px;border-bottom:1px solid #1f1429;color:#cbd5e1;vertical-align:middle}
+.result-table tr.streaming{background:rgba(167,139,250,.06);animation:streamIn .5s ease}
+@keyframes streamIn{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:translateX(0)}}
+.result-table tr:hover{background:rgba(167,139,250,.05)}
+
+.pill{display:inline-flex;align-items:center;gap:3px;font-size:0.62rem;font-weight:700;padding:2px 7px;border-radius:9px;letter-spacing:0.3px}
+.pill.ok{background:rgba(16,185,129,.14);color:#6ee7b7;border:1px solid rgba(16,185,129,.3)}
+.pill.warn{background:rgba(247,183,49,.14);color:#fcd34d;border:1px solid rgba(247,183,49,.3)}
+.pill.bad{background:rgba(251,113,133,.14);color:#fda4af;border:1px solid rgba(251,113,133,.3)}
+.pill.pending{background:rgba(96,165,250,.14);color:#93c5fd;border:1px solid rgba(96,165,250,.3)}
+
+.trace{background:#13111f;border:1px solid #29213a;border-radius:12px;padding:13px 14px;font-size:0.76rem}
+.trace h4{font-size:0.66rem;color:#52527a;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px}
+.trace .step{padding:6px 8px;border-radius:5px;margin-bottom:4px;background:#0d0a17;display:flex;gap:8px;align-items:flex-start}
+.trace .step .dot{width:5px;height:5px;border-radius:50%;background:#10b981;margin-top:6px;flex-shrink:0}
+.trace .step .body{flex:1;font-size:0.72rem;color:#cbd5e1;line-height:1.5}
+.trace .step .body b{color:#c4b5fd}
+.trace .step .body code{background:rgba(167,139,250,.10);padding:1px 5px;border-radius:3px;font-family:'SF Mono',monospace;font-size:0.7rem;color:#a78bfa}
+
+/* ============= CATALOG ============= */
+.cat-filters{display:flex;gap:8px;flex-wrap:wrap;background:#13111f;border:1px solid #29213a;border-radius:11px;padding:11px 12px;margin-bottom:12px}
+.cat-filters select,.cat-filters input{background:#0d0a17;border:1px solid #29213a;border-radius:6px;padding:6px 10px;color:#cbd5e1;font-size:0.8rem;outline:none}
+.cat-filters select:focus,.cat-filters input:focus{border-color:#a78bfa}
+
+.cat-table-wrap{background:#13111f;border:1px solid #29213a;border-radius:12px;overflow:hidden}
+.cat-table{width:100%;border-collapse:collapse;font-size:0.8rem}
+.cat-table th{text-align:left;padding:8px 12px;background:#0d0a17;color:#52527a;font-size:0.62rem;letter-spacing:1px;text-transform:uppercase;font-weight:700;border-bottom:1px solid #1f1429}
+.cat-table td{padding:9px 12px;border-bottom:1px solid #1f1429;color:#cbd5e1}
+.cat-table tr:hover{background:rgba(167,139,250,.05)}
+.cell{position:relative;display:inline-flex;gap:5px;align-items:center;cursor:default}
+.cell.clickable{cursor:pointer}
+.cell.clickable:hover{text-decoration:underline}
+.cell .tip{display:none;position:absolute;bottom:calc(100% + 5px);left:0;background:#0a0612;border:1px solid #a78bfa;border-radius:8px;padding:9px 12px;font-size:0.7rem;color:#cbd5e1;white-space:nowrap;z-index:50;box-shadow:0 12px 36px rgba(0,0,0,.6);min-width:230px}
+.cell:hover .tip{display:block}
+.tip .tip-row{display:flex;gap:8px;margin-bottom:3px;align-items:center}
+.tip .tip-row .k{color:#52527a;width:74px;font-size:0.64rem;letter-spacing:.5px;text-transform:uppercase}
+.tip .tip-row .v{color:#cbd5e1;font-size:0.72rem}
+.tip .src-url{color:#a78bfa;text-decoration:underline;font-size:0.66rem;font-family:'SF Mono',monospace}
+.thumb{width:28px;height:28px;border-radius:5px;background:linear-gradient(135deg,#475569,#1f2937);display:inline-flex;align-items:center;justify-content:center;font-size:0.7rem;flex-shrink:0}
+
+/* drawer */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:200;display:flex;justify-content:flex-end;animation:fadeIn .15s}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.drawer{width:480px;max-width:95vw;background:#0d0a17;border-left:1px solid #29213a;height:100vh;overflow-y:auto;animation:slideIn .25s ease}
+@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}
+.drawer-head{padding:18px 22px;border-bottom:1px solid #29213a;display:flex;justify-content:space-between;align-items:center}
+.drawer-head h3{font-size:1.05rem;font-weight:800}
+.drawer-head .close{background:transparent;border:1px solid #29213a;color:#94a3b8;border-radius:7px;padding:4px 9px;cursor:pointer}
+.drawer-body{padding:18px 22px}
+.evidence-block{background:#13111f;border:1px solid #29213a;border-radius:10px;padding:14px;margin-bottom:13px}
+.evidence-block h5{font-size:0.66rem;color:#52527a;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px}
+.evidence-block .screenshot{background:#0a0612;border:1px dashed #29213a;border-radius:7px;height:100px;display:flex;align-items:center;justify-content:center;color:#52527a;font-size:0.78rem;margin-bottom:8px}
+.evidence-block .meta-row{display:flex;justify-content:space-between;padding:4px 0;font-size:0.78rem;color:#cbd5e1;border-bottom:1px solid #1f1429}
+.evidence-block .meta-row:last-child{border:none}
+.evidence-block .meta-row .k{color:#52527a;font-size:0.72rem}
+.evidence-block code{font-family:'SF Mono',monospace;font-size:0.74rem;color:#a78bfa}
+
+/* ============= VOC ============= */
+.voc-shell{display:grid;grid-template-columns:230px 1fr;gap:14px;align-items:flex-start}
+.voc-sidebar{background:#13111f;border:1px solid #29213a;border-radius:11px;padding:12px;max-height:75vh;overflow-y:auto}
+.voc-sidebar h4{font-size:0.64rem;color:#52527a;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px}
+.sku-pick{padding:7px 9px;border-radius:6px;cursor:pointer;font-size:0.76rem;color:#cbd5e1;display:flex;justify-content:space-between;align-items:center;border-left:2px solid transparent;margin-bottom:3px}
+.sku-pick:hover{background:rgba(167,139,250,.08)}
+.sku-pick.active{background:rgba(167,139,250,.15);color:#fff;border-left-color:#a78bfa}
+.sku-pick .site-name{font-size:0.62rem;color:#52527a}
+
+.voc-detail{background:#13111f;border:1px solid #29213a;border-radius:12px;overflow:hidden}
+.voc-head{padding:16px 20px;border-bottom:1px solid #1f1429;background:linear-gradient(135deg,rgba(167,139,250,.10),transparent)}
+.voc-head .name{font-size:1.15rem;font-weight:800;color:#fff;margin-bottom:4px}
+.voc-head .meta{font-size:0.76rem;color:#94a3b8;display:flex;gap:12px}
+.voc-head .meta b{color:#c4b5fd}
+.voc-cards{padding:18px 20px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.voc-block{background:#0d0a17;border:1px solid #29213a;border-radius:10px;padding:14px 16px}
+.voc-block h5{font-size:0.7rem;color:#fcd34d;font-weight:800;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:9px;display:flex;justify-content:space-between;align-items:center}
+.voc-block h5 .actions{display:flex;gap:4px}
+.voc-block h5 .actions button{background:rgba(167,139,250,.10);border:1px solid rgba(167,139,250,.20);color:#a78bfa;font-size:0.58rem;padding:2px 6px;border-radius:4px;cursor:pointer;font-weight:600}
+.voc-block h5 .actions button:hover{background:rgba(167,139,250,.20)}
+
+.complaint{padding:8px 0;border-bottom:1px solid #1f1429}
+.complaint:last-child{border:none}
+.complaint .theme{font-weight:700;color:#fff;font-size:0.82rem;display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}
+.complaint .theme .share{font-size:0.68rem;color:#fda4af;font-weight:700}
+.complaint .quote{font-size:0.72rem;color:#94a3b8;font-style:italic;line-height:1.5;border-left:2px solid #fda4af;padding-left:7px}
+.complaint .bar{height:4px;background:#1f1429;border-radius:3px;margin-top:5px;overflow:hidden}
+.complaint .bar div{height:100%;background:linear-gradient(90deg,#fb7185,#fda4af)}
+
+.kw-cloud{display:flex;flex-wrap:wrap;gap:5px}
+.kw{padding:2px 8px;border-radius:10px;font-size:0.7rem;font-weight:600}
+.kw.pos{background:rgba(16,185,129,.14);color:#6ee7b7;border:1px solid rgba(16,185,129,.3)}
+.kw.neg{background:rgba(251,113,133,.14);color:#fda4af;border:1px solid rgba(251,113,133,.3)}
+.kw.neu{background:rgba(96,165,250,.14);color:#93c5fd;border:1px solid rgba(96,165,250,.3)}
+
+.compare-row{padding:7px 0;border-bottom:1px solid #1f1429;display:grid;grid-template-columns:80px 1fr 60px;gap:8px;align-items:center;font-size:0.76rem}
+.compare-row:last-child{border:none}
+.compare-row .site{font-weight:700;color:#c4b5fd}
+.compare-row .info{color:#cbd5e1}
+.compare-row .info span{color:#52527a;font-size:0.68rem;margin-left:4px}
+.compare-row .delta.dn{color:#6ee7b7;font-weight:700}
+.compare-row .delta.up{color:#fda4af;font-weight:700}
+
+.recs li{padding:7px 0;border-bottom:1px solid #1f1429;color:#cbd5e1;font-size:0.8rem;line-height:1.55;list-style:none;display:flex;gap:7px}
+.recs li:last-child{border:none}
+.recs li::before{content:'💡';flex-shrink:0}
+.recs li b{color:#fff}
+
+.voc-foot{padding:13px 20px;background:#080614;border-top:1px solid #1f1429;display:flex;justify-content:space-between;align-items:center;font-size:0.76rem}
+.voc-foot .cost{color:#52527a}
+.voc-foot .cost b{color:#fcd34d}
+.voc-foot button{padding:7px 13px;border-radius:6px;background:rgba(167,139,250,.10);border:1px solid rgba(167,139,250,.25);color:#c4b5fd;font-weight:600;cursor:pointer;font-size:0.76rem}
+.voc-foot button:hover{background:rgba(167,139,250,.20)}
+
+/* ============= COMPETITORS (workspace-specific) ============= */
+.competitor-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:11px}
+.comp-tile{background:#13111f;border:1px solid #29213a;border-radius:11px;padding:12px 14px;cursor:default}
+.comp-tile h6{font-size:0.84rem;font-weight:800;color:#fff;margin-bottom:3px}
+.comp-tile .ctry{font-size:0.64rem;color:#52527a;letter-spacing:1px;margin-bottom:6px}
+.comp-tile .num{font-size:1.3rem;font-weight:900;color:#c4b5fd;margin-bottom:2px}
+.comp-tile .pct{font-size:0.72rem;color:#94a3b8;margin-bottom:6px}
+.comp-tile .bar{height:4px;background:#29213a;border-radius:3px;overflow:hidden}
+.comp-tile .bar div{height:100%;background:linear-gradient(90deg,#10b981,#6ee7b7)}
+.comp-tile.warm .bar div{background:linear-gradient(90deg,#fbbf24,#fcd34d)}
+.comp-tile.cool .bar div{background:linear-gradient(90deg,#fb7185,#fda4af)}
+
+/* ============= SETTINGS ============= */
+.set-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.set-block{background:#13111f;border:1px solid #29213a;border-radius:11px;padding:16px}
+.set-block h3{font-size:0.94rem;font-weight:800;margin-bottom:9px;color:#fff;display:flex;justify-content:space-between;align-items:center}
+.set-block h3 button{background:rgba(167,139,250,.10);border:1px solid rgba(167,139,250,.25);color:#c4b5fd;padding:3px 10px;border-radius:6px;font-size:0.72rem;font-weight:600;cursor:pointer}
+.key-row{padding:9px 0;border-bottom:1px solid #1f1429;display:flex;justify-content:space-between;align-items:center;font-size:0.8rem}
+.key-row .info{display:flex;flex-direction:column;gap:3px}
+.key-row .key-prefix{font-family:'SF Mono',monospace;font-size:0.7rem;color:#a78bfa}
+.key-row .meta{font-size:0.66rem;color:#52527a}
+.key-row .rev{background:transparent;border:1px solid rgba(251,113,133,.4);color:#fda4af;padding:3px 8px;border-radius:6px;font-size:0.7rem;cursor:pointer}
+
+.billing-bar{height:80px;display:flex;gap:3px;align-items:flex-end;margin:12px 0 7px}
+.billing-bar .b{flex:1;background:linear-gradient(180deg,#a78bfa,rgba(167,139,250,.18));border-radius:3px 3px 0 0;min-height:4px}
+.billing-meta{display:flex;justify-content:space-between;font-size:0.72rem;color:#94a3b8;padding-top:7px;border-top:1px dashed #29213a}
+.billing-meta b{color:#fff}
+
+.alert-row{padding:9px 0;border-bottom:1px solid #1f1429;display:flex;justify-content:space-between;align-items:center;font-size:0.8rem}
+.alert-row .info b{color:#fff;font-weight:700;display:block;font-size:0.8rem}
+.alert-row .info span{font-size:0.68rem;color:#94a3b8}
+
+/* ============= Toast ============= */
+.toast{position:fixed;bottom:24px;right:24px;background:linear-gradient(135deg,#a78bfa,#f472b6);color:#fff;padding:11px 18px;border-radius:10px;box-shadow:0 18px 50px rgba(167,139,250,.45);font-size:0.84rem;font-weight:700;z-index:500;animation:toastIn .25s}
+@keyframes toastIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+
+/* responsive */
+@media(max-width:1100px){
+  .ask-shell{grid-template-columns:1fr}
+  .voc-shell{grid-template-columns:1fr}
+  .voc-cards{grid-template-columns:1fr}
+  .set-grid{grid-template-columns:1fr}
+  .demo-bar .switcher{display:flex;margin-left:0;margin-top:6px;justify-content:center}
+}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+/* ========== 多租户 Canned Fixtures ========== */
+const WORKSPACES = {
+  vivo: {
+    code: 'vivo',
+    name: 'VIVO 海外商研',
+    icon: 'V',
+    iconBg: 'linear-gradient(135deg,#3b82f6,#1e40af)',
+    user: '王思琦',
+    plan: 'Enterprise · 5 用户',
+    usage: { current: 124300, total: 500000, mtd: 186.45 },
+    stats: {
+      tracked_sku: 67830,
+      sites: 'Lazada / Shopee / Amazon MX/BR/ES',
+      voc_reviews_30d: 4128,
+      alerts_active: 7,
+    },
+    starters: [
+      { icon:'📱', title:'三星 vivo 印尼对标', desc:'Lazada ID 双品牌 TOP 100' , key:'samsung_vivo'},
+      { icon:'⭐', title:'OPPO 巴西差评', desc:'Amazon BR 5 星比例' , key:'oppo_voc'},
+      { icon:'🏷️', title:'iQOO 价格历史', desc:'Shopee TH 7 天波动' , key:'iqoo_price'},
+      { icon:'🆕', title:'本周新品发现', desc:'5 平台 + 7 国' , key:'new_products'},
+      { icon:'🌍', title:'14 国对标', desc:'同 SPU 跨国价差' , key:'cross_country'},
+    ],
+    history: [
+      { prompt:'三星 vivo 印尼对标 Lazada TOP 100', time:'今天 14:23', key:'samsung_vivo' },
+      { prompt:'OPPO 巴西 Amazon 差评关键词', time:'今天 11:51', key:'oppo_voc' },
+      { prompt:'iQOO Shopee TH 7 天价格', time:'昨天 17:40', key:'iqoo_price' },
+    ],
+    voc_skus: [
+      { sku:'V-X100', site:'lazada_id', name:'vivo X100 5G 12+256' },
+      { sku:'V-Y36', site:'shopee_th', name:'vivo Y36 普及版' },
+      { sku:'SM-S928', site:'amazon_br', name:'Samsung Galaxy S24 Ultra' },
+      { sku:'OP-F23', site:'lazada_my', name:'OPPO Reno 11 Pro' },
+    ],
+    competitors: [
+      { code:'lazada_id', name:'Lazada ID', country:'印尼', count:225000, status:'ok', klass:'' },
+      { code:'shopee_th', name:'Shopee TH', country:'泰国', count:189000, status:'ok', klass:'' },
+      { code:'amazon_br', name:'Amazon BR', country:'巴西', count:67000, status:'warn', klass:'warm' },
+      { code:'amazon_mx', name:'Amazon MX', country:'墨西哥', count:54000, status:'warn', klass:'warm' },
+      { code:'flipkart_in', name:'Flipkart IN', country:'印度', count:0, status:'pending', klass:'cool' },
+      { code:'shopee_id', name:'Shopee ID', country:'印尼', count:198000, status:'ok', klass:'' },
+      { code:'gsm_arena', name:'GSM Arena', country:'垂直评测', count:8200, status:'ok', klass:'' },
+    ],
+  },
+  aosen: {
+    code: 'aosen',
+    name: '遨森家居',
+    icon: 'A',
+    iconBg: 'linear-gradient(135deg,#10b981,#047857)',
+    user: '李工',
+    plan: 'Pro · 3 用户',
+    usage: { current: 56120, total: 200000, mtd: 84.18 },
+    stats: {
+      tracked_sku: 142500,
+      sites: '46 个跨境电商独立站',
+      voc_reviews_30d: 12380,
+      alerts_active: 12,
+    },
+    starters: [
+      { icon:'🛏️', title:'Aosom 床品 TOP 50', desc:'本周新上 + 价格 + 评分', key:'aosom_bed' },
+      { icon:'🏠', title:'Songmics 家居差评', desc:'差评 TOP 3 + 关键词', key:'songmics_voc' },
+      { icon:'💰', title:'Vidaxl DE 降价', desc:'过去 7 天 >10% 的 SKU', key:'vidaxl_price' },
+      { icon:'🆕', title:'Costway 新品', desc:'本周新增 + 类目', key:'costway_new' },
+      { icon:'🏆', title:'电动桌竞品份额', desc:'Google Shopping 占有率', key:'gs_share' },
+    ],
+    history: [
+      { prompt:'Aosom 床品 TOP 50 + 评分', time:'今天 09:23', key:'aosom_bed' },
+      { prompt:'Songmics 差评关键词', time:'今天 08:51', key:'songmics_voc' },
+      { prompt:'Vidaxl DE 价格变动 >10%', time:'昨天 17:40', key:'vidaxl_price' },
+    ],
+    voc_skus: [
+      { sku:'SOL-3782', site:'songmics_us', name:'电动升降桌 48"' },
+      { sku:'CW-DSK-12', site:'costway_us', name:'升降桌 折叠款' },
+      { sku:'AOS-BED-7', site:'aosom_us', name:'实木双层床 EF-22' },
+      { sku:'HM-SOFA', site:'homary_us', name:'L 型沙发 灰色' },
+    ],
+    competitors: [
+      { code:'vidaxl_de', name:'Vidaxl DE', country:'德国', count:4998, status:'critical', klass:'cool' },
+      { code:'vidaxl_uk', name:'Vidaxl UK', country:'英国', count:5955, status:'critical', klass:'cool' },
+      { code:'songmics_us', name:'Songmics US', country:'美国', count:11670, status:'ok', klass:'' },
+      { code:'costway_us', name:'Costway US', country:'美国', count:10411, status:'ok', klass:'' },
+      { code:'homary_us', name:'Homary US', country:'美国', count:7891, status:'ok', klass:'' },
+      { code:'aosom_us', name:'Aosom US', country:'美国', count:12300, status:'ok', klass:'' },
+      { code:'flexispot_us', name:'Flexispot US', country:'美国', count:5621, status:'ok', klass:'' },
+      { code:'bcp_us', name:'BCP US', country:'美国', count:3466, status:'ok', klass:'' },
+      { code:'yaheetech_us', name:'Yaheetech US', country:'美国', count:1851, status:'ok', klass:'' },
+    ],
+  },
+  haier: {
+    code: 'haier',
+    name: '海尔智家',
+    icon: 'H',
+    iconBg: 'linear-gradient(135deg,#fb7185,#dc2626)',
+    user: '张分析师',
+    plan: 'Enterprise · 12 用户',
+    usage: { current: 423800, total: 2000000, mtd: 635.70 },
+    stats: {
+      tracked_sku: 89200,
+      sites: '全球 21 国电商 + 评测站',
+      voc_reviews_30d: 28490,
+      alerts_active: 23,
+    },
+    starters: [
+      { icon:'❄️', title:'三星 LG 冰箱对标', desc:'美/德 TOP 20 + 评分', key:'fridge' },
+      { icon:'🌪️', title:'戴森空气净化', desc:'差评 + 客户痛点', key:'dyson' },
+      { icon:'🍳', title:'美的小家电出海', desc:'东南亚 5 国占有率', key:'midea' },
+      { icon:'🆕', title:'本周新品雷达', desc:'21 国新上 SKU 聚合', key:'new_radar' },
+      { icon:'🌐', title:'全球价差地图', desc:'同款冰箱国际套利', key:'price_map' },
+    ],
+    history: [
+      { prompt:'三星 LG 冰箱 US + DE TOP 20', time:'今天 10:15', key:'fridge' },
+      { prompt:'戴森空气净化差评关键词', time:'今天 09:02', key:'dyson' },
+    ],
+    voc_skus: [
+      { sku:'SAM-RF28', site:'amazon_us', name:'Samsung RF28 法式冰箱' },
+      { sku:'LG-GR-X295', site:'amazon_de', name:'LG GR-X295 智能冰箱' },
+      { sku:'DYSON-TP09', site:'amazon_uk', name:'Dyson TP09 净化器' },
+    ],
+    competitors: [
+      { code:'amazon_us', name:'Amazon US', country:'美国', count:124000, status:'ok', klass:'' },
+      { code:'amazon_de', name:'Amazon DE', country:'德国', count:98000, status:'ok', klass:'' },
+      { code:'amazon_uk', name:'Amazon UK', country:'英国', count:67000, status:'ok', klass:'' },
+      { code:'amazon_jp', name:'Amazon JP', country:'日本', count:42000, status:'ok', klass:'' },
+      { code:'rakuten_jp', name:'Rakuten JP', country:'日本', count:28000, status:'warn', klass:'warm' },
+      { code:'tmall', name:'天猫国际', country:'中国', count:51000, status:'ok', klass:'' },
+    ],
+  },
+  zeekr: {
+    code: 'zeekr',
+    name: '极氪汽车',
+    icon: 'Z',
+    iconBg: 'linear-gradient(135deg,#fbbf24,#d97706)',
+    user: '陈品牌',
+    plan: 'Pro · 4 用户',
+    usage: { current: 32400, total: 100000, mtd: 48.60 },
+    stats: {
+      tracked_sku: 18600,
+      sites: 'Reddit / X / 海外汽车论坛 / 评测站',
+      voc_reviews_30d: 8420,
+      alerts_active: 9,
+    },
+    starters: [
+      { icon:'🚗', title:'Tesla VOC 月报', desc:'Model 3/Y 海外舆情', key:'tesla' },
+      { icon:'⚡', title:'BYD 海外口碑', desc:'欧洲电车论坛监测', key:'byd' },
+      { icon:'🔍', title:'极氪 002X 提及', desc:'Reddit + X 最近 7 天', key:'zeekr_mention' },
+      { icon:'📊', title:'电车价格雷达', desc:'欧/中东 6 国对标', key:'ev_price' },
+      { icon:'💬', title:'KOL 雷达', desc:'10k+ 粉丝评测人', key:'kol_radar' },
+    ],
+    history: [
+      { prompt:'Tesla Model 3 海外舆情月报', time:'今天 11:30', key:'tesla' },
+      { prompt:'极氪 002X Reddit 提及', time:'昨天 14:22', key:'zeekr_mention' },
+    ],
+    voc_skus: [
+      { sku:'TESLA-M3', site:'edmunds', name:'Tesla Model 3 2026' },
+      { sku:'BYD-ATTO3', site:'auto_express', name:'BYD Atto 3 EU' },
+      { sku:'ZEEKR-002X', site:'reddit_evs', name:'Zeekr 002X' },
+    ],
+    competitors: [
+      { code:'reddit_evs', name:'r/electricvehicles', country:'国际', count:24000, status:'ok', klass:'' },
+      { code:'edmunds', name:'Edmunds', country:'美国', count:8200, status:'ok', klass:'' },
+      { code:'auto_express', name:'Auto Express', country:'英国', count:6700, status:'ok', klass:'' },
+      { code:'x_evnews', name:'X / @EVNews', country:'国际', count:12400, status:'ok', klass:'' },
+      { code:'youtube_evs', name:'YouTube EV', country:'国际', count:5800, status:'ok', klass:'' },
+    ],
+  },
+};
+
+const ASK_RESULTS = {
+  /* VIVO */
+  samsung_vivo: {
+    plan: [
+      { step:'解析意图', body:'<b>cross_brand_compare</b> · brands=<code>三星, vivo</code> · site=<code>lazada_id</code>' },
+      { step:'调用 MCP', body:'<code>search_competitor_products</code> × 2 brands · limit=50 each' },
+      { step:'验证', body:'100 SKU · 95 ✓ · 5 ⚠ stale (>7d)' },
+    ],
+    cols: ['品牌','商品','价格(IDR)','评分',''],
+    rows: [
+      ['三星','Galaxy A35 5G 128GB','5,499,000','4.6','ok'],
+      ['vivo','vivo V40 12+256','5,899,000','4.7','ok'],
+      ['三星','Galaxy M14 5G','2,799,000','4.4','ok'],
+      ['vivo','vivo Y28 5G','3,299,000','4.5','ok'],
+      ['三星','Galaxy A05s','2,099,000','4.3','warn'],
+      ['vivo','vivo Y03','1,899,000','4.2','ok'],
+    ],
+    meta:{ elapsed:'2.18s', cost:'$0.014', rows:100 }
+  },
+  oppo_voc: {
+    plan: [{ step:'解析意图', body:'VOC · OPPO · Amazon BR' }, { step:'调用', body:'get_voc_reviews · sentiment=negative' }, { step:'聚合', body:'214 条差评 · 充电慢 32% · 屏幕 18%' }],
+    cols:['关键词','占比','情感','样本',''],
+    rows:[['充电慢','32%','-0.62','"30 min 才 50%"','bad'],['屏幕泛黄','18%','-0.45','"白屏发黄"','bad'],['信号','12%','-0.38','"5G 经常断流"','warn']],
+    meta:{ elapsed:'2.51s', cost:'$0.016', rows:6 }
+  },
+  iqoo_price: {
+    plan:[{step:'解析意图',body:'price_history · iQOO · shopee_th'},{step:'调用',body:'price_history 7 天'},{step:'对比',body:'5 个 SKU · 3 涨 / 2 跌'}],
+    cols:['SKU','7 日前','现在','变化',''],
+    rows:[['iQOO Neo9','฿18,990','฿17,490','-7.9%','ok'],['iQOO Z9','฿9,990','฿9,490','-5.0%','ok'],['iQOO 12','฿24,990','฿25,490','+2.0%','ok']],
+    meta:{ elapsed:'1.42s', cost:'$0.009', rows:5 }
+  },
+  new_products: {
+    plan:[{step:'解析意图',body:'new_products · last 7 days · 5 platforms'},{step:'调用',body:'search · first_seen >= 7d ago'},{step:'聚合',body:'48 新 SKU · vivo 12 · OPPO 9 · 三星 15'}],
+    cols:['品牌','商品','上架日','首价',''],
+    rows:[['vivo','V40 Lite 8+128','2026-05-22','฿12,490','ok'],['OPPO','Reno 12 F 5G','2026-05-21','RM 1,499','ok'],['三星','Galaxy A55 8+256','2026-05-20','IDR 6,999,000','ok']],
+    meta:{ elapsed:'1.78s', cost:'$0.011', rows:48 }
+  },
+  cross_country: {
+    plan:[{step:'解析意图',body:'cross_country · 14 markets · same SPU'},{step:'对比',body:'iQOO 12 在 8 国价差最大达 35%'}],
+    cols:['国家','SKU','本币价','美元价',''],
+    rows:[['印度','iQOO 12 12+256','₹52,999','$636','ok'],['印尼','iQOO 12 12+256','IDR 9,999,000','$640','ok'],['泰国','iQOO 12 12+256','฿24,990','$687','ok']],
+    meta:{ elapsed:'1.95s', cost:'$0.013', rows:8 }
+  },
+
+  /* AOSEN（复用 v6 的） */
+  aosom_bed: {
+    plan:[{step:'解析意图',body:'product_search · brand=Aosom · category=床品'},{step:'调用',body:'search_competitor_products · limit=50'},{step:'验证',body:'50 cell · 49 ✓ · 1 ⚠'}],
+    cols:['商品','价格','评分','30 天销量',''],
+    rows:[['实木双层床 EF-22','$899','4.7 ★','142','ok'],['儿童学习床 PRO','$549','4.5 ★','98','ok'],['折叠床垫 8 寸','$199','4.3 ★','67','ok'],['床头柜 三层抽屉','$129','4.6 ★','88','ok'],['沙发床 双人款','$679','4.4 ★','54','ok']],
+    meta:{ elapsed:'1.84s', cost:'$0.012', rows:50 }
+  },
+  songmics_voc: {
+    plan:[{step:'解析意图',body:'VOC · Songmics 升降桌'},{step:'调用',body:'voc_summary · negative'},{step:'聚合',body:'412 评论 · 异响 43% · 噪音 21%'}],
+    cols:['关键词','占比','情感','样本',''],
+    rows:[['异响','43%','-0.78','"全高度时整张桌都晃"','bad'],['噪音','21%','-0.55','"晚上不敢用"','bad'],['说明书','18%','-0.40','"装错三次"','warn']],
+    meta:{ elapsed:'2.31s', cost:'$0.018', rows:6 }
+  },
+  vidaxl_price: {
+    plan:[{step:'解析意图',body:'price_change · vidaxl_de · delta<-10%'},{step:'调用',body:'price_history 7 day'},{step:'结果',body:'11 个降价 SKU'}],
+    cols:['商品','原价','现价','降幅',''],
+    rows:[['电动升降桌 1200mm','€499','€399','-20%','ok'],['实木餐桌 6 人','€459','€379','-17%','ok'],['沙发床 灰色','€599','€499','-16%','ok']],
+    meta:{ elapsed:'1.47s', cost:'$0.009', rows:11 }
+  },
+  costway_new: {
+    plan:[{step:'解析意图',body:'new_products · costway_us · 7 day'},{step:'聚合',body:'68 新 SKU · 户外 23 · 婴幼儿 15'}],
+    cols:['商品','类目','上架日','首价',''],
+    rows:[['户外秋千椅 PE 编织','户外家具','2026-05-22','$249','ok'],['婴儿学步车','婴幼儿','2026-05-21','$89','ok']],
+    meta:{ elapsed:'1.62s', cost:'$0.011', rows:68 }
+  },
+  gs_share: {
+    plan:[{step:'解析意图',body:'competitor_landscape · keyword=standing desk'},{step:'调用',body:'Google Shopping'},{step:'结果',body:'Costway 17.6% 第一'}],
+    cols:['商家','位置数','份额','均价',''],
+    rows:[['Costway','25','17.6%','$229','ok'],['Vivo Office','21','14.8%','$199','ok'],['Flexispot','18','12.7%','$329','ok']],
+    meta:{ elapsed:'1.18s', cost:'$0.007', rows:10 }
+  },
+
+  /* HAIER */
+  fridge: {
+    plan:[{step:'解析意图',body:'fridge · Samsung+LG · amazon_us+amazon_de'},{step:'调用',body:'search × 2 brands × 2 sites'},{step:'对比',body:'40 SKU · Samsung 22 / LG 18'}],
+    cols:['品牌','型号','市场','价格','评分'],
+    rows:[['Samsung','RF28R7351SR','US','$2,199','4.6'],['LG','GR-X295MTQDP','DE','€2,499','4.7'],['Samsung','RB7300T','DE','€1,899','4.5'],['LG','LT760','US','$2,599','4.4']],
+    meta:{ elapsed:'2.45s', cost:'$0.019', rows:40 }
+  },
+  dyson: {
+    plan:[{step:'解析意图',body:'VOC · Dyson 净化器'},{step:'调用',body:'voc_summary'},{step:'结果',body:'1820 评论 · 滤芯贵 28% · 噪音 19%'}],
+    cols:['关键词','占比','情感','样本',''],
+    rows:[['滤芯贵','28%','-0.55','"换一次 ¥1500 真的离谱"','bad'],['噪音','19%','-0.42','"睡觉模式还是吵"','warn']],
+    meta:{ elapsed:'2.12s', cost:'$0.015', rows:5 }
+  },
+  midea: {
+    plan:[{step:'解析意图',body:'midea · 东南亚 5 国'},{step:'结果',body:'印尼第一占 22%'}],
+    cols:['国家','top SKU','份额','均价',''],
+    rows:[['印尼','美的微波炉 25L','22%','IDR 1,799,000','ok'],['泰国','美的空气炸锅','18%','฿2,499','ok']],
+    meta:{ elapsed:'1.62s', cost:'$0.010', rows:8 }
+  },
+  new_radar: { plan:[{step:'解析意图',body:'new_radar · 21 国'},{step:'结果',body:'124 新 SKU'}], cols:['品牌','SKU','市场','上架日',''], rows:[['Samsung','Bespoke 4-Door','US','2026-05-22','ok'],['LG','InstaView','DE','2026-05-21','ok']], meta:{elapsed:'2.34s',cost:'$0.017',rows:124} },
+  price_map: { plan:[{step:'解析意图',body:'price_map · 同款冰箱国际套利'},{step:'结果',body:'最大价差 38% US vs JP'}], cols:['国家','本币价','美元价','溢价',''], rows:[['美国','$2,199','$2,199','基准','ok'],['日本','¥385,000','$2,547','+15.8%','warn']], meta:{elapsed:'2.01s',cost:'$0.014',rows:8} },
+
+  /* ZEEKR */
+  tesla: {
+    plan:[{step:'解析意图',body:'tesla · Model 3 · 海外舆情 30 天'},{step:'聚合',body:'4128 条提及 · Reddit 62% · X 28%'}],
+    cols:['主题','提及数','情感','样本',''],
+    rows:[['续航焦虑','420','-0.45','"low 100mi anxiety on cold day"','warn'],['FSD 价格','312','-0.38','"$15k for FSD is insane"','bad'],['内饰简约','286','+0.62','"minimalism done right"','ok']],
+    meta:{ elapsed:'3.12s', cost:'$0.024', rows:8 }
+  },
+  byd: { plan:[{step:'解析',body:'BYD · 欧洲'},{step:'结果',body:'Atto 3 在德国占 EV 销量 6.8%'}], cols:['国家','销量','市占','均价',''], rows:[['德国','3,200','6.8%','€42,000','ok'],['英国','1,800','4.2%','£37,500','ok']], meta:{elapsed:'2.34s',cost:'$0.017',rows:6} },
+  zeekr_mention: {
+    plan:[{step:'解析',body:'Zeekr 002X · Reddit + X · 7 day'},{step:'结果',body:'128 提及 · 正面 76%'}],
+    cols:['平台','作者','正负面','内容片段',''],
+    rows:[['Reddit','@evlover22','+0.78','"002X has better interior than M3..."','ok'],['X','@evnews','+0.62','"Zeekr finally hitting EU..."','ok']],
+    meta:{ elapsed:'1.94s', cost:'$0.013', rows:128 }
+  },
+  ev_price: { plan:[{step:'解析',body:'ev_price · 6 国'},{step:'结果',body:'Model 3 在挪威便宜 22%'}], cols:['车型','德国','英国','挪威',''], rows:[['Tesla Model 3','€39,990','£39,990','NOK 369,990','ok'],['BYD Atto 3','€38,000','£37,500','NOK 379,990','ok']], meta:{elapsed:'1.78s',cost:'$0.012',rows:8} },
+  kol_radar: { plan:[{step:'解析',body:'kol_radar · 10k+ 粉丝评测人'},{step:'结果',body:'12 KOL 最近提及 Zeekr'}], cols:['KOL','平台','粉丝','最近视频',''], rows:[['Out of Spec','YouTube','420k','《Zeekr 001 First Drive》','ok'],['MKBHD','YouTube','19M','《Chinese EV Roundup》','ok']], meta:{elapsed:'2.45s',cost:'$0.018',rows:12} },
+};
+
+const VOC_INSIGHTS = {
+  /* VIVO */
+  'V-X100': {
+    sample: 412, generated:'今天 01:30',
+    complaints:[{theme:'屏幕泛黄',share:0.34,sentiment:-0.62,sample:'白底有点偏黄'},{theme:'信号',share:0.21,sentiment:-0.48,sample:'5G 在地下室断流'},{theme:'闪存',share:0.18,sentiment:-0.40,sample:'装多游戏卡顿'}],
+    cloud:[{term:'屏幕黄',w:34,s:-0.6,k:'neg'},{term:'拍照好',w:28,s:+0.7,k:'pos'},{term:'信号',w:22,s:-0.4,k:'neg'},{term:'续航',w:18,s:+0.5,k:'pos'}],
+    compare:[{site:'samsung_a35',sku:'SM-A356',price:5499000,rating:4.6,reviews:1820,complaint:'触控不灵',delta:0,deltaCls:''},{site:'oppo_reno',sku:'OP-R11',price:5990000,rating:4.5,reviews:986,complaint:'电池虚标',delta:+91000,deltaCls:'up'}],
+    recs:['<b>屏幕优化</b> — 34% 投诉泛黄，建议厂线检测色温','<b>信号</b> — 印尼 5G 频段适配','<b>定价</b> — 比三星 A35 贵 7%，可调到平价']
+  },
+  'V-Y36': { sample:298, generated:'今天 02:15', complaints:[{theme:'外观脱色',share:0.28,sentiment:-0.52,sample:'用一个月后角落掉色'},{theme:'相机',share:0.19,sentiment:-0.45,sample:'夜拍噪点'}], cloud:[{term:'便宜',w:32,s:+0.7,k:'pos'},{term:'掉色',w:18,s:-0.5,k:'neg'},{term:'流畅',w:15,s:+0.5,k:'pos'}], compare:[{site:'samsung_m14',sku:'SM-M14',price:2799000,rating:4.4,reviews:1240,complaint:'屏幕亮度',delta:-500000,deltaCls:'dn'}], recs:['<b>涂层升级</b>，外观 28% 投诉','<b>夜拍算法</b> 优化'] },
+  'SM-S928': { sample:1820, generated:'今天 03:30', complaints:[{theme:'电池虚标',share:0.31,sentiment:-0.58,sample:'5000 mAh 实际 7h'},{theme:'发热',share:0.18,sentiment:-0.45,sample:'玩游戏烫'}], cloud:[{term:'相机',w:42,s:+0.8,k:'pos'},{term:'电池',w:28,s:-0.5,k:'neg'},{term:'发热',w:18,s:-0.4,k:'neg'}], compare:[{site:'iphone15pm',sku:'IP-15PM',price:1499.99,rating:4.7,reviews:8200,complaint:'重',delta:-100,deltaCls:'dn'}], recs:['<b>电池标识透明化</b>'] },
+  'OP-F23': { sample:512, generated:'今天 02:45', complaints:[{theme:'快充',share:0.24,sentiment:-0.42,sample:'号称 80W 实测 60W'},{theme:'软件',share:0.18,sentiment:-0.38,sample:'广告太多'}], cloud:[{term:'设计',w:28,s:+0.6,k:'pos'},{term:'快充',w:22,s:-0.4,k:'neg'}], compare:[{site:'vivo_v40',sku:'V-V40',price:5899000,rating:4.7,reviews:412,complaint:'屏幕黄',delta:0,deltaCls:''}], recs:['<b>快充实测优化</b>','<b>ColorOS 减广告</b>'] },
+
+  /* AOSEN */
+  'SOL-3782': {
+    sample:412, generated:'今天 01:30',
+    complaints:[{theme:'异响 / 晃动',share:0.43,sentiment:-0.78,sample:'全高度时整张桌都晃'},{theme:'电机噪音',share:0.21,sentiment:-0.55,sample:'晚上不敢用'},{theme:'说明书',share:0.18,sentiment:-0.40,sample:'装错三次'}],
+    cloud:[{term:'晃',w:34,s:-0.8,k:'neg'},{term:'噪音',w:22,s:-0.5,k:'neg'},{term:'承重好',w:18,s:+0.6,k:'pos'},{term:'值',w:16,s:+0.5,k:'pos'}],
+    compare:[{site:'costway',sku:'CW-DSK-12',price:169.99,rating:4.3,reviews:1240,complaint:'升降慢',delta:-20,deltaCls:'dn'},{site:'homary',sku:'HM-99',price:219.00,rating:4.7,reviews:402,complaint:'理线难',delta:+29,deltaCls:'up'}],
+    recs:['<b>加固横梁</b> — 异响占 43%，竞品在此价格档无此问题','<b>价格调整</b> — 比 Costway 高 $20 评分却低，建议 $179 锚定','<b>PDP 升级</b> — 强调 5 年保修']
+  },
+  'CW-DSK-12': { sample:1240, generated:'今天 02:45', complaints:[{theme:'升降慢',share:0.31,sentiment:-0.55,sample:'每次升降都要等 30 秒'}], cloud:[{term:'慢',w:42,s:-0.6,k:'neg'},{term:'便宜',w:30,s:+0.7,k:'pos'}], compare:[{site:'songmics',sku:'SOL-3782',price:189.99,rating:4.6,reviews:412,complaint:'晃',delta:+20,deltaCls:'up'}], recs:['<b>升降速度</b> 升级电机','<b>价格不动</b> 是护城河'] },
+  'AOS-BED-7': { sample:286, generated:'今天 02:00', complaints:[{theme:'组装难',share:0.28,sentiment:-0.45,sample:'2 小时才装好'}], cloud:[{term:'实木',w:26,s:+0.8,k:'pos'},{term:'组装',w:18,s:-0.4,k:'neg'}], compare:[{site:'homary',sku:'HM-BED',price:899,rating:4.5,reviews:182,complaint:'味道',delta:0,deltaCls:''}], recs:['<b>组装视频</b>'] },
+  'HM-SOFA': { sample:412, generated:'今天 03:15', complaints:[{theme:'布料起球',share:0.22,sentiment:-0.42,sample:'三个月开始起球'}], cloud:[{term:'坐感',w:32,s:+0.7,k:'pos'},{term:'起球',w:18,s:-0.5,k:'neg'}], compare:[{site:'aosom',sku:'AOS-SOFA',price:679,rating:4.4,reviews:54,complaint:'颜色',delta:-220,deltaCls:'dn'}], recs:['<b>布料升级</b>'] },
+
+  /* HAIER */
+  'SAM-RF28': { sample:1820, generated:'今天 02:00', complaints:[{theme:'制冰机',share:0.32,sentiment:-0.58,sample:'用 6 个月就漏水'},{theme:'温度',share:0.18,sentiment:-0.40,sample:'冷藏室不稳'}], cloud:[{term:'空间大',w:38,s:+0.8,k:'pos'},{term:'制冰',w:28,s:-0.6,k:'neg'}], compare:[{site:'lg_gr',sku:'LG-GR',price:2499,rating:4.7,reviews:986,complaint:'噪音',delta:+300,deltaCls:'up'}], recs:['<b>制冰机</b> 改进密封'] },
+  'LG-GR-X295': { sample:986, generated:'今天 02:30', complaints:[{theme:'噪音',share:0.24,sentiment:-0.45,sample:'晚上能听到'}], cloud:[{term:'省电',w:32,s:+0.8,k:'pos'}], compare:[{site:'samsung',sku:'SM-RF',price:2199,rating:4.6,reviews:1820,complaint:'制冰',delta:-300,deltaCls:'dn'}], recs:['<b>静音优化</b>'] },
+  'DYSON-TP09': { sample:1820, generated:'今天 03:00', complaints:[{theme:'滤芯贵',share:0.28,sentiment:-0.55,sample:'换一次 ¥1500 离谱'},{theme:'App',share:0.18,sentiment:-0.32,sample:'Dyson Link 经常掉线'}], cloud:[{term:'净化',w:42,s:+0.8,k:'pos'},{term:'滤芯',w:28,s:-0.6,k:'neg'}], compare:[{site:'xiaomi',sku:'MI-AIR',price:799,rating:4.5,reviews:8200,complaint:'噪音',delta:-3200,deltaCls:'dn'}], recs:['<b>第三方滤芯</b> 政策','<b>App 重写</b>'] },
+
+  /* ZEEKR */
+  'TESLA-M3': { sample:4128, generated:'今天 03:30', complaints:[{theme:'续航焦虑',share:0.32,sentiment:-0.45,sample:'冬天续航打 70%'},{theme:'FSD 价格',share:0.24,sentiment:-0.55,sample:'$15k 太贵'}], cloud:[{term:'简约',w:42,s:+0.8,k:'pos'},{term:'续航',w:32,s:-0.4,k:'neg'},{term:'FSD',w:28,s:-0.5,k:'neg'}], compare:[{site:'byd_atto',sku:'BYD-A3',price:42000,rating:4.5,reviews:1840,complaint:'内饰',delta:+2010,deltaCls:'up'}], recs:['<b>FSD 订阅</b> 替代买断','<b>冷天续航</b> 显示'] },
+  'BYD-ATTO3': { sample:1840, generated:'今天 02:45', complaints:[{theme:'内饰',share:0.28,sentiment:-0.50,sample:'看着便宜'}], cloud:[{term:'性价比',w:42,s:+0.8,k:'pos'},{term:'内饰',w:18,s:-0.4,k:'neg'}], compare:[{site:'zeekr',sku:'Z-002X',price:35000,rating:4.6,reviews:128,complaint:'品牌',delta:-7000,deltaCls:'dn'}], recs:['<b>内饰升级</b>'] },
+  'ZEEKR-002X': { sample:128, generated:'今天 04:00', complaints:[{theme:'品牌认知',share:0.42,sentiment:-0.32,sample:'"never heard of Zeekr"'},{theme:'服务网点',share:0.28,sentiment:-0.45,sample:'欧洲没几家店'}], cloud:[{term:'内饰',w:38,s:+0.8,k:'pos'},{term:'品牌',w:32,s:-0.3,k:'neg'},{term:'设计',w:28,s:+0.7,k:'pos'}], compare:[{site:'tesla',sku:'T-M3',price:42000,rating:4.5,reviews:4128,complaint:'内饰',delta:+7000,deltaCls:'up'}], recs:['<b>品牌内容</b> 投入 KOL','<b>服务网点</b> 扩张'] },
+};
+
+/* ========== APP ========== */
+const { createApp, ref, computed, onMounted } = Vue;
+
+const App = {
+  setup() {
+    const wsCode = ref('vivo');
+    const ws = computed(() => WORKSPACES[wsCode.value]);
+    const tab = ref('ask');
+    const toast = ref('');
+    function showToast(m) { toast.value = m; setTimeout(()=> toast.value='', 2000); }
+
+    /* Ask */
+    const askInput = ref('');
+    const askRunning = ref(false);
+    const askCurrent = ref(null);
+    const streamedRows = ref([]);
+    const streamedCols = ref([]);
+    const streamedPlan = ref([]);
+    const streamMeta = ref(null);
+
+    function runStarter(key) {
+      const data = ASK_RESULTS[key];
+      if (!data) { showToast('该 prompt 暂无数据'); return; }
+      askCurrent.value = key;
+      askRunning.value = true;
+      streamedRows.value = [];
+      streamedCols.value = [];
+      streamedPlan.value = [];
+      streamMeta.value = null;
+      data.plan.forEach((p, i) => setTimeout(()=> streamedPlan.value.push(p), 400 + i*350));
+      setTimeout(()=> { streamedCols.value = data.cols.slice(); }, 800);
+      data.rows.forEach((r, i) => {
+        setTimeout(()=> {
+          streamedRows.value.push({ data: r, just: true });
+          setTimeout(()=> { const row = streamedRows.value[streamedRows.value.length-1]; if (row) row.just = false; }, 700);
+        }, 1200 + i*500);
+      });
+      setTimeout(()=> { streamMeta.value = data.meta; askRunning.value = false; }, 1200 + data.rows.length*500 + 200);
+    }
+
+    /* Catalog state */
+    const catSite = ref('');
+    const catSearch = ref('');
+    const drawerRow = ref(null);
+    const catRows = computed(() => {
+      // Use first 6 voc_skus as catalog rows
+      return ws.value.voc_skus.map((s, i) => ({
+        ...s,
+        sale: 199 + i*40,
+        original: 249 + i*40,
+        rating: 4.3 + (i*0.1) % 0.5,
+        sold30: 60 + i*40,
+        age: 4 + i*2,
+        conf: 0.85 + (i*0.02) % 0.15,
+      }));
+    });
+
+    /* VOC */
+    const vocSku = ref(WORKSPACES.vivo.voc_skus[0].sku);
+    const vocData = computed(() => {
+      const sku = ws.value.voc_skus.find(s => s.sku === vocSku.value);
+      const insight = VOC_INSIGHTS[vocSku.value];
+      return { sku, insight };
+    });
+
+    // 切 workspace 时重置 VOC sku 到该 workspace 第一个
+    function switchWorkspace(code) {
+      wsCode.value = code;
+      vocSku.value = WORKSPACES[code].voc_skus[0].sku;
+      // 重置 Ask 状态
+      askCurrent.value = null;
+      streamedRows.value = [];
+      streamedCols.value = [];
+      streamedPlan.value = [];
+      streamMeta.value = null;
+      // 启动默认 demo
+      setTimeout(()=> runStarter(WORKSPACES[code].starters[0].key), 200);
+    }
+
+    function pillClass(r) {
+      if (r.conf >= 0.85 && r.age < 24) return 'ok';
+      if (r.age >= 24*7) return 'warn';
+      return 'ok';
+    }
+    function pillText(r) {
+      if (r.age >= 24*7) return '⚠ Stale';
+      return '✓ Verified';
+    }
+
+    onMounted(()=> {
+      setTimeout(()=> runStarter(ws.value.starters[0].key), 400);
+    });
+
+    return {
+      WORKSPACES, wsCode, ws, switchWorkspace,
+      tab, toast, showToast,
+      askInput, askRunning, askCurrent, streamedRows, streamedCols, streamedPlan, streamMeta,
+      runStarter,
+      catSite, catSearch, drawerRow, catRows, pillClass, pillText,
+      vocSku, vocData
+    };
+  },
+  template: `
+    <!-- Demo bar (real product 没有) -->
+    <div class="demo-bar">
+      🎬 <b>Demo 模式</b> · 切换 workspace 看相同界面如何承载不同客户数据
+      <span class="switcher">
+        <button :class="{active:wsCode==='vivo'}" @click="switchWorkspace('vivo')">VIVO</button>
+        <button :class="{active:wsCode==='aosen'}" @click="switchWorkspace('aosen')">遨森</button>
+        <button :class="{active:wsCode==='haier'}" @click="switchWorkspace('haier')">海尔</button>
+        <button :class="{active:wsCode==='zeekr'}" @click="switchWorkspace('zeekr')">极氪</button>
+      </span>
+    </div>
+
+    <!-- Top bar (核心 IA：workspace + 5 tab + 用量 + 账号) -->
+    <div class="topbar">
+      <div class="brand">⚡ smart-crawler</div>
+      <div class="workspace" @click="showToast('切换 workspace · 用上方 demo 切换器演示')">
+        <div class="ws-icon" :style="{background: ws.iconBg}">{{ ws.icon }}</div>
+        <div class="ws-name">{{ ws.name }}</div>
+        <span class="ws-arrow">▼</span>
+      </div>
+      <div class="tab-row">
+        <button class="tab" :class="{active: tab==='ask'}" @click="tab='ask'">💬 Ask</button>
+        <button class="tab" :class="{active: tab==='catalog'}" @click="tab='catalog'">📦 Catalog</button>
+        <button class="tab" :class="{active: tab==='voc'}" @click="tab='voc'">💡 VOC</button>
+        <button class="tab" :class="{active: tab==='radar'}" @click="tab='radar'">🌐 Radar</button>
+        <button class="tab" :class="{active: tab==='settings'}" @click="tab='settings'">⚙️ Settings</button>
+      </div>
+      <div class="usage-strip">用量 <b>{{ ws.usage.current.toLocaleString() }}</b> / {{ ws.usage.total.toLocaleString() }} · <b>$\{{ ws.usage.mtd }}</b> MTD</div>
+      <button class="icon-btn" @click="showToast('导出 CSV 准备中…')" title="导出">📥</button>
+      <button class="icon-btn" @click="showToast('已读告警')" title="告警">🔔<span class="badge">{{ ws.stats.alerts_active }}</span></button>
+      <div class="acct">
+        <div class="avatar">{{ ws.user.charAt(0) }}</div>
+        <span>{{ ws.user }}</span>
+      </div>
+    </div>
+
+    <!-- ============= ASK ============= -->
+    <div v-if="tab==='ask'" class="page">
+      <div class="lead">问 smart-crawler 一句话 <span class="ws-tag">{{ ws.name }} · {{ ws.plan }}</span></div>
+      <div class="sub">{{ ws.stats.sites }} · 跟踪 SKU {{ ws.stats.tracked_sku.toLocaleString() }} · 30 天 VOC {{ ws.stats.voc_reviews_30d.toLocaleString() }} 条</div>
+
+      <div class="stats-hero">
+        <div class="stat"><div class="lbl">本月用量</div><div class="val">{{ ws.usage.current.toLocaleString() }}</div><div class="delta">+12% vs 上月</div></div>
+        <div class="stat"><div class="lbl">跟踪 SKU</div><div class="val">{{ ws.stats.tracked_sku.toLocaleString() }}</div><div class="delta">+186 今日</div></div>
+        <div class="stat"><div class="lbl">VOC 评论</div><div class="val">{{ ws.stats.voc_reviews_30d.toLocaleString() }}</div><div class="delta">30 天</div></div>
+        <div class="stat"><div class="lbl">告警触发</div><div class="val">{{ ws.stats.alerts_active }}</div><div class="delta down">3 个待处理</div></div>
+      </div>
+
+      <div class="ask-shell">
+        <div class="ask-history">
+          <h4>历史 prompt</h4>
+          <div class="item" v-for="h in ws.history" :key="h.prompt" @click="runStarter(h.key)">
+            {{ h.prompt }}
+            <div class="time">{{ h.time }}</div>
+          </div>
+        </div>
+
+        <div class="ask-main">
+          <div class="ask-input">
+            <textarea v-model="askInput" :placeholder="'例如：跟踪 ' + ws.starters[0].title + '，含价格 + 评分'"></textarea>
+            <div class="ask-input-row">
+              <span>按 <span class="kbd">Ctrl</span> + <span class="kbd">Enter</span> 提交</span>
+              <button class="btn-go" :disabled="askRunning" @click="askInput && runStarter(ws.starters[0].key)">▶ Run</button>
+            </div>
+          </div>
+
+          <div v-if="!askCurrent" class="starters">
+            <div class="starter" v-for="s in ws.starters" :key="s.key" @click="runStarter(s.key)">
+              <div class="icon">{{ s.icon }}</div>
+              <div class="title">{{ s.title }}</div>
+              <div class="desc">{{ s.desc }}</div>
+            </div>
+          </div>
+
+          <div v-if="askCurrent" class="result-card">
+            <div class="result-head">
+              <div class="result-meta">
+                <span v-if="streamMeta">耗时 <b>{{ streamMeta.elapsed }}</b></span>
+                <span v-if="streamMeta">成本 <b>{{ streamMeta.cost }}</b></span>
+                <span v-if="streamMeta">共 <b>{{ streamMeta.rows }}</b> 行</span>
+                <span v-else style="color:#fcd34d">⏳ 正在 stream…</span>
+              </div>
+              <div class="result-actions">
+                <button @click="showToast('已保存为 View')">Save</button>
+                <button @click="showToast('CSV 导出已开始')">Export</button>
+                <button @click="showToast('告警已创建')">Alert</button>
+                <button @click="showToast('链接已复制')">Share</button>
+              </div>
+            </div>
+            <table class="result-table">
+              <thead><tr><th v-for="c in streamedCols" :key="c">{{ c }}</th></tr></thead>
+              <tbody>
+                <tr v-for="(r, i) in streamedRows" :key="i" :class="{streaming: r.just}">
+                  <td v-for="(cell, j) in r.data" :key="j">
+                    <span v-if="j === r.data.length - 1 && (cell==='ok'||cell==='warn'||cell==='bad'||cell==='pending')" class="pill" :class="cell">
+                      <template v-if="cell==='ok'">✓ Match</template>
+                      <template v-else-if="cell==='warn'">⚠ Stale</template>
+                      <template v-else-if="cell==='bad'">✗ Failed</template>
+                      <template v-else-if="cell==='pending'">… Pending</template>
+                    </span>
+                    <template v-else>{{ cell }}</template>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="trace">
+          <h4>执行 trace</h4>
+          <div v-if="!streamedPlan.length" style="color:#52527a;font-size:0.74rem">点 starter 或输入 prompt 开始 →</div>
+          <div class="step" v-for="(p, i) in streamedPlan" :key="i">
+            <div class="dot"></div>
+            <div class="body"><b>{{ p.step }}</b> · <span v-html="p.body"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============= CATALOG ============= -->
+    <div v-if="tab==='catalog'" class="page">
+      <div class="lead">Catalog · Verified Cells <span class="ws-tag">{{ ws.name }}</span></div>
+      <div class="sub">每个 cell 都有 ✓ Match pill · hover 看源 URL / 抓取时间 / 置信度</div>
+
+      <div class="cat-filters">
+        <select v-model="catSite">
+          <option value="">全部 {{ ws.competitors.length }} 站</option>
+          <option v-for="c in ws.competitors" :key="c.code" :value="c.code">{{ c.name }}</option>
+        </select>
+        <input placeholder="🔍 SKU / 商品名" v-model="catSearch" style="width:200px"/>
+        <button class="btn-go" style="margin-left:auto" @click="showToast('导出 ' + catRows.length + ' 行 CSV')">导出选中</button>
+      </div>
+
+      <div class="cat-table-wrap">
+        <table class="cat-table">
+          <thead>
+            <tr><th></th><th>商品</th><th>SKU</th><th>站点</th><th>现价</th><th>原价</th><th>评分</th><th>30 天</th><th>验证</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in catRows" :key="r.sku">
+              <td><div class="thumb">📦</div></td>
+              <td class="cell clickable" @click="vocSku=r.sku;tab='voc'">
+                {{ r.name }}
+                <div class="tip">
+                  <div class="tip-row"><span class="k">SRC URL</span><span class="src-url">{{ r.site }}.com/{{ r.sku }}</span></div>
+                  <div class="tip-row"><span class="k">抓取</span><span class="v">{{ r.age }}h ago</span></div>
+                  <div class="tip-row"><span class="k">置信度</span><span class="v">{{ (r.conf*100).toFixed(0) }}%</span></div>
+                </div>
+              </td>
+              <td><code style="font-size:0.74rem;color:#a78bfa">{{ r.sku }}</code></td>
+              <td><span class="pill ok" style="font-size:0.6rem">{{ r.site }}</span></td>
+              <td class="cell clickable" @click="drawerRow=r">
+                $\{{ r.sale.toFixed(2) }}
+                <div class="tip">
+                  <div class="tip-row"><span class="k">SRC URL</span><span class="src-url">{{ r.site }}.com/{{ r.sku }}</span></div>
+                  <div class="tip-row"><span class="k">CSS</span><span class="v">.product-price__current</span></div>
+                  <div class="tip-row"><span class="k">抓取</span><span class="v">{{ r.age }}h ago</span></div>
+                  <div class="tip-row"><span class="k">置信度</span><span class="v">{{ (r.conf*100).toFixed(0) }}% · 点击看证据</span></div>
+                </div>
+              </td>
+              <td style="color:#52527a">$\{{ r.original.toFixed(2) }}</td>
+              <td>{{ r.rating.toFixed(1) }} ★</td>
+              <td>{{ r.sold30 }}</td>
+              <td><span class="pill" :class="pillClass(r)">{{ pillText(r) }}</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div v-if="drawerRow" class="overlay" @click.self="drawerRow=null">
+        <div class="drawer">
+          <div class="drawer-head">
+            <h3>{{ drawerRow.name }} · 证据</h3>
+            <button class="close" @click="drawerRow=null">关闭 ✕</button>
+          </div>
+          <div class="drawer-body">
+            <div class="evidence-block">
+              <h5>截图快照</h5>
+              <div class="screenshot">📸 mock screenshot · {{ drawerRow.age }}h ago</div>
+              <div class="meta-row"><span class="k">源 URL</span><a>{{ drawerRow.site }}.com/{{ drawerRow.sku }}</a></div>
+              <div class="meta-row"><span class="k">抓取时间</span><span>{{ drawerRow.age }}h ago</span></div>
+              <div class="meta-row"><span class="k">CSS Selector</span><code>span.product-price__current</code></div>
+              <div class="meta-row"><span class="k">置信度</span>{{ (drawerRow.conf*100).toFixed(0) }}%</div>
+            </div>
+            <div class="evidence-block">
+              <h5>价格历史</h5>
+              <div class="meta-row"><span class="k">现价</span><b>$\{{ drawerRow.sale.toFixed(2) }}</b></div>
+              <div class="meta-row"><span class="k">原价</span><span>$\{{ drawerRow.original.toFixed(2) }}</span></div>
+              <div class="meta-row"><span class="k">趋势</span><span style="color:#6ee7b7">↓ 降价 {{ ((1-drawerRow.sale/drawerRow.original)*100).toFixed(1) }}%</span></div>
+            </div>
+            <button class="btn-go" style="width:100%" @click="showToast('加入 watchlist');drawerRow=null">⭐ Watchlist</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============= VOC ============= -->
+    <div v-if="tab==='voc'" class="page">
+      <div class="lead">VOC · 自动洞察 <span class="ws-tag">{{ ws.name }}</span></div>
+      <div class="sub">差评 Top 3 + 关键词云 + 竞品对比 + 行动建议</div>
+
+      <div class="voc-shell">
+        <div class="voc-sidebar">
+          <h4>SKU 列表（{{ ws.voc_skus.length }}）</h4>
+          <div v-for="s in ws.voc_skus" :key="s.sku" class="sku-pick" :class="{active: vocSku===s.sku}" @click="vocSku=s.sku">
+            <span>{{ s.name }}</span>
+            <span class="site-name">{{ s.site.split('_')[0] }}</span>
+          </div>
+        </div>
+
+        <div class="voc-detail" v-if="vocData.insight">
+          <div class="voc-head">
+            <div class="name">{{ vocData.sku.name }}</div>
+            <div class="meta">
+              <span>SKU <b>{{ vocData.sku.sku }}</b></span>
+              <span>站点 <b>{{ vocData.sku.site }}</b></span>
+              <span>样本 <b>{{ vocData.insight.sample }}</b></span>
+              <span>生成于 <b>{{ vocData.insight.generated }}</b></span>
+            </div>
+          </div>
+
+          <div class="voc-cards">
+            <div class="voc-block">
+              <h5>差评 Top 3 <span class="actions"><button @click="showToast('已复制 MD')">copy</button><button @click="showToast('发到 Slack')">slack</button></span></h5>
+              <div class="complaint" v-for="c in vocData.insight.complaints" :key="c.theme">
+                <div class="theme">{{ c.theme }}<span class="share">{{ (c.share*100).toFixed(0) }}%</span></div>
+                <div class="quote">"{{ c.sample }}"</div>
+                <div class="bar"><div :style="{width:(c.share*100)+'%'}"></div></div>
+              </div>
+            </div>
+
+            <div class="voc-block">
+              <h5>关键词云 <span class="actions"><button @click="showToast('已导出')">export</button></span></h5>
+              <div class="kw-cloud">
+                <span class="kw" :class="kw.k" v-for="kw in vocData.insight.cloud" :key="kw.term" :style="{fontSize:(0.7+kw.w/40)+'rem'}">{{ kw.term }}</span>
+              </div>
+            </div>
+
+            <div class="voc-block">
+              <h5>竞品对比 <span class="actions"><button @click="showToast('查看详情')">详情</button></span></h5>
+              <div class="compare-row" v-for="c in vocData.insight.compare" :key="c.site">
+                <div class="site">{{ c.site }}</div>
+                <div class="info">$\{{ c.price.toLocaleString() }} · {{ c.rating }} ★<span>({{ c.reviews }} 评论)</span><br/><span>主诉：{{ c.complaint }}</span></div>
+                <div class="delta" :class="c.deltaCls">$\{{ c.delta }}</div>
+              </div>
+            </div>
+
+            <div class="voc-block">
+              <h5>行动建议 <span class="actions"><button @click="showToast('已复制')">copy</button><button @click="showToast('PDF 生成中')">pdf</button></span></h5>
+              <ul class="recs">
+                <li v-for="(r, i) in vocData.insight.recs" :key="i" v-html="r"></li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="voc-foot">
+            <span class="cost">下次刷新成本 <b>$0.02</b> · 每 24h 自动重算</span>
+            <button @click="showToast('告警已设：差评 >30%')">⚡ Alert</button>
+            <button @click="showToast('Insight 刷新中…')">🔄 Refresh ($0.02)</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============= RADAR (替代 Coverage)，工作区下的竞品雷达 ============= -->
+    <div v-if="tab==='radar'" class="page">
+      <div class="lead">竞品 Radar <span class="ws-tag">{{ ws.name }}</span></div>
+      <div class="sub">{{ ws.stats.sites }} · 共 {{ ws.competitors.length }} 个数据源 · 跟踪 SKU {{ ws.stats.tracked_sku.toLocaleString() }}</div>
+
+      <div class="competitor-grid">
+        <div class="comp-tile" :class="c.klass" v-for="c in ws.competitors" :key="c.code">
+          <h6>{{ c.name }}</h6>
+          <div class="ctry">{{ c.country }}</div>
+          <div class="num">{{ c.count.toLocaleString() }}</div>
+          <div class="pct">SKU</div>
+          <div class="bar"><div :style="{width: Math.min(100, c.count/2500)+'%'}"></div></div>
+        </div>
+      </div>
+
+      <div style="margin-top:18px;background:#13111f;border:1px solid #29213a;border-radius:11px;padding:16px;font-size:0.84rem;color:#cbd5e1">
+        <h3 style="font-size:0.95rem;color:#fcd34d;margin-bottom:9px">💡 工作区数据增长趋势</h3>
+        <p>本月 {{ ws.name }} 跟踪 SKU 增长 <b style="color:#6ee7b7">+12%</b> · 新增 {{ Math.floor(ws.stats.tracked_sku*0.12) }} 条</p>
+        <p style="color:#94a3b8;margin-top:5px">想加新数据源？联系客户成功团队或在 <a @click="tab='settings'" style="cursor:pointer">Settings</a> 申请。</p>
+      </div>
+    </div>
+
+    <!-- ============= SETTINGS ============= -->
+    <div v-if="tab==='settings'" class="page">
+      <div class="lead">设置 <span class="ws-tag">{{ ws.name }}</span></div>
+      <div class="sub">API Keys · Billing · Alerts · Team</div>
+
+      <div class="set-grid">
+        <div class="set-block">
+          <h3>🔑 API Keys <button @click="showToast('新 Key 已创建')">+ 新建</button></h3>
+          <div class="key-row">
+            <div class="info">
+              <b>Production · {{ ws.name }}</b>
+              <span class="key-prefix">sck_UYC...n9dHJ</span>
+              <span class="meta">{{ ws.usage.current.toLocaleString() }} 次调用</span>
+            </div>
+            <button class="rev" @click="showToast('Key 已撤销')">撤销</button>
+          </div>
+          <div class="key-row">
+            <div class="info">
+              <b>Staging</b>
+              <span class="key-prefix">sck_xY8...4kPv2</span>
+              <span class="meta">{{ Math.floor(ws.usage.current*0.15).toLocaleString() }} 次调用</span>
+            </div>
+            <button class="rev" @click="showToast('Key 已撤销')">撤销</button>
+          </div>
+        </div>
+
+        <div class="set-block">
+          <h3>💰 Billing <button @click="showToast('账单下载')">下载发票</button></h3>
+          <div style="font-size:1.5rem;font-weight:900;color:#c4b5fd">$\{{ ws.usage.mtd }} <span style="font-size:0.78rem;color:#94a3b8">MTD</span></div>
+          <div style="font-size:0.76rem;color:#52527a">{{ ws.usage.current.toLocaleString() }} records · $1.5/1k · {{ ws.plan }}</div>
+          <div class="billing-bar">
+            <div class="b" v-for="i in 30" :key="i" :style="{height: (10+Math.sin(i*0.4)*40+i*1.2)+'%'}"></div>
+          </div>
+          <div class="billing-meta">
+            <span>过去 30 天</span>
+            <span>预估月底 <b>$\{{ (ws.usage.mtd * 1.5).toFixed(2) }}</b></span>
+          </div>
+        </div>
+
+        <div class="set-block">
+          <h3>🔔 Alerts <button @click="showToast('告警已新建')">+ 新建</button></h3>
+          <div class="alert-row">
+            <div class="info"><b>{{ ws.stats.alerts_active }} 个活跃告警</b><span>下次触发 ~ 30 min</span></div>
+            <button class="rev" @click="showToast('管理告警')">管理</button>
+          </div>
+          <div class="alert-row">
+            <div class="info"><b>差评 {{ ws.stats.voc_reviews_30d.toLocaleString() }} 条已扫描</b><span>30 天 · NLP 已处理</span></div>
+            <button class="rev" @click="showToast('查看分析')">查看</button>
+          </div>
+        </div>
+
+        <div class="set-block">
+          <h3>👥 Team</h3>
+          <p style="color:#94a3b8;font-size:0.82rem;margin-bottom:9px">{{ ws.plan }} · 当前 {{ ws.user }} 等 {{ ws.plan.match(/\\d+/)?.[0] || 1 }} 用户</p>
+          <button class="btn-go" @click="showToast('邀请链接已复制')">📩 邀请成员</button>
+          <p style="color:#52527a;font-size:0.7rem;margin-top:8px">需要更多席位？联系 sales@smartcrawler.io</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div v-if="toast" class="toast">{{ toast }}</div>
+  `
+};
+
+createApp(App).mount('#app');
+</script>
+</body>
+</html>
