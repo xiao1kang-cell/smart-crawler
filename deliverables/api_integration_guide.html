@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>smart-crawler API · 对接文档（含密钥）</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Inter','PingFang SC',-apple-system,BlinkMacSystemFont,sans-serif}
+html{scroll-behavior:smooth}
+body{background:#0a0612;color:#e5e7eb;font-size:14.5px;line-height:1.7}
+a{color:#a78bfa;text-decoration:none}
+
+.hero{padding:52px 30px 38px;text-align:center;
+      background:radial-gradient(ellipse 90% 70% at 50% 0%,rgba(167,139,250,.18),transparent 65%)}
+.hero-tag{display:inline-flex;align-items:center;gap:9px;padding:5px 15px;background:rgba(167,139,250,.14);
+          border:1px solid rgba(167,139,250,.4);border-radius:24px;font-size:0.72rem;color:#c4b5fd;
+          letter-spacing:1.4px;text-transform:uppercase;margin-bottom:16px;font-weight:700}
+.hero h1{font-size:2.2rem;font-weight:900;letter-spacing:-1.4px;line-height:1.18;margin-bottom:12px}
+.hero h1 .grad{background:linear-gradient(90deg,#a78bfa,#f472b6);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{color:#94a3b8;font-size:0.98rem;max-width:780px;margin:0 auto;line-height:1.75}
+
+section{max-width:1120px;margin:0 auto;padding:42px 26px}
+section h2{font-size:1.5rem;font-weight:800;margin-bottom:6px;letter-spacing:-0.4px;display:flex;gap:10px;align-items:center}
+section h2 .n{font-size:0.72rem;background:rgba(167,139,250,.14);color:#c4b5fd;border:1px solid rgba(167,139,250,.3);padding:3px 10px;border-radius:9px;font-weight:800}
+section h3{font-size:1.02rem;font-weight:800;margin:18px 0 8px;color:#fff}
+section p{color:#cbd5e1;margin-bottom:10px}
+section .lede{color:#94a3b8;font-size:0.9rem;margin-bottom:18px;font-style:italic}
+
+code{background:rgba(167,139,250,.10);color:#a78bfa;padding:1px 6px;border-radius:4px;font-family:'SF Mono','Monaco',monospace;font-size:0.88em}
+pre{background:#0d0a17;border:1px solid #29213a;border-radius:9px;padding:14px 18px;color:#cbd5e1;overflow-x:auto;line-height:1.55;font-size:0.82rem;margin-bottom:14px;font-family:'SF Mono','Monaco',monospace}
+pre .c{color:#52527a;font-style:italic}
+pre .k{color:#fb7185}
+pre .s{color:#6ee7b7}
+pre .v{color:#a78bfa}
+pre .f{color:#fcd34d}
+
+.key-box{background:linear-gradient(135deg,rgba(167,139,250,.18),rgba(244,114,182,.10));
+         border:2px solid rgba(167,139,250,.5);border-radius:13px;padding:20px 22px;margin:14px 0 18px;
+         box-shadow:0 12px 36px rgba(167,139,250,.18)}
+.key-box .label{font-size:0.7rem;letter-spacing:1.5px;text-transform:uppercase;color:#c4b5fd;font-weight:800;margin-bottom:6px}
+.key-box .val{font-family:'SF Mono','Monaco',monospace;font-size:1.04rem;color:#fff;font-weight:700;letter-spacing:0.5px;
+              padding:11px 14px;background:#0a0612;border:1px dashed rgba(167,139,250,.4);border-radius:8px;
+              cursor:pointer;display:flex;justify-content:space-between;align-items:center;word-break:break-all}
+.key-box .val:hover{border-color:#a78bfa}
+.key-box .copy-hint{font-size:0.7rem;color:#52527a;margin-left:10px;flex-shrink:0}
+.key-box .meta{font-size:0.78rem;color:#94a3b8;margin-top:10px}
+.key-box .meta b{color:#fff}
+
+table{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:0.86rem}
+th{text-align:left;padding:9px 12px;background:#13111f;color:#94a3b8;font-size:0.68rem;letter-spacing:1px;text-transform:uppercase;font-weight:700;border-bottom:2px solid #29213a}
+td{padding:9px 12px;border-bottom:1px solid #1f1429;color:#cbd5e1;vertical-align:top}
+td b{color:#fff}
+td code{font-size:0.78em}
+
+.method{display:inline-block;padding:1px 8px;border-radius:5px;font-size:0.66rem;font-weight:800;font-family:'SF Mono',monospace}
+.method.get{background:rgba(16,185,129,.16);color:#6ee7b7;border:1px solid rgba(16,185,129,.3)}
+.method.post{background:rgba(96,165,250,.16);color:#93c5fd;border:1px solid rgba(96,165,250,.3)}
+
+.callout{padding:14px 18px;border-radius:8px;margin:12px 0;font-size:0.86rem;line-height:1.7}
+.callout.pos{background:linear-gradient(135deg,rgba(16,185,129,.10),rgba(16,185,129,.04));border-left:3px solid rgba(16,185,129,.5);color:#6ee7b7}
+.callout.warn{background:linear-gradient(135deg,rgba(247,183,49,.10),rgba(247,183,49,.04));border-left:3px solid rgba(247,183,49,.5);color:#fcd34d}
+.callout b{color:#fff}
+
+.links-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px}
+.link-card{background:#13111f;border:1px solid #29213a;border-radius:9px;padding:13px 16px;color:#cbd5e1;text-decoration:none;display:block;transition:all .15s}
+.link-card:hover{transform:translateY(-2px);border-color:#a78bfa;text-decoration:none}
+.link-card .title{font-weight:700;color:#fff;margin-bottom:3px;font-size:0.92rem}
+.link-card .desc{font-size:0.74rem;color:#94a3b8;line-height:1.5}
+
+ul{padding-left:22px;color:#cbd5e1;line-height:1.85}
+ul li{margin-bottom:4px}
+ul li b{color:#fff}
+
+footer{padding:30px;text-align:center;color:#52527a;font-size:0.8rem;border-top:1px solid #1f1429;margin-top:34px}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="hero-tag">smart-crawler · API 对接文档</div>
+  <h1>API <span class="grad">Integration Guide</span></h1>
+  <p>跨境电商竞品采集 SaaS · 59 站点 · MCP + REST 双协议 · 按 record 计费 · 自动反爬</p>
+</div>
+
+<section>
+  <h2><span class="n">1</span>你的 API Key（请妥善保管）</h2>
+  <p class="lede">下面这把 key 是给你/同事直接对接的，明文只在此处展示一次。</p>
+
+  <div class="key-box">
+    <div class="label">API KEY · External Integration · 2026-05-25</div>
+    <div class="val" id="apikey" onclick="cp(this)">
+      <span>sck_ikuBVCAjAKygdAxu8_DNSDc9iOJkgXMY7jBf5ceMmlw</span>
+      <span class="copy-hint">点击复制</span>
+    </div>
+    <div class="meta">
+      Base URL：<code>https://smartcrawler.io</code> ·
+      所有数据接口需带 <code>X-API-Key</code> 或 <code>Authorization: Bearer</code>
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <b>⚠ 安全提示</b>：这把 key 等同于 admin 权限子集，泄露会被滥用。建议：
+    <ul style="margin:5px 0">
+      <li>放后端环境变量（<code>SC_API_KEY</code>），不要塞前端代码</li>
+      <li>遇到泄露在 <a href="https://smartcrawler.io/app">smartcrawler.io/app</a> Settings 撤销重发</li>
+      <li>对接方拿到后请 acknowledge 收到，我会监控调用量</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">2</span>3 个对接路径（按需求选）</h2>
+
+  <div class="links-grid">
+    <a class="link-card" href="https://smartcrawler.io/openapi.json" target="_blank">
+      <div class="title">📚 OpenAPI 3.1 规格</div>
+      <div class="desc">全 30+ endpoints schema · 直接喂 Postman/Swagger Codegen 生成 SDK</div>
+    </a>
+    <a class="link-card" href="https://smartcrawler.io/docs" target="_blank">
+      <div class="title">🧪 Swagger UI 测试台</div>
+      <div class="desc">浏览器内试调每个 endpoint · 直接看 response · 输入 key 调用</div>
+    </a>
+    <a class="link-card" href="https://smartcrawler.io/llms.txt" target="_blank">
+      <div class="title">🤖 LLM Agent 入口（llms.txt）</div>
+      <div class="desc">给 ChatGPT/Claude 喂这个 URL，AI 自动知道怎么调用</div>
+    </a>
+    <a class="link-card" href="https://smartcrawler.io/.well-known/mcp.json" target="_blank">
+      <div class="title">⚡ MCP 服务器</div>
+      <div class="desc">Model Context Protocol · 12 工具直暴露给 AI Agent · streamable-http</div>
+    </a>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">3</span>快速开始（curl 3 行试通）</h2>
+
+  <h3>3.1 列出全部站点（验证 key）</h3>
+  <pre><span class="c"># 站点清单 · 验证 key 有效</span>
+curl -H <span class="s">"X-API-Key: sck_ikuBVCAjAKygdAxu8_DNSDc9iOJkgXMY7jBf5ceMmlw"</span> \
+     <span class="s">"https://smartcrawler.io/api/v1/sites"</span></pre>
+
+  <h3>3.2 查询某站商品（最常用）</h3>
+  <pre><span class="c"># 查 vidaxl_de 在售商品 top 100</span>
+curl -H <span class="s">"X-API-Key: sck_iku..."</span> \
+     <span class="s">"https://smartcrawler.io/api/v1/products?site=vidaxl_de&amp;page_size=100"</span>
+
+<span class="c"># 含字段：sku/spu/title/sale_price/original_price/currency/rating/</span>
+<span class="c">#         review_count/30day_sales/category_path/image_urls/url</span></pre>
+
+  <h3>3.3 商品详情 + 价格历史</h3>
+  <pre><span class="c"># 单个 SKU 详情 + 30 天价格曲线</span>
+curl -H <span class="s">"X-API-Key: sck_iku..."</span> \
+     <span class="s">"https://smartcrawler.io/api/v1/products/songmics_us/SOL-3782"</span></pre>
+
+  <h3>3.4 评论（VOC）</h3>
+  <pre><span class="c"># Trustpilot 某商家全部负面评论</span>
+curl -H <span class="s">"X-API-Key: sck_iku..."</span> \
+     <span class="s">"https://smartcrawler.io/api/v1/reviews?platform=trustpilot&amp;max_rating=2&amp;page_size=50"</span></pre>
+</section>
+
+<section>
+  <h2><span class="n">4</span>常用端点（最新 30+ 个）</h2>
+
+  <h3>站点 / 商品</h3>
+  <table>
+    <thead><tr><th>方法</th><th>路径</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/sites</code></td><td>全 59 站点元数据</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/products</code></td><td>查询商品（site/brand/category/价格区间/分页）</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/products/{site}/{sku}</code></td><td>单 SKU 详情 + 价格曲线</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/site/{site}</code></td><td>单站快照（含 metrics + 关联接口）</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/promotions</code></td><td>促销活动列表</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/trends</code></td><td>SKU 趋势（日序列）</td></tr>
+    </tbody>
+  </table>
+
+  <h3>评论（VOC）</h3>
+  <table>
+    <tbody>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/reviews</code></td><td>Trustpilot/Reviews.io/Google Maps 评论</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Google Shopping</h3>
+  <table>
+    <tbody>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/shopping/keywords</code></td><td>关键词清单</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/shopping/results</code></td><td>SERP 结果</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/v1/shopping/competitor-share</code></td><td>商家份额</td></tr>
+    </tbody>
+  </table>
+
+  <h3>数据导出</h3>
+  <table>
+    <tbody>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/export/products?format=csv</code></td><td>CSV/XLSX/JSON/ZIP 导出（4 toggle 可选）</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/export/preview</code></td><td>导出前预览（行数/大小估算）</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/coverage</code></td><td>59 站覆盖率仪表</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/daily-delta/latest</code></td><td>当日新增/价格变化/新促销</td></tr>
+    </tbody>
+  </table>
+
+  <h3>采集触发</h3>
+  <table>
+    <tbody>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/jobs/trigger?site=xxx</code></td><td>手动触发某站抓取</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/jobs?limit=N</code></td><td>查 worker 任务状态</td></tr>
+    </tbody>
+  </table>
+
+  <h3>用量 / 计费</h3>
+  <table>
+    <tbody>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/billing/usage?days=30</code></td><td>30 天 API key 用量明细</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/proxy/status</code></td><td>10 代理池状态</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2><span class="n">5</span>响应格式</h2>
+
+  <h3>v1 endpoints 统一信封</h3>
+  <pre>{
+  <span class="k">"object"</span>: <span class="s">"list"</span>,
+  <span class="k">"count"</span>: <span class="v">100</span>,
+  <span class="k">"total"</span>: <span class="v">10452</span>,
+  <span class="k">"has_more"</span>: <span class="v">true</span>,
+  <span class="k">"data"</span>: [
+    {
+      <span class="k">"sku"</span>: <span class="s">"SOL-3782"</span>,
+      <span class="k">"spu"</span>: <span class="s">"H-1234"</span>,
+      <span class="k">"site"</span>: <span class="s">"songmics_us"</span>,
+      <span class="k">"brand"</span>: <span class="s">"SONGMICS"</span>,
+      <span class="k">"title"</span>: <span class="s">"电动升降桌 48英寸"</span>,
+      <span class="k">"category"</span>: <span class="s">"Office Furniture/Desks"</span>,
+      <span class="k">"price"</span>: {
+        <span class="k">"sale"</span>: <span class="v">189.99</span>,
+        <span class="k">"original"</span>: <span class="v">209.99</span>,
+        <span class="k">"currency"</span>: <span class="s">"USD"</span>,
+        <span class="k">"on_promotion"</span>: <span class="v">true</span>
+      },
+      <span class="k">"rating"</span>: { <span class="k">"score"</span>: <span class="v">4.6</span>, <span class="k">"review_count"</span>: <span class="v">412</span> },
+      <span class="k">"estimate"</span>: { <span class="k">"30day_sales"</span>: <span class="v">137</span>, <span class="k">"revenue"</span>: <span class="v">26028.63</span> },
+      <span class="k">"images"</span>: [<span class="s">"https://..."</span>],
+      <span class="k">"url"</span>: <span class="s">"https://songmics.com/products/sol-3782"</span>,
+      <span class="k">"identifiers"</span>: { <span class="k">"mpn"</span>: <span class="s">"..."</span>, <span class="k">"gtin"</span>: <span class="s">"..."</span> },
+      <span class="k">"first_seen"</span>: <span class="s">"2026-04-15"</span>,
+      <span class="k">"last_seen"</span>: <span class="s">"2026-05-24"</span>
+    }
+  ]
+}</pre>
+
+  <h3>错误响应</h3>
+  <pre>{
+  <span class="k">"detail"</span>: <span class="s">"未授权"</span>    <span class="c"># 401</span>
+}
+{
+  <span class="k">"detail"</span>: <span class="s">"站点不存在"</span>  <span class="c"># 404</span>
+}</pre>
+</section>
+
+<section>
+  <h2><span class="n">6</span>59 站覆盖（截止 2026-05-25）</h2>
+
+  <table>
+    <thead><tr><th>类型</th><th>站点</th><th>SKU 状态</th></tr></thead>
+    <tbody>
+      <tr><td><b>家居品牌自营</b></td><td>SONGMICS × 6 国 / Costway × 9 / Homary × 5 / Aosom 等</td><td>35 站 100% 覆盖</td></tr>
+      <tr><td><b>家居 Marketplace</b></td><td>Wayfair / Overstock / Crate&Barrel / West Elm / Article / IKEA</td><td>每站 1000+ 真品</td></tr>
+      <tr><td><b>欧洲电商</b></td><td>Otto.de / Bol.com / CDiscount / Idealo / Vidaxl × 12</td><td>Bol/CDiscount/IKEA 各 1000</td></tr>
+      <tr><td><b>评论平台</b></td><td>Trustpilot × 9 / Google Maps × 7 / TrustedShops / Avis Vérifiés</td><td>VOC 评论 API 就绪</td></tr>
+      <tr><td><b>价格比较</b></td><td>Google Shopping / Idealo</td><td>关键词 + 商家份额</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2><span class="n">7</span>MCP 服务器（推荐给 AI Agent 用）</h2>
+
+  <p>如果你们对接方是 AI Agent（Claude / GPT），直接走 MCP 协议更稳。</p>
+
+  <pre><span class="c"># Claude Code / MCP-compatible client 配置</span>
+{
+  <span class="k">"mcpServers"</span>: {
+    <span class="k">"smart-crawler"</span>: {
+      <span class="k">"url"</span>: <span class="s">"https://smartcrawler.io/mcp"</span>,
+      <span class="k">"headers"</span>: {
+        <span class="k">"Authorization"</span>: <span class="s">"Bearer sck_ikuBVCAjAKygdAxu8_DNSDc9iOJkgXMY7jBf5ceMmlw"</span>
+      }
+    }
+  }
+}</pre>
+
+  <p>暴露 <strong>12 个工具</strong>：list_data_sources / search_competitor_products / get_product_detail / list_promotions / get_voc_reviews / voc_summary / competitor_landscape / amazon_voc_report / fetch_amazon_reviews / reddit_top_contributors / reddit_user_activity / reddit_subreddit_playbook</p>
+</section>
+
+<section>
+  <h2><span class="n">8</span>计费</h2>
+
+  <ul>
+    <li><b>按 record 计费</b>：$1.5 per 1,000 records 返回</li>
+    <li><b>计算口径</b>：<code>/api/v1/products?page_size=100</code> 返 100 行 = 100 records</li>
+    <li><b>免费额度</b>：50,000 records/月（demo 期可调）</li>
+    <li><b>查询用量</b>：<a href="https://smartcrawler.io/api/billing/usage" target="_blank">GET /api/billing/usage</a></li>
+    <li><b>账单查看</b>：<a href="https://smartcrawler.io/app" target="_blank">Console 登录后 Settings → Billing</a></li>
+  </ul>
+
+  <div class="callout pos">
+    <b>当前 demo 阶段</b>：用量不收费，先跑通对接。正式上线前会另发邮件告知开始计费时间。
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">9</span>支持</h2>
+  <ul>
+    <li>Bug / 字段问题：<a href="mailto:boyuan@solvea.cx">boyuan@solvea.cx</a></li>
+    <li>需要新站点：在邮件里告诉我们域名 + 优先级，1-2 天评估</li>
+    <li>对接技术 Q&A：直接发邮件，附上 curl 命令 + 期望/实际响应</li>
+    <li>实时控制台：<a href="https://smartcrawler.io/app" target="_blank">smartcrawler.io/app</a>（账号 aosen / admin）</li>
+  </ul>
+</section>
+
+<footer>
+  smart-crawler · API Integration Guide · 2026-05-25 · <a href="https://smartcrawler.io">smartcrawler.io</a>
+</footer>
+
+<script>
+function cp(el) {
+  const txt = el.querySelector('span').textContent.trim();
+  navigator.clipboard.writeText(txt).then(() => {
+    const hint = el.querySelector('.copy-hint');
+    const old = hint.textContent;
+    hint.textContent = '✓ 已复制';
+    setTimeout(() => { hint.textContent = old; }, 1600);
+  });
+}
+</script>
+</body>
+</html>
