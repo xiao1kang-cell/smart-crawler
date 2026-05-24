@@ -34,4 +34,13 @@ def get_crawler(site: Site) -> BaseCrawler:
     if platform == "shoper":
         from .shoper import ShoperCrawler
         return ShoperCrawler(site)
+    if platform == "wayfair":
+        from .wayfair import WayfairCrawler
+        return WayfairCrawler(site)
+    if platform == "overstock":
+        from .overstock import OverstockCrawler
+        return OverstockCrawler(site)
+    if platform == "idealo":
+        from .idealo import IdealoCrawler
+        return IdealoCrawler(site)
     raise ValueError(f"未知平台: {platform}")

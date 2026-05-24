@@ -76,3 +76,12 @@ sites:
 
   # ========== Woltu（P2）— Shopware ==========
   - {site: woltu_de, brand: Woltu, country: DE, url: "https://www.woltu.eu/", platform: generic, proxy_tier: none, sitemap: "https://www.woltu.eu/sitemap.xml", product_match: "/p/", max_products: 200}
+
+  # ========== Wayfair（家居 marketplace · 2026-05-24 加 · W1）==========
+  - {site: wayfair_us, brand: Wayfair, country: US, url: "https://www.wayfair.com/", platform: wayfair, proxy_tier: residential, max_products: 1000}
+
+  # ========== Overstock（折扣家居 · W1）==========
+  - {site: overstock_us, brand: Overstock, country: US, url: "https://www.overstock.com/", platform: overstock, proxy_tier: none, max_products: 1000}
+
+  # ========== Idealo.de（德国价格比较 · W1）==========
+  - {site: idealo_de, brand: Idealo, country: DE, url: "https://www.idealo.de/", platform: idealo, proxy_tier: none, max_products: 1000}
