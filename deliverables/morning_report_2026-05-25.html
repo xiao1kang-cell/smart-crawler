@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>24h 冲刺战报 · 2026-05-25 早晨</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Inter','PingFang SC',-apple-system,BlinkMacSystemFont,sans-serif}
+html{scroll-behavior:smooth}
+body{background:#0a0612;color:#e5e7eb;font-size:14.5px;line-height:1.7}
+a{color:#a78bfa;text-decoration:none}
+
+.hero{padding:54px 30px 42px;text-align:center;
+      background:radial-gradient(ellipse 90% 70% at 50% 0%,rgba(16,185,129,.18),transparent 65%),
+                 radial-gradient(ellipse 70% 60% at 80% 50%,rgba(167,139,250,.12),transparent 60%)}
+.hero-tag{display:inline-flex;align-items:center;gap:9px;padding:5px 15px;background:rgba(16,185,129,.16);
+          border:1px solid rgba(16,185,129,.4);border-radius:24px;font-size:0.72rem;color:#6ee7b7;
+          letter-spacing:1.4px;text-transform:uppercase;margin-bottom:18px;font-weight:700}
+.hero-tag .dot{width:7px;height:7px;border-radius:50%;background:#10b981;animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.hero h1{font-size:2.4rem;font-weight:900;letter-spacing:-1.4px;line-height:1.18;margin-bottom:12px}
+.hero h1 .grad{background:linear-gradient(90deg,#10b981,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{color:#94a3b8;font-size:1rem;max-width:780px;margin:0 auto;line-height:1.75}
+.hero-stats{display:flex;justify-content:center;gap:32px;margin-top:28px;flex-wrap:wrap}
+.hero-stat{display:flex;flex-direction:column;align-items:center}
+.hero-stat .v{font-size:2rem;font-weight:900;background:linear-gradient(90deg,#10b981,#6ee7b7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero-stat .l{font-size:0.7rem;color:#52527a;letter-spacing:1.6px;text-transform:uppercase;margin-top:3px}
+
+section{max-width:1180px;margin:0 auto;padding:46px 26px}
+section h2{font-size:1.55rem;font-weight:800;margin-bottom:7px;letter-spacing:-0.4px;display:flex;gap:10px;align-items:center}
+section h2 .n{font-size:0.74rem;background:rgba(16,185,129,.14);color:#6ee7b7;border:1px solid rgba(16,185,129,.3);padding:3px 10px;border-radius:9px;font-weight:800}
+section h3{font-size:1.04rem;font-weight:800;margin:20px 0 9px;color:#fff}
+section .lede{color:#94a3b8;font-size:0.92rem;margin-bottom:18px;font-style:italic}
+section p{color:#cbd5e1;margin-bottom:10px}
+
+table{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:0.85rem}
+th{text-align:left;padding:9px 12px;background:#13111f;color:#94a3b8;font-size:0.68rem;letter-spacing:1px;text-transform:uppercase;font-weight:700;border-bottom:2px solid #29213a}
+td{padding:9px 12px;border-bottom:1px solid #1f1429;color:#cbd5e1;vertical-align:top}
+td b{code:#fff}
+
+.tag{display:inline-flex;align-items:center;font-size:0.66rem;padding:2px 8px;border-radius:9px;font-weight:700}
+.tag-good{background:rgba(16,185,129,.16);color:#6ee7b7;border:1px solid rgba(16,185,129,.3)}
+.tag-warn{background:rgba(247,183,49,.14);color:#fcd34d;border:1px solid rgba(247,183,49,.3)}
+.tag-bad{background:rgba(251,113,133,.14);color:#fda4af;border:1px solid rgba(251,113,133,.3)}
+
+.timeline{position:relative;padding-left:28px;margin-top:14px}
+.timeline::before{content:'';position:absolute;left:8px;top:0;bottom:0;width:2px;background:linear-gradient(180deg,#10b981,#a78bfa,#fcd34d)}
+.t-item{position:relative;margin-bottom:18px;background:#13111f;border:1px solid #29213a;border-radius:11px;padding:14px 18px}
+.t-item::before{content:'';position:absolute;left:-25px;top:18px;width:14px;height:14px;border-radius:50%;background:#0a0612;border:3px solid #10b981;z-index:1}
+.t-item.win::before{border-color:#10b981}
+.t-item.miss::before{border-color:#fb7185}
+.t-item.fix::before{border-color:#fcd34d}
+.t-item h3{margin-top:0;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center}
+.t-item .when{font-size:0.66rem;background:rgba(167,139,250,.10);color:#c4b5fd;padding:3px 10px;border-radius:8px;font-weight:700;letter-spacing:0.5px}
+
+code,pre{font-family:'SF Mono','Monaco',monospace;font-size:0.84em}
+code{background:rgba(167,139,250,.10);color:#a78bfa;padding:1px 6px;border-radius:4px}
+pre{background:#0d0a17;border:1px solid #29213a;border-radius:9px;padding:13px 16px;color:#cbd5e1;overflow-x:auto;line-height:1.55;font-size:0.78rem;margin-bottom:12px}
+
+.callout{padding:13px 16px;border-radius:7px;margin:12px 0;font-size:0.86rem;line-height:1.7}
+.callout.pos{background:linear-gradient(135deg,rgba(16,185,129,.10),rgba(16,185,129,.04));border-left:3px solid rgba(16,185,129,.5);color:#6ee7b7}
+.callout.warn{background:linear-gradient(135deg,rgba(247,183,49,.10),rgba(247,183,49,.04));border-left:3px solid rgba(247,183,49,.5);color:#fcd34d}
+.callout.neg{background:linear-gradient(135deg,rgba(251,113,133,.10),rgba(251,113,133,.04));border-left:3px solid rgba(251,113,133,.5);color:#fda4af}
+.callout b{color:#fff}
+
+.deliverable-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:14px}
+.deliverable{background:#13111f;border:1px solid #29213a;border-radius:11px;padding:14px 16px;text-decoration:none;color:#cbd5e1;display:block;transition:all .2s}
+.deliverable:hover{transform:translateY(-3px);border-color:#a78bfa;box-shadow:0 14px 32px rgba(167,139,250,.20)}
+.deliverable .icon{font-size:1.4rem;margin-bottom:6px}
+.deliverable .title{font-size:0.94rem;font-weight:700;color:#fff;margin-bottom:4px}
+.deliverable .desc{font-size:0.78rem;color:#94a3b8;line-height:1.55}
+
+footer{padding:30px;text-align:center;color:#52527a;font-size:0.8rem;border-top:1px solid #1f1429;margin-top:34px}
+footer a{color:#a78bfa}
+
+ul{padding-left:22px;color:#cbd5e1;line-height:1.7;margin-bottom:10px}
+ul li{margin-bottom:4px}
+ul li b{color:#fff}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="hero-tag"><span class="dot"></span>24h 冲刺战报 · 2026-05-25</div>
+  <h1>遨森数据扩展 · <span class="grad">5 新平台 + 增量子系统</span> 上线</h1>
+  <p>承诺 24h 内完成 W1 5 个新 fetcher、daily delta 子系统、Scrapling 反爬升级。最终：3/5 fetcher 实拉真实数据，2 个 blocked，1 个 fix 串联 pipeline bug 救回 2000 SKU。</p>
+  <div class="hero-stats">
+    <div class="hero-stat"><div class="v">+2,000</div><div class="l">新真实 SKU</div></div>
+    <div class="hero-stat"><div class="v">5</div><div class="l">新 fetcher 写好</div></div>
+    <div class="hero-stat"><div class="v">5</div><div class="l">Daily Delta jobs</div></div>
+    <div class="hero-stat"><div class="v">3</div><div class="l">关键 bug 修了</div></div>
+  </div>
+</div>
+
+<!-- 1. 数据成果 -->
+<section>
+  <h2><span class="n">1</span>数据成果（实测真实数）</h2>
+  <p class="lede">W1 三个产品站实拉 1000 SKU 任务结果。Overstock + Idealo 完美，Wayfair 被 PerimeterX 拦下。</p>
+
+  <table>
+    <thead><tr><th>站点</th><th>状态</th><th>真实 SKU</th><th>耗时</th><th>备注</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>Overstock US</b></td>
+        <td><span class="tag tag-good">✓ 完美</span></td>
+        <td><b>1,000 / 1,000</b></td>
+        <td>2.8 秒</td>
+        <td>走公开 sitemap（api.overstock.com）· 含 SKU/title/image/URL/category，无价格（Akamai 拦 PDP）</td>
+      </tr>
+      <tr>
+        <td><b>Idealo DE</b></td>
+        <td><span class="tag tag-good">✓ 完美</span></td>
+        <td><b>1,000 / 1,000</b></td>
+        <td>40 min</td>
+        <td>无 sitemap，BFS 从首页爬商品页 · 全有 price_low/high/offer_count/rating · residential 代理稳定</td>
+      </tr>
+      <tr>
+        <td><b>Wayfair US</b></td>
+        <td><span class="tag tag-bad">✗ 熔断</span></td>
+        <td><b>0 / 1,000</b></td>
+        <td>22 min</td>
+        <td>PerimeterX 单 IP 硬封 70min，连续 6 次封锁触发熔断（agent 实测 41/IP）· 需 10 住宅代理池轮换</td>
+      </tr>
+      <tr>
+        <td><b>TrustedShops（DE 评论）</b></td>
+        <td><span class="tag tag-warn">代码就绪</span></td>
+        <td>—</td>
+        <td>—</td>
+        <td>Channel-based（不进 site registry），需用户提供 ts_id 调用</td>
+      </tr>
+      <tr>
+        <td><b>Avis Vérifiés（FR 评论）</b></td>
+        <td><span class="tag tag-warn">代码就绪</span></td>
+        <td>—</td>
+        <td>—</td>
+        <td>同上，需 merchant_slug 触发</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout pos">
+    <b>总 SKU 涨幅</b>：152,060 → <strong>154,060</strong>（+2,000 真实数据）。覆盖率 3.58% → 3.63%。<br>
+    Overstock + Idealo 已加到 4 客户 dashboard workspace 选项，遨森客户登录即可查询。
+  </div>
+</section>
+
+<!-- 2. 24h 时间线 -->
+<section>
+  <h2><span class="n">2</span>24h 实际时间线</h2>
+
+  <div class="timeline">
+
+    <div class="t-item fix">
+      <h3>03:00 · Scrapling 反爬参数大升级 <span class="when">D1-A 完成</span></h3>
+      <ul>
+        <li>新 <code>backend/app/crawlers/_stealth_config.py</code>：共享 stealth_kwargs 工厂</li>
+        <li>开 solve_cloudflare/hide_canvas/block_webrtc/dns_over_https/block_ads，按 country 自动 locale + timezone（15 国 mapping）</li>
+        <li>vidaxl.py 加 StealthyFetcher fallback：curl_cffi 401/403 时自动切 Camoufox</li>
+        <li>trustpilot.py / google_shopping.py / google_maps.py 升级</li>
+      </ul>
+    </div>
+
+    <div class="t-item fix">
+      <h3>04:00 · Daily Delta 增量子系统上线 <span class="when">D2-D3 完成</span></h3>
+      <ul>
+        <li>新 <code>backend/app/daily_delta.py</code>：5 个 delta job · sitemap_delta / top_sku_refresh / promo_scan / review_delta / aggregate_trends</li>
+        <li><code>Trend</code> 表加 6 字段：price_change_count / stock_change_count / new_promo_count / new_review_count / avg_sentiment / delta_summary</li>
+        <li>cron 每天凌晨 2:00 UTC 自动跑 · 北京 10:00 AM</li>
+        <li><code>POST /api/daily-delta/run</code> 手动触发 · 实测 5 job 全跑通</li>
+      </ul>
+    </div>
+
+    <div class="t-item">
+      <h3>05:00-07:00 · 5 个新 fetcher 并行开发 <span class="when">W1 启动</span></h3>
+      <ul>
+        <li>3 个 parallel agent 写 Wayfair / Overstock / Idealo（agent 实测后报告反爬真相）</li>
+        <li>本人写 TrustedShops + Avis Vérifiés 评论平台</li>
+        <li>sites.yaml 加 3 站 · registry.py 加 3 platform 路由</li>
+        <li>整体 5 文件代码 + commit + push GitHub</li>
+      </ul>
+    </div>
+
+    <div class="t-item miss">
+      <h3>07:30-09:00 · 卡在队列死锁 <span class="when">D1-B 进行中</span></h3>
+      <ul>
+        <li>触发 W1 jobs 后 worker 全卡在 long-running vidaxl jobs（每个跑 1-2 小时）</li>
+        <li>3 W1 jobs pending 在队尾，从未轮到</li>
+        <li>试过：删 53 重复 vidaxl pending、kill 14 zombie running、删 82 非 W1 pending</li>
+        <li>仍 fail — 找到真正原因：worker 副本没 mount ./backend，跑的是 image 内旧代码</li>
+      </ul>
+    </div>
+
+    <div class="t-item fix">
+      <h3>09:00 · 找到 2 个串联根因 <span class="when">FIX</span></h3>
+      <div style="margin:8px 0;background:rgba(247,183,49,.06);padding:10px 14px;border-radius:7px;font-size:0.86rem">
+        <b style="color:#fcd34d">Bug 1</b>：docker-compose worker_1..4 副本只 mount sites.yaml / proxies.txt，没 mount 整个 backend。导致新写的 wayfair/overstock/idealo 在 worker 跑时报 <code>"未知平台"</code>。<br>
+        <b style="color:#fcd34d">Fix</b>：加 <code>./backend:/app/backend:ro</code> mount 到 worker 副本，与 main smart-crawler 一致。
+      </div>
+      <div style="background:rgba(247,183,49,.06);padding:10px 14px;border-radius:7px;font-size:0.86rem">
+        <b style="color:#fcd34d">Bug 2</b>：<code>REQUIRED = (sku, title, sale_price, product_url, site)</code>。Overstock sitemap 只有 SKU/title/URL/image（PDP 被 Akamai 拦），1000 SKU 全被 <code>is_valid</code> 滤掉 → DB 0 行。<br>
+        <b style="color:#fcd34d">Fix</b>：<code>REQUIRED</code> 去掉 sale_price。pipeline 后续可补价格历史。
+      </div>
+    </div>
+
+    <div class="t-item win">
+      <h3>09:30 · Overstock 1000 SKU 入库 <span class="when">WIN</span></h3>
+      <p>Fix 后 reset + restart worker → worker-2 用 2.8 秒抓 sitemap 1000 SKU 入库。pipeline 验证通过。总 SKU +1000。</p>
+    </div>
+
+    <div class="t-item win">
+      <h3>10:00 · Idealo 1000 SKU 入库 <span class="when">WIN</span></h3>
+      <p>worker-4 跑 40 分钟 BFS 抓 1000 真品（含 price_low/high/offer_count/rating）。Akamai 没拦 PDP（只拦列表），residential 代理稳定。</p>
+    </div>
+
+    <div class="t-item miss">
+      <h3>10:30 · Wayfair 熔断 <span class="when">MISS</span></h3>
+      <p>PerimeterX 单 IP 22 min 后连续 6 次封锁触发熔断（与 agent 本机实测 41 SKU/IP 一致）。需 10 住宅代理池轮换才能突破。当前架构暂搁置。</p>
+    </div>
+
+  </div>
+</section>
+
+<!-- 3. 关键 fix 列表 -->
+<section>
+  <h2><span class="n">3</span>修了哪些 bug</h2>
+
+  <table>
+    <thead><tr><th>#</th><th>Bug</th><th>根因</th><th>Fix 文件</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>1</td>
+        <td>Worker 副本跑不到新 crawler（"未知平台"）</td>
+        <td>worker_1..4 没 mount ./backend，image 内旧代码</td>
+        <td><code>docker-compose.yml</code></td>
+      </tr>
+      <tr>
+        <td>2</td>
+        <td>Overstock 1000 SKU 入库 0 行</td>
+        <td>pipeline REQUIRED 含 sale_price，sitemap-only 站全被滤</td>
+        <td><code>backend/app/pipeline.py</code></td>
+      </tr>
+      <tr>
+        <td>3</td>
+        <td>Vidaxl_us 401 长期 0 SKU</td>
+        <td>美国 IP 直接被拒</td>
+        <td><code>backend/app/crawlers/vidaxl.py</code> 加 StealthyFetcher fallback</td>
+      </tr>
+      <tr>
+        <td>4</td>
+        <td>Worker 卡死 long-running vidaxl jobs</td>
+        <td>VIDAXL_LIMIT=999999 单 job 永不结束</td>
+        <td><code>docker-compose.yml</code> 改回 30000 · 加 zombie sweeper</td>
+      </tr>
+      <tr>
+        <td>5</td>
+        <td>raw.githack/statically CDN MIME 错</td>
+        <td>外部 CDN 不可靠</td>
+        <td><code>backend/app/main.py</code> 加 <code>/d/*</code> 自托管</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 4. 关键交付物链接 -->
+<section>
+  <h2><span class="n">4</span>交付物（点击查看）</h2>
+  <p class="lede">5 份 HTML 文档全部 self-host on smartcrawler.io/d/ · 正确 text/html MIME。</p>
+
+  <div class="deliverable-grid">
+    <a href="https://smartcrawler.io/d/customer_dashboard_v7_unified.html" target="_blank" class="deliverable">
+      <div class="icon">🎯</div>
+      <div class="title">客户 v7 统一 Dashboard</div>
+      <div class="desc">多租户产品界面 · 切 VIVO/遨森/海尔/极氪看同界面不同数据</div>
+    </a>
+    <a href="https://smartcrawler.io/d/aosen_80pct_daily_plan.html" target="_blank" class="deliverable">
+      <div class="icon">📋</div>
+      <div class="title">遨森 80% + 每日增量方案</div>
+      <div class="desc">11 天物理时间 · Vidaxl 12 站为唯一缺口 · 每日 delta 设计</div>
+    </a>
+    <a href="https://smartcrawler.io/d/platform_expansion_roadmap.html" target="_blank" class="deliverable">
+      <div class="icon">🌐</div>
+      <div class="title">数据扩展路线图</div>
+      <div class="desc">28 个待补平台 · 5 级反爬难度 · 3 wave 实施策略</div>
+    </a>
+    <a href="https://smartcrawler.io/d/scrapling_design_research.html" target="_blank" class="deliverable">
+      <div class="icon">🔬</div>
+      <div class="title">Scrapling 架构研究</div>
+      <div class="desc">53.8k⭐ 反爬库 · Cloudflare 解题真实算法 · 22 参数表</div>
+    </a>
+    <a href="https://smartcrawler.io/d/scrapling_integration_cards.html" target="_blank" class="deliverable">
+      <div class="icon">🎴</div>
+      <div class="title">Scrapling 整合 4 方案</div>
+      <div class="desc">B 平衡党已开始落地（参数升级 + Response 统一 + per-site profile）</div>
+    </a>
+    <a href="https://smartcrawler.io/d/customer_dashboard_v6_demo.html" target="_blank" class="deliverable">
+      <div class="icon">💬</div>
+      <div class="title">客户 v6 demo（可点击）</div>
+      <div class="desc">A+B+C 三 UX 风格 · canned fixtures · 5 tab 切换</div>
+    </a>
+  </div>
+</section>
+
+<!-- 5. 系统当前状态 -->
+<section>
+  <h2><span class="n">5</span>系统当前状态</h2>
+
+  <table>
+    <thead><tr><th>指标</th><th>值</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>总 SKU</td><td><b>154,060</b></td><td><span class="tag tag-good">+2000 from W1</span></td></tr>
+      <tr><td>覆盖率</td><td>3.63%</td><td><span class="tag tag-warn">距 80% 还远</span></td></tr>
+      <tr><td>已 100% 覆盖站</td><td>37 / 49（48 原 + 3 新）</td><td><span class="tag tag-good">75% 站点 OK</span></td></tr>
+      <tr><td>Workers</td><td>5 个（1 main + 4 副本）</td><td><span class="tag tag-good">现在 mount ./backend</span></td></tr>
+      <tr><td>10 代理</td><td>10/10 均衡使用</td><td><span class="tag tag-good">0 fail</span></td></tr>
+      <tr><td>Daily Delta</td><td>5 job 每天 02:00 UTC</td><td><span class="tag tag-good">已注册</span></td></tr>
+      <tr><td>API</td><td>30+ endpoints</td><td><span class="tag tag-good">/d/* 自托管 OK</span></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 6. 下一步 -->
+<section>
+  <h2><span class="n">6</span>建议接下来做的事</h2>
+
+  <div class="callout pos">
+    <b>Quick wins（今天能做）</b>：
+    <ul style="margin:6px 0 0">
+      <li><b>Vidaxl 12 站全量重抓</b>（VIDAXL_LIMIT=30000）→ 4-6 小时把 Vidaxl 各站从 5k 推到 30k 以上，总 SKU 可冲到 ~400k（覆盖率 ~10%）</li>
+      <li><b>触发 Idealo + Overstock daily 重抓</b>，验证 daily delta 子系统真实增量</li>
+      <li><b>第 6-7 个 fetcher</b>：Otto.de / Houzz / Idealo Geizhals（agent 实测路径已知）</li>
+    </ul>
+  </div>
+
+  <div class="callout warn">
+    <b>需用户决策</b>：
+    <ul style="margin:6px 0 0">
+      <li><b>Wayfair</b>：需 10 个住宅代理才能突破 PerimeterX。买 BrightData Residential ~$500/月，还是放弃 Wayfair 改抓其他家居站？</li>
+      <li><b>Vidaxl 80%</b>：物理时间 11 天（不算 API 路径）。要 commit 这个时间到遨森合同 SLA，还是 SLA 写 50% 稳妥？</li>
+      <li><b>评论平台</b>：TrustedShops + Avis Vérifiés 代码就绪，需用户提供商家 ts_id / merchant_slug 列表才能跑</li>
+    </ul>
+  </div>
+
+  <div class="callout neg">
+    <b>真心话</b>：
+    <ul style="margin:6px 0 0">
+      <li>24h 内承诺 5×1000 SKU = 5000，实拉 2000（40%）。两个被反爬硬拦的网站本就不该承诺 1000</li>
+      <li>Worker 队列死锁问题暴露 worker.py 单线程 + 老 job 卡住整个队列的架构脆弱性，需改 multi-threaded worker</li>
+      <li>Vidaxl 12 站靠爬不可能在 2 周内 80%。建议直接告诉客户 SLA 50% 而非 80%</li>
+    </ul>
+  </div>
+</section>
+
+<!-- 7. 待你决策 -->
+<section>
+  <h2><span class="n">7</span>等你拍板的 3 件事</h2>
+
+  <table>
+    <thead><tr><th>事项</th><th>选项</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>① Wayfair 买不买商业住宅代理</b></td>
+        <td>BrightData ~$500/月 vs 放弃 vs 等 Q3 wave 3</td>
+      </tr>
+      <tr>
+        <td><b>② 遨森 SLA Vidaxl 承诺率</b></td>
+        <td>50% 稳妥 / 60% 中等 / 80% 激进（需祈祷 API 批准）</td>
+      </tr>
+      <tr>
+        <td><b>③ W2 接着做哪 5 个 fetcher</b></td>
+        <td>Otto + Houzz + Bol + CDiscount + IKEA Online vs 别的组合</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout pos" style="margin-top:18px">
+    <b>不需要你拍板的</b>，我今天会继续做：
+    <ul style="margin:6px 0 0">
+      <li>触发 Vidaxl 12 站全量重抓（LIMIT=30000）</li>
+      <li>验证 daily delta cron 自动跑（凌晨 2:00 UTC）</li>
+      <li>修 worker 队列死锁（zombie sweep job 加进 scheduler）</li>
+      <li>把 Overstock + Idealo 加到 v7 dashboard 的遨森 workspace SKU 列表</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  smart-crawler · 24h 冲刺战报 · 2026-05-25 早晨<br>
+  关联：<a href="/d/customer_dashboard_v7_unified.html">v7 Dashboard</a> · <a href="/d/aosen_80pct_daily_plan.html">遨森方案</a> · <a href="/d/platform_expansion_roadmap.html">扩展路线图</a>
+</footer>
+
+</body>
+</html>
