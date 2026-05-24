@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Scrapling 架构设计研究 · 53.8k⭐ · BSD-3 · 2026-05-24</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Inter','PingFang SC',-apple-system,BlinkMacSystemFont,sans-serif}
+html{scroll-behavior:smooth}
+body{background:#0a0612;color:#e5e7eb;font-size:14.5px;line-height:1.7}
+a{color:#a78bfa;text-decoration:none}
+a:hover{text-decoration:underline}
+
+.hero{padding:60px 32px 44px;text-align:center;
+      background:radial-gradient(ellipse 90% 70% at 50% 0%,rgba(244,114,182,.16),transparent 65%),
+                 radial-gradient(ellipse 70% 60% at 80% 50%,rgba(167,139,250,.10),transparent 60%)}
+.hero-tag{display:inline-flex;align-items:center;gap:9px;padding:5px 15px;background:rgba(244,114,182,.14);
+          border:1px solid rgba(244,114,182,.4);border-radius:24px;font-size:0.72rem;color:#fda4af;
+          letter-spacing:1.4px;text-transform:uppercase;margin-bottom:18px;font-weight:700}
+.hero h1{font-size:2.4rem;font-weight:900;letter-spacing:-1.5px;line-height:1.18;margin-bottom:12px}
+.hero h1 .grad{background:linear-gradient(90deg,#f472b6,#fb7185);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{color:#94a3b8;font-size:1rem;max-width:780px;margin:0 auto;line-height:1.75}
+.hero .meta{font-size:0.78rem;color:#52527a;margin-top:14px;display:flex;gap:18px;justify-content:center;flex-wrap:wrap}
+.hero .meta b{color:#fda4af}
+
+section{max-width:1100px;margin:0 auto;padding:50px 28px}
+section h2{font-size:1.6rem;font-weight:800;margin-bottom:6px;letter-spacing:-0.4px;display:flex;gap:10px;align-items:center}
+section h2 .n{font-size:0.78rem;background:rgba(244,114,182,.14);color:#fda4af;border:1px solid rgba(244,114,182,.3);padding:3px 10px;border-radius:9px;font-weight:800}
+section h3{font-size:1.05rem;font-weight:800;margin:24px 0 9px;color:#fff}
+section p{color:#cbd5e1;margin-bottom:11px}
+section .lede{color:#94a3b8;font-size:0.92rem;margin-bottom:18px;font-style:italic}
+
+code,pre{font-family:'SF Mono','Monaco',monospace;font-size:0.84em}
+code{background:rgba(167,139,250,.10);color:#a78bfa;padding:1px 6px;border-radius:4px}
+pre{background:#0d0a17;border:1px solid #29213a;border-radius:9px;padding:14px 16px;color:#cbd5e1;overflow-x:auto;line-height:1.55;font-size:0.78rem;margin-bottom:14px}
+pre .c{color:#52527a;font-style:italic}
+pre .k{color:#fb7185}
+pre .s{color:#6ee7b7}
+pre .v{color:#a78bfa}
+pre .f{color:#fcd34d}
+
+table{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:0.84rem}
+th{text-align:left;padding:9px 12px;background:#13111f;color:#94a3b8;font-size:0.7rem;letter-spacing:1px;text-transform:uppercase;font-weight:700;border-bottom:2px solid #29213a}
+td{padding:9px 12px;border-bottom:1px solid #1f1429;color:#cbd5e1;vertical-align:top}
+td b{color:#fff}
+td code{background:rgba(96,165,250,.10);color:#93c5fd;font-size:0.78em}
+
+.card{background:#13111f;border:1px solid #29213a;border-radius:11px;padding:16px 18px;margin-bottom:14px}
+.card h4{font-size:0.74rem;color:#fda4af;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px;font-weight:800}
+
+.diagram{background:#13111f;border:1px solid #29213a;border-radius:11px;padding:24px;font-family:'SF Mono';font-size:0.74rem;line-height:1.65;color:#cbd5e1;overflow-x:auto;white-space:pre}
+
+.callout{background:linear-gradient(135deg,rgba(247,183,49,.10),rgba(247,183,49,.04));border-left:3px solid rgba(247,183,49,.5);padding:14px 18px;border-radius:7px;margin:12px 0;font-size:0.86rem;color:#fcd34d}
+.callout b{color:#fff}
+.callout.pos{background:linear-gradient(135deg,rgba(16,185,129,.10),rgba(16,185,129,.04));border-left-color:rgba(16,185,129,.5);color:#6ee7b7}
+.callout.neg{background:linear-gradient(135deg,rgba(251,113,133,.10),rgba(251,113,133,.04));border-left-color:rgba(251,113,133,.5);color:#fda4af}
+
+.tag-row{display:flex;flex-wrap:wrap;gap:5px;margin:6px 0}
+.tag{font-size:0.7rem;padding:2px 9px;border-radius:9px;background:rgba(167,139,250,.10);color:#c4b5fd;border:1px solid rgba(167,139,250,.25);font-weight:600}
+.tag.warn{background:rgba(247,183,49,.10);color:#fcd34d;border-color:rgba(247,183,49,.25)}
+.tag.bad{background:rgba(251,113,133,.10);color:#fda4af;border-color:rgba(251,113,133,.25)}
+
+footer{padding:30px;text-align:center;color:#52527a;font-size:0.8rem;border-top:1px solid #1f1429;margin-top:40px}
+footer a{color:#a78bfa}
+
+ul{margin-bottom:12px;padding-left:24px;color:#cbd5e1}
+ul li{margin-bottom:4px}
+ul li b{color:#fff}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="hero-tag">深度研究 · 开源项目 + 官方代码</div>
+  <h1>Scrapling 架构设计 ·<br>一个 <span class="grad">53.8k⭐ 反爬框架</span>的真相</h1>
+  <p>读完 GitHub 源码 + 官方文档 + 我们自己 3 个 crawler 的实际调用，给你完整的设计图谱：6 个模块 / 3 种 Fetcher 等级 / 真正的 Cloudflare 解题算法 / Adaptive Selector 自愈逻辑。</p>
+  <div class="meta">
+    <span><b>53.8k</b> ⭐</span>
+    <span><b>5.2k</b> 🍴</span>
+    <span><b>BSD-3-Clause</b> ✅ 可商用</span>
+    <span><b>Python 3.10+</b></span>
+    <span><b>92%</b> 测试覆盖</span>
+    <span><b>v0.4+</b></span>
+  </div>
+</div>
+
+<section>
+  <h2><span class="n">1</span>顶层定位</h2>
+  <p class="lede">Scrapling 是一个 <strong>反爬 + 自愈解析</strong>的 Python 框架。本质：包装 patched Playwright + lxml/cssselect parser + difflib 相似度算法，做成 3 等级 fetcher。</p>
+
+  <div class="card">
+    <h4>它解决什么问题</h4>
+    <ul>
+      <li><b>反爬天花板</b> — Cloudflare Turnstile / DataDome / PerimeterX 全套都能过</li>
+      <li><b>页面改版不崩</b> — 把选中元素的 HTML 指纹存 SQLite，下次该 selector 找不到了能 fallback 到「相似元素」</li>
+      <li><b>API 简洁</b> — `StealthyFetcher.fetch(url)` 一行替代 Playwright 几十行</li>
+      <li><b>非侵入</b> — 给你 Selector/Response 对象，你随便后处理</li>
+    </ul>
+  </div>
+
+  <div class="callout pos">
+    <b>对我们的意义</b>：smart-crawler 已经在用 <code>StealthyFetcher</code>（trustpilot.py / google_shopping.py / google_maps.py 三个 crawler），但只用了基础参数。Scrapling 还有一堆我们没用的反爬功能（hide_canvas / solve_cloudflare / block_webrtc / dns_over_https），后面 vidaxl_us 401 封禁可以试这些。
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">2</span>模块结构（GitHub 源码实证）</h2>
+  <p class="lede">不是猜的，是 <code>gh api repos/D4Vinci/Scrapling/contents/scrapling</code> 拉的真实清单。</p>
+
+  <div class="diagram">scrapling/
+├── __init__.py
+├── cli.py                          ← Shell / MCP 入口
+├── parser.py                       ← 核心 Selector 类（lxml 包装）
+├── py.typed
+├── <span style="color:#fcd34d">core/</span>                           ← 核心工具
+│   ├── _types.py                   类型签名
+│   ├── ai.py                       AI 集成（v0.4+ 新增）
+│   ├── custom_types.py             AttributesHandler / TextHandler
+│   ├── mixins.py                   SelectorsGeneration（自动生成选择器）
+│   ├── shell.py                    交互式 shell
+│   ├── storage.py                  <span style="color:#fb7185">SQLite 元素指纹仓库</span>
+│   ├── translator.py               css_to_xpath
+│   └── utils/                      log / clean_spaces
+├── <span style="color:#fcd34d">engines/</span>                        ← 底层引擎
+│   ├── constants.py
+│   ├── static.py                   curl_cffi TLS impersonation
+│   ├── _browsers/                  ← Browser 引擎
+│   │   ├── _base.py                SyncSession / AsyncSession 基类
+│   │   ├── _stealth.py             <span style="color:#fb7185">StealthySession（核心反爬）</span>
+│   │   ├── _controllers.py         DynamicSession（普通 Playwright）
+│   │   ├── _config_tools.py
+│   │   ├── _validators.py
+│   │   └── _page.py
+│   └── toolbelt/
+│       ├── proxy_rotation.py       ProxyRotator
+│       └── convertor.py            Response / ResponseFactory
+├── <span style="color:#fcd34d">fetchers/</span>                       ← 用户 API
+│   ├── requests.py                 Fetcher（静态）
+│   ├── chrome.py                   DynamicFetcher
+│   └── stealth_chrome.py           <span style="color:#fb7185">StealthyFetcher（最常用）</span>
+└── <span style="color:#fcd34d">spiders/</span>                        ← 高级 Spider 抽象</div>
+</section>
+
+<section>
+  <h2><span class="n">3</span>三种 Fetcher 等级对比</h2>
+  <p class="lede">从 Fetcher → StealthyFetcher → DynamicFetcher 是「速度 vs 反爬能力」的取舍曲线。</p>
+
+  <table>
+    <thead>
+      <tr><th>Fetcher</th><th>底层引擎</th><th>速度</th><th>反爬</th><th>适合什么站</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>Fetcher</b><div class="tag-row"><span class="tag">curl_cffi</span><span class="tag">HTTP/3</span></div></td>
+        <td><code>curl_cffi</code> + <code>impersonate=chrome</code></td>
+        <td><b>极快</b> · 单请求 100-500ms</td>
+        <td>仅 TLS 指纹 + UA</td>
+        <td>无 JS / 无 Cloudflare 的简单 API</td>
+      </tr>
+      <tr>
+        <td><b>StealthyFetcher</b> 🎯<div class="tag-row"><span class="tag">patchright</span><span class="tag">camoufox</span></div></td>
+        <td><code>patchright</code>（patched Playwright）+ 反指纹 firefox/chrome</td>
+        <td>中等 · 单页 2-5s</td>
+        <td><b>满级</b>：Turnstile / WAF / canvas / webgl / webrtc</td>
+        <td>高反爬站（trustpilot/songmics/aosom/vidaxl_us）</td>
+      </tr>
+      <tr>
+        <td><b>DynamicFetcher</b><div class="tag-row"><span class="tag">playwright</span></div></td>
+        <td>原生 <code>playwright</code> chromium</td>
+        <td>中等 · 单页 2-5s</td>
+        <td>较弱（基础 Playwright）</td>
+        <td>JS 重 + 反爬弱的站</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <b>核心 trick</b>：StealthyFetcher 用的不是普通 Playwright，是 <code>patchright</code> —— 一个 patched fork（删掉了 navigator.webdriver 等可被检测的指纹）。这是为什么它能过 Turnstile 而原生 Playwright 不能的关键。
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">4</span>真正的 Cloudflare 解题算法</h2>
+  <p class="lede">看了源码 <code>scrapling/engines/_browsers/_stealth.py:108</code>，揭开它怎么解 Turnstile 的真相。</p>
+
+  <pre><span class="c"># StealthySession._cloudflare_solver(page) 真实流程</span>
+
+<span class="c"># 1. 检测 challenge 类型</span>
+<span class="k">challenge_type</span> = self._detect_cloudflare(page_html)
+<span class="c"># → "non-interactive" / "embedded" / "standard"</span>
+
+<span class="c"># 2. 等 spinner 消失（非交互型直接走这条）</span>
+<span class="k">while</span> <span class="s">"&lt;title&gt;Just a moment...&lt;/title&gt;"</span> in page_html:
+    page.wait_for_timeout(1000)
+
+<span class="c"># 3. 定位 Turnstile iframe</span>
+<span class="k">iframe</span> = page.frame(url=<span class="v">__CF_PATTERN__</span>)
+<span class="c"># 正则: ^https?://challenges\.cloudflare\.com/cdn-cgi/challenge-platform/.*</span>
+
+<span class="c"># 4. 拿到 iframe 的 bounding_box（绝对坐标）</span>
+<span class="k">outer_box</span> = iframe.frame_element().bounding_box()
+
+<span class="c"># 5. 计算点击坐标（中心 + 随机偏移 26-28px / 25-27px）</span>
+<span class="k">captcha_x</span> = outer_box[<span class="s">"x"</span>] + randint(26, 28)
+<span class="k">captcha_y</span> = outer_box[<span class="s">"y"</span>] + randint(25, 27)
+
+<span class="c"># 6. 模拟真人鼠标：100-200ms 随机按压时长</span>
+page.mouse.<span class="f">click</span>(captcha_x, captcha_y, delay=randint(100, 200), button=<span class="s">"left"</span>)
+
+<span class="c"># 7. 轮询 100 次 × 100ms = 10s 等结果</span>
+<span class="k">while</span> <span class="s">"&lt;title&gt;Just a moment...&lt;/title&gt;"</span> in page_html:
+    <span class="k">if</span> attempts >= 100: <span class="k">break</span>
+    page.wait_for_timeout(100)</pre>
+
+  <div class="callout pos">
+    <b>关键洞察</b>：它不是「破解」CAPTCHA，是<strong>避免被检测后正常点击通过</strong>。靠的是：
+    <ul style="margin:6px 0">
+      <li>patchright 让浏览器看起来像真人</li>
+      <li>随机化坐标 + 延迟 = 鼠标轨迹自然</li>
+      <li>Cloudflare 评估的是「这次访问像不像 bot」，过了打分就放行</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">5</span>Adaptive Selector 自愈算法</h2>
+  <p class="lede">这是 Scrapling 最 sexy 的功能。网站改版了，你的 selector 还能找到目标元素。</p>
+
+  <h3>5.1 工作机制</h3>
+  <pre><span class="c"># 第一次：标记元素 + 保存指纹到 SQLite</span>
+selector = page.<span class="f">css</span>(<span class="s">'.product-price'</span>, auto_save=<span class="v">True</span>, adaptive=<span class="v">True</span>)
+
+<span class="c"># SQLiteStorageSystem 存的是元素的「unique properties」:</span>
+<span class="c"># - tag name (span)</span>
+<span class="c"># - parent tag chain (div.price-wrap > section.product)</span>
+<span class="c"># - 同级位置 (3rd child)</span>
+<span class="c"># - 关键属性 (class="price__current", data-track="*")</span>
+
+<span class="c"># 网站改版后：原 selector 找不到了，触发 relocate()</span>
+<span class="c"># 1. 从 SQLite 读历史指纹</span>
+<span class="c"># 2. 在新 HTML 树里找：</span>
+<span class="c">#    - 同 tag + 同 parent chain + 相同深度 → 99% 匹配</span>
+<span class="c">#    - 用 difflib.SequenceMatcher 比 attribute 相似度</span>
+<span class="c"># 3. 阈值 ≥ 0.2 即返回（默认值）</span></pre>
+
+  <h3>5.2 find_similar() — 横向扩散查找</h3>
+  <pre><span class="c"># 灵感来自 AutoScraper</span>
+first = page.<span class="f">css</span>(<span class="s">'.product'</span>)[0]
+all_products = first.<span class="f">find_similar</span>(
+    similarity_threshold=<span class="v">0.2</span>,
+    ignore_attributes=(<span class="s">'href'</span>, <span class="s">'src'</span>),  <span class="c"># URL 类不参与对比</span>
+    match_text=<span class="v">False</span>
+)
+<span class="c"># 算法：</span>
+<span class="c"># 1. 候选 = 同 depth + 同 tag + 同 parent tag + 同 grandparent tag</span>
+<span class="c">#    （3 层启发式过滤，99% 已经够准）</span>
+<span class="c"># 2. attribute 相似度 = SequenceMatcher(attr1, attr2).ratio()</span>
+<span class="c"># 3. 返回 ratio > threshold 的所有元素</span></pre>
+
+  <div class="callout">
+    <b>为啥不撞我们的 product schema</b>：Scrapling 只做「找到 element」这一步，element 里有什么字段、怎么映射到 SKU/Price/Title，是<strong>我们自己的业务层</strong>。它不知道也不关心。
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">6</span>StealthyFetcher 完整参数清单（实战参考）</h2>
+  <p class="lede">从源码 <code>scrapling/fetchers/stealth_chrome.py:13</code> 抽出的真实参数表。</p>
+
+  <table>
+    <thead><tr><th>参数</th><th>类型</th><th>作用</th><th>我们用了吗</th></tr></thead>
+    <tbody>
+      <tr><td><code>headless</code></td><td>bool</td><td>无头模式</td><td>✅ True</td></tr>
+      <tr><td><code>network_idle</code></td><td>bool</td><td>等网络空闲 500ms</td><td>✅ True</td></tr>
+      <tr><td><code>timeout</code></td><td>int(ms)</td><td>总超时</td><td>✅ 60000</td></tr>
+      <tr><td><code>proxy</code></td><td>str/dict</td><td>代理</td><td>✅ 商业代理池</td></tr>
+      <tr><td><code>solve_cloudflare</code></td><td>bool</td><td>自动解 Turnstile/Interstitial</td><td>❌ 没开！</td></tr>
+      <tr><td><code>hide_canvas</code></td><td>bool</td><td>随机化 canvas 指纹</td><td>❌ 没开</td></tr>
+      <tr><td><code>block_webrtc</code></td><td>bool</td><td>防本地 IP 泄露</td><td>❌ 没开</td></tr>
+      <tr><td><code>allow_webgl</code></td><td>bool</td><td>启用 WebGL（默认 true，关了易被 WAF 检测）</td><td>⚠️ 默认</td></tr>
+      <tr><td><code>real_chrome</code></td><td>bool</td><td>用本机 Chrome（不是 chromium）</td><td>❌ 没开</td></tr>
+      <tr><td><code>dns_over_https</code></td><td>bool</td><td>DoH 防 DNS 泄露（用代理时）</td><td>❌ 没开</td></tr>
+      <tr><td><code>block_ads</code></td><td>bool</td><td>屏蔽 ~3500 广告/追踪域名</td><td>❌ 没开</td></tr>
+      <tr><td><code>blocked_domains</code></td><td>set</td><td>自定义屏蔽域</td><td>❌</td></tr>
+      <tr><td><code>locale</code></td><td>str</td><td>navigator.language</td><td>❌</td></tr>
+      <tr><td><code>timezone_id</code></td><td>str</td><td>浏览器时区</td><td>❌</td></tr>
+      <tr><td><code>useragent</code></td><td>str</td><td>UA（默认自动生成真实 UA）</td><td>⚠️ 默认</td></tr>
+      <tr><td><code>page_action</code></td><td>callable</td><td>navigation 后自定义动作（滚动/点击）</td><td>✅ 用了（warm_then_search）</td></tr>
+      <tr><td><code>page_setup</code></td><td>callable</td><td>navigation 前事件监听</td><td>❌</td></tr>
+      <tr><td><code>wait_selector</code></td><td>str</td><td>等特定 CSS 选择器</td><td>❌</td></tr>
+      <tr><td><code>init_script</code></td><td>str</td><td>页面加载前注入 JS 文件</td><td>❌</td></tr>
+      <tr><td><code>cdp_url</code></td><td>str</td><td>连接已有 Chrome CDP（替代启动新进程）</td><td>❌</td></tr>
+      <tr><td><code>google_search</code></td><td>bool</td><td>设 Google referer header（默认 true）</td><td>⚠️ 默认</td></tr>
+      <tr><td><code>user_data_dir</code></td><td>path</td><td>持久化 cookie/localStorage</td><td>❌</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout neg">
+    <b>我们的低悬果实</b>：vidaxl_us 401 封禁，可以试 <code>solve_cloudflare=True</code> + <code>hide_canvas=True</code> + <code>real_chrome=True</code> + <code>locale="en-US"</code> + <code>timezone_id="America/New_York"</code> 组合。
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">7</span>我们的实际调用（smart-crawler）</h2>
+  <p class="lede">现状：3 个 crawler 已经在用 Scrapling，但参数都是最基础的。</p>
+
+  <h3>7.1 当前调用模板（trustpilot.py）</h3>
+  <pre>from scrapling.fetchers <span class="k">import</span> StealthyFetcher
+
+kw = dict(
+    headless=True,
+    network_idle=True,
+    timeout=60000,
+)
+<span class="k">if</span> self.proxy:
+    kw[<span class="s">"proxy"</span>] = self.proxy
+
+fetched = StealthyFetcher.<span class="f">fetch</span>(url, **kw)
+<span class="k">if</span> fetched.status != 200:
+    <span class="k">return</span> <span class="s">"403/blocked"</span>
+
+<span class="c"># 解析 __NEXT_DATA__</span>
+data = self._next_data(fetched.html_content)</pre>
+
+  <h3>7.2 改造建议（v6 反爬升级）</h3>
+  <pre>kw = dict(
+    headless=True,
+    network_idle=True,
+    timeout=60000,
+    <span class="k">solve_cloudflare</span>=True,           <span class="c"># 自动过 Turnstile</span>
+    <span class="k">hide_canvas</span>=True,                <span class="c"># 随机化 canvas 指纹</span>
+    <span class="k">block_webrtc</span>=True,               <span class="c"># 防 IP 泄露</span>
+    <span class="k">dns_over_https</span>=True,             <span class="c"># 走代理时防 DNS 泄露</span>
+    <span class="k">real_chrome</span>=True,                <span class="c"># 用真 Chrome 而不是 chromium</span>
+    <span class="k">locale</span>=<span class="s">"en-US"</span>,                 <span class="c"># 配合美国代理</span>
+    <span class="k">timezone_id</span>=<span class="s">"America/New_York"</span>,
+    <span class="k">google_search</span>=True,               <span class="c"># Google referer（默认）</span>
+    <span class="k">user_data_dir</span>=<span class="s">"./data/profiles/vidaxl_us"</span>,  <span class="c"># 持久化 cookie</span>
+)</pre>
+</section>
+
+<section>
+  <h2><span class="n">8</span>关键决策：换底座还是升级用法</h2>
+
+  <table>
+    <thead><tr><th>方案</th><th>工期</th><th>收益</th><th>风险</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>A · 升级现有 StealthyFetcher 参数</b></td>
+        <td>0.5 天</td>
+        <td>vidaxl_us 401 大概率破，trustpilot 403 也可能</td>
+        <td>低 · 改参数不动架构</td>
+      </tr>
+      <tr>
+        <td><b>B · 全量切 Scrapling Spider</b><div class="tag-row"><span class="tag">checkpoint</span><span class="tag">async</span></div></td>
+        <td>2 周</td>
+        <td>替代自己的 worker.py，享受 checkpoint resume + async pool</td>
+        <td>中 · 已有 Crawlee 选型撞车</td>
+      </tr>
+      <tr>
+        <td><b>C · 加 Adaptive 自愈</b></td>
+        <td>1 周</td>
+        <td>网站改版不崩；vidaxl/songmics 长尾爬虫维护成本 ↓</td>
+        <td>低 · SQLite 仓库本地化</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout pos">
+    <b>推荐路径</b>：先做 A（0.5 天，立即解决 vidaxl_us / trustpilot 401-403），同步上 C（1 周，给 46 站加自愈，长期省力）。<strong>不要换 B</strong>（Crawlee 已选型 + 业务 schema 自家做得清楚）。
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">9</span>从 Scrapling 偷的设计灵感</h2>
+  <p class="lede">即使不深度依赖它，下面 3 点设计哲学值得抄到 smart-crawler。</p>
+
+  <div class="card">
+    <h4>① Fetcher 三等级抽象</h4>
+    <p>把 fetcher 按反爬强度分 3 档（HTTP / Stealth / Browser），每档统一接口。<strong>smart-crawler 现在 17 个 crawler 各写各的</strong>，可以抽出基类 <code>backend/app/fetchers/base.py</code> + <code>http.py / stealth.py / browser.py</code>，业务 crawler 只声明用哪档。</p>
+  </div>
+
+  <div class="card">
+    <h4>② SQLite 指纹仓库 = 自愈基础</h4>
+    <p>把抓过的 element schema 存 SQLite + 改版时 fallback，是降低 long-tail 维护成本的关键。我们 46 站手写 selector，未来肯定要走这个方向。</p>
+  </div>
+
+  <div class="card">
+    <h4>③ Response 对象统一</h4>
+    <p>Scrapling 所有 fetcher 返同一 <code>Response</code>（含 status / html / json / cookies）。我们现在每个 crawler 返不同 dict，调用方都要适配。<strong>统一 Response schema</strong> 是给客户 dashboard A · Prompt-to-Table 接口的前置。</p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">10</span>结论一句话</h2>
+  <div class="callout pos" style="font-size:1rem;padding:18px 22px">
+    <b>Scrapling = patched Playwright + lxml + difflib，包装成 3 档反爬 fetcher + SQLite 自愈仓库。</b><br><br>
+    我们应该：<br>
+    1. <strong>立即</strong>把现有 3 个 crawler 的 <code>StealthyFetcher.fetch()</code> 加上 <code>solve_cloudflare/hide_canvas/real_chrome</code> 参数（0.5 天）<br>
+    2. <strong>1 周内</strong>开 <code>adaptive=True + auto_save=True</code> 给 46 站做自愈兜底<br>
+    3. <strong>不换底座</strong> —— Crawlee 已选型，Scrapling 只做 fetcher 层
+  </div>
+</section>
+
+<footer>
+  研究来源：<a href="https://github.com/D4Vinci/Scrapling">github.com/D4Vinci/Scrapling</a> ·
+  <a href="https://scrapling.readthedocs.io">scrapling.readthedocs.io</a> ·
+  smart-crawler 自身 3 处调用代码<br>
+  2026-05-24 · smart-crawler 研究文档 · <a href="https://smartcrawler.io/d/scrapling_design_research.html">在线版</a>
+</footer>
+
+</body>
+</html>
