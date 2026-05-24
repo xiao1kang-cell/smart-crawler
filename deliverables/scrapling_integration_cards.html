@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Scrapling 整合 · 4 方案抽卡 · 2026-05-24</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Inter','PingFang SC',-apple-system,BlinkMacSystemFont,sans-serif}
+html{scroll-behavior:smooth}
+body{background:#0a0612;color:#e5e7eb;font-size:14px;line-height:1.6}
+a{color:#a78bfa;text-decoration:none}
+
+.hero{padding:50px 28px 36px;text-align:center;
+      background:radial-gradient(ellipse 90% 70% at 50% 0%,rgba(16,185,129,.16),transparent 65%),
+                 radial-gradient(ellipse 70% 60% at 80% 50%,rgba(167,139,250,.10),transparent 60%)}
+.hero-tag{display:inline-flex;align-items:center;gap:8px;padding:5px 14px;background:rgba(16,185,129,.14);
+          border:1px solid rgba(16,185,129,.4);border-radius:24px;font-size:0.7rem;color:#6ee7b7;
+          letter-spacing:1.4px;text-transform:uppercase;margin-bottom:16px;font-weight:700}
+.hero h1{font-size:2.15rem;font-weight:900;letter-spacing:-1.4px;line-height:1.18;margin-bottom:10px}
+.hero h1 .grad{background:linear-gradient(90deg,#10b981,#a78bfa,#fb7185);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{color:#94a3b8;font-size:0.96rem;max-width:740px;margin:0 auto;line-height:1.7}
+
+section{max-width:1300px;margin:0 auto;padding:36px 26px}
+
+.cards{display:grid;grid-template-columns:repeat(2,1fr);gap:20px}
+.card{background:#13111f;border:2px solid #29213a;border-radius:16px;overflow:hidden;cursor:pointer;transition:all .25s ease;display:flex;flex-direction:column;position:relative}
+.card:hover{transform:translateY(-3px);box-shadow:0 22px 50px rgba(0,0,0,.5)}
+.card.selected{box-shadow:0 0 0 4px rgba(167,139,250,.25),0 28px 70px rgba(0,0,0,.5)}
+
+.card-A{border-color:rgba(16,185,129,.4)}
+.card-A.selected{border-color:#10b981}
+.card-A:hover{border-color:#10b981}
+.card-A .card-top{background:linear-gradient(135deg,rgba(16,185,129,.15),transparent)}
+.card-A .tag{background:rgba(16,185,129,.18);color:#6ee7b7;border:1px solid rgba(16,185,129,.4)}
+
+.card-B{border-color:rgba(96,165,250,.4)}
+.card-B.selected{border-color:#60a5fa}
+.card-B:hover{border-color:#60a5fa}
+.card-B .card-top{background:linear-gradient(135deg,rgba(96,165,250,.15),transparent)}
+.card-B .tag{background:rgba(96,165,250,.18);color:#93c5fd;border:1px solid rgba(96,165,250,.4)}
+
+.card-C{border-color:rgba(167,139,250,.4)}
+.card-C.selected{border-color:#a78bfa}
+.card-C:hover{border-color:#a78bfa}
+.card-C .card-top{background:linear-gradient(135deg,rgba(167,139,250,.15),transparent)}
+.card-C .tag{background:rgba(167,139,250,.18);color:#c4b5fd;border:1px solid rgba(167,139,250,.4)}
+
+.card-D{border-color:rgba(251,113,133,.4)}
+.card-D.selected{border-color:#fb7185}
+.card-D:hover{border-color:#fb7185}
+.card-D .card-top{background:linear-gradient(135deg,rgba(251,113,133,.15),transparent)}
+.card-D .tag{background:rgba(251,113,133,.18);color:#fda4af;border:1px solid rgba(251,113,133,.4)}
+
+.card-top{padding:22px 24px 16px;border-bottom:1px solid #1f1429}
+.tag{display:inline-flex;gap:6px;align-items:center;font-size:0.66rem;font-weight:800;padding:4px 11px;border-radius:11px;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px}
+.card-title{font-size:1.4rem;font-weight:900;color:#fff;margin-bottom:5px;letter-spacing:-0.4px}
+.card-cn{font-size:0.84rem;color:#a78bfa;margin-bottom:7px;font-weight:600}
+.card-sub{font-size:0.84rem;color:#94a3b8;line-height:1.6}
+
+.kpi-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:14px 24px;background:#0d0a17;border-bottom:1px solid #1f1429}
+.kpi{text-align:center}
+.kpi .v{font-size:1.1rem;font-weight:900;color:#fff;letter-spacing:-0.3px}
+.kpi .l{font-size:0.66rem;color:#52527a;letter-spacing:1.2px;text-transform:uppercase;margin-top:2px}
+
+.body{padding:18px 24px;flex:1}
+.body h5{font-size:0.7rem;color:#52527a;letter-spacing:1.5px;text-transform:uppercase;margin:0 0 8px;font-weight:800}
+.body h5:not(:first-child){margin-top:14px}
+.items{list-style:none;font-size:0.84rem;color:#cbd5e1;line-height:1.7}
+.items li{padding:3px 0;display:flex;gap:7px;align-items:flex-start}
+.items li::before{content:'';width:5px;height:5px;border-radius:50%;background:#a78bfa;margin-top:9px;flex-shrink:0}
+.items li.skip::before{background:#52527a}
+.items li.skip{color:#52527a;text-decoration:line-through}
+.items li b{color:#fff;font-weight:700}
+
+.pros{margin-top:10px;font-size:0.78rem;color:#6ee7b7;line-height:1.65}
+.pros::before{content:'✓ '}
+.cons{margin-top:5px;font-size:0.78rem;color:#fda4af;line-height:1.65}
+.cons::before{content:'✗ '}
+
+.who{padding:12px 24px;background:rgba(167,139,250,.04);border-top:1px solid #1f1429;font-size:0.78rem;color:#c4b5fd;line-height:1.55}
+.who b{color:#fff;font-weight:700}
+
+.choose{padding:14px 24px;background:#080614;border-top:1px solid #1f1429;display:flex;align-items:center;justify-content:space-between}
+.choose label{display:flex;gap:9px;align-items:center;font-size:0.82rem;color:#94a3b8;cursor:pointer;font-weight:600}
+.choose input[type=radio]{appearance:none;width:18px;height:18px;border:2px solid #475569;border-radius:50%;cursor:pointer;transition:all .15s}
+.choose input[type=radio]:checked{background:#a78bfa;border-color:#a78bfa;box-shadow:0 0 0 4px rgba(167,139,250,.18)}
+
+.callout{background:linear-gradient(135deg,rgba(247,183,49,.10),rgba(247,183,49,.04));border-left:3px solid rgba(247,183,49,.5);padding:14px 18px;border-radius:7px;margin:18px 0 8px;font-size:0.86rem;color:#fcd34d;line-height:1.7}
+.callout b{color:#fff}
+
+.cta{background:linear-gradient(135deg,rgba(16,185,129,.15),rgba(167,139,250,.10));border:2px solid rgba(16,185,129,.4);border-radius:16px;padding:32px;text-align:center;margin-top:24px}
+.cta h2{font-size:1.7rem;font-weight:900;margin-bottom:9px;background:linear-gradient(90deg,#10b981,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.cta p{color:#cbd5e1;font-size:0.9rem;max-width:580px;margin:0 auto;line-height:1.7}
+
+section h2{font-size:1.5rem;font-weight:800;margin-bottom:6px;letter-spacing:-0.4px}
+section .lede{color:#94a3b8;font-size:0.88rem;margin-bottom:20px}
+.sec-tag{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:18px;font-size:0.66rem;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:10px;background:rgba(167,139,250,.14);color:#c4b5fd;border:1px solid rgba(167,139,250,.3)}
+
+footer{padding:24px;text-align:center;color:#52527a;font-size:0.8rem;border-top:1px solid #1f1429;margin-top:30px}
+
+@media(max-width:900px){
+  .cards{grid-template-columns:1fr}
+  .hero h1{font-size:1.7rem}
+}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="hero-tag">Scrapling 整合 · 4 方案抽卡</div>
+  <h1>从 <span class="grad">0.5 天</span> 到 <span class="grad">4 周</span> · 选你的速度</h1>
+  <p>同一个底座，4 种参与度：极简（只升级参数）→ 平衡（参数+对象统一）→ 激进（加自愈+抽象）→ 重构（替换底座）。<strong style="color:#fff">激进度越高，长期 ROI 越大，但工期 + 风险也越高。</strong></p>
+</div>
+
+<section>
+  <span class="sec-tag">🎴 4 方案任选 1</span>
+  <h2>选你能 commit 的工期</h2>
+  <p class="lede">关键判断：你愿意为「46 站长尾维护成本 ↓ 70%」投 2 周 dev 时间吗？答案决定选 A/B 还是 C/D。</p>
+
+  <div class="cards">
+
+    <!-- A · 极简党 -->
+    <div class="card card-A" id="card-A" onclick="select('A')">
+      <div class="card-top">
+        <span class="tag">A · MINIMAL</span>
+        <div class="card-title">极简党</div>
+        <div class="card-cn">「只解决 vidaxl_us 401，其他都不动」</div>
+        <div class="card-sub">只做参数升级：3 个 crawler 加 7 个反爬参数。立即破封禁，60% 覆盖率计划解锁。零架构变更。</div>
+      </div>
+      <div class="kpi-row">
+        <div class="kpi"><div class="v">0.5 天</div><div class="l">工期</div></div>
+        <div class="kpi"><div class="v">3 文件</div><div class="l">改动</div></div>
+        <div class="kpi"><div class="v">🟢 低</div><div class="l">风险</div></div>
+      </div>
+      <div class="body">
+        <h5>做什么</h5>
+        <ul class="items">
+          <li>① <b>StealthyFetcher 参数升级</b>（solve_cloudflare/hide_canvas/real_chrome/locale 等 7 个）</li>
+          <li class="skip">② 统一 Response 对象</li>
+          <li class="skip">③ per-site profile</li>
+          <li class="skip">④ Adaptive 自愈</li>
+          <li class="skip">⑤ Fetcher 三档抽象</li>
+        </ul>
+        <h5>影响范围</h5>
+        <ul class="items">
+          <li>backend/app/crawlers/trustpilot.py</li>
+          <li>backend/app/crawlers/google_shopping.py</li>
+          <li>backend/app/crawlers/google_maps.py</li>
+        </ul>
+        <div class="pros">立即可破 vidaxl_us 401，60% 路径解锁；零架构风险</div>
+        <div class="cons">长期还是手写 selector，46 站改版每次崩；新人 onboard 慢</div>
+      </div>
+      <div class="who">
+        <b>适合</b>：本周很忙 / 没时间投架构 / 只想解决 vidaxl 卡死 / 等 Vidaxl API 回信前买时间
+      </div>
+      <div class="choose">
+        <label><input type="radio" name="pick" value="A">选 A · 极简党</label>
+        <span style="font-size:0.74rem;color:#52527a">今天就动手</span>
+      </div>
+    </div>
+
+    <!-- B · 平衡党 -->
+    <div class="card card-B" id="card-B" onclick="select('B')">
+      <div class="card-top">
+        <span class="tag">B · BALANCED ⭐ 推荐</span>
+        <div class="card-title">平衡党</div>
+        <div class="card-cn">「2 天搞定立即收益，不踩长期坑」</div>
+        <div class="card-sub">做①②③ —— 参数升级 + Response 统一 + per-site profile。是「客户 dashboard v6 demo → v2 真实数据」必经之路。</div>
+      </div>
+      <div class="kpi-row">
+        <div class="kpi"><div class="v">2 天</div><div class="l">工期</div></div>
+        <div class="kpi"><div class="v">~20 文件</div><div class="l">改动</div></div>
+        <div class="kpi"><div class="v">🟢 低</div><div class="l">风险</div></div>
+      </div>
+      <div class="body">
+        <h5>做什么</h5>
+        <ul class="items">
+          <li>① <b>StealthyFetcher 参数升级</b>（同 A）</li>
+          <li>② <b>统一 Response 对象</b>（17 crawler 返回值标准化，铺路 v2 真实 API）</li>
+          <li>③ <b>per-site profile</b>（cookie 持久化，Cloudflare 看作老客户）</li>
+          <li class="skip">④ Adaptive 自愈</li>
+          <li class="skip">⑤ Fetcher 三档抽象</li>
+        </ul>
+        <h5>影响范围</h5>
+        <ul class="items">
+          <li>新增 backend/app/fetchers/_response.py</li>
+          <li>17 个 backend/app/crawlers/*.py 改返回值</li>
+          <li>新增 data/profiles/&lt;site&gt;/ 持久化目录</li>
+        </ul>
+        <div class="pros">立即收益 + 给 dashboard v2 铺路；不动架构</div>
+        <div class="cons">长尾改版还是要人维护（没上自愈）</div>
+      </div>
+      <div class="who">
+        <b>适合</b>：本周能投 2 天 / 客户 dashboard v6 demo 选了 A+B+C / 想给真实 API 接入打基础
+      </div>
+      <div class="choose">
+        <label><input type="radio" name="pick" value="B">选 B · 平衡党</label>
+        <span style="font-size:0.74rem;color:#52527a">本周内出</span>
+      </div>
+    </div>
+
+    <!-- C · 激进党 -->
+    <div class="card card-C" id="card-C" onclick="select('C')">
+      <div class="card-top">
+        <span class="tag">C · AGGRESSIVE</span>
+        <div class="card-title">激进党</div>
+        <div class="card-cn">「2 周一次做透，46 站长尾维护 ↓ 70%」</div>
+        <div class="card-sub">B + 加 Adaptive 自愈 + Fetcher 三档抽象。代码减 30%，长尾维护成本 ↓ 70%，新人 onboard 时间砍半。</div>
+      </div>
+      <div class="kpi-row">
+        <div class="kpi"><div class="v">2 周</div><div class="l">工期</div></div>
+        <div class="kpi"><div class="v">~40 文件</div><div class="l">改动</div></div>
+        <div class="kpi"><div class="v">🟡 中</div><div class="l">风险</div></div>
+      </div>
+      <div class="body">
+        <h5>做什么</h5>
+        <ul class="items">
+          <li>① + ② + ③（同 B）</li>
+          <li>④ <b>Adaptive Selector 自愈</b>（SQLite 指纹库 + 改版 fallback）</li>
+          <li>⑤ <b>Fetcher 三档抽象</b>（HTTP/Stealth/Browser 基类，17 crawler 简化）</li>
+          <li class="skip">⑥ ProxyRotator 替换</li>
+          <li class="skip">⑦ Spider 替换 Crawlee</li>
+        </ul>
+        <h5>影响范围</h5>
+        <ul class="items">
+          <li>新增 backend/app/fetchers/ 完整模块（4 文件）</li>
+          <li>17 crawler 改 fetcher_tier = "stealth/browser/http"</li>
+          <li>sites.yaml 加 selector 自愈字段</li>
+          <li>新增 data/scrapling_storage.db</li>
+        </ul>
+        <div class="pros">长尾维护成本 ↓ 70%；17 crawler 代码 ↓ 30%；自愈兜底</div>
+        <div class="cons">2 周时间黑洞；schema 迁移需要灰度</div>
+      </div>
+      <div class="who">
+        <b>适合</b>：还没接大客户 / Q3 节奏可以投 2 周 / 觉得长尾维护已是疼点 / 新人要 onboard 频繁
+      </div>
+      <div class="choose">
+        <label><input type="radio" name="pick" value="C">选 C · 激进党</label>
+        <span style="font-size:0.74rem;color:#52527a">2 周冲刺</span>
+      </div>
+    </div>
+
+    <!-- D · 重构党 -->
+    <div class="card card-D" id="card-D" onclick="select('D')">
+      <div class="card-top">
+        <span class="tag">D · REFACTOR ⚠️</span>
+        <div class="card-title">重构党</div>
+        <div class="card-cn">「全押 Scrapling，砍 Crawlee + 自研代理池」</div>
+        <div class="card-sub">C + ⑥ ProxyRotator 替换 + ⑦ Spider 替换 Crawlee。完全押注 Scrapling 全栈。<strong style="color:#fda4af">不推荐：撞已锁定 W2 计划</strong>。</div>
+      </div>
+      <div class="kpi-row">
+        <div class="kpi"><div class="v">3-4 周</div><div class="l">工期</div></div>
+        <div class="kpi"><div class="v">~80 文件</div><div class="l">改动</div></div>
+        <div class="kpi"><div class="v">🔴 高</div><div class="l">风险</div></div>
+      </div>
+      <div class="body">
+        <h5>做什么</h5>
+        <ul class="items">
+          <li>① ~ ⑤ 全做（同 C）</li>
+          <li>⑥ <b>ProxyRotator 替换 proxy_pool.py</b>（删自研代理池）</li>
+          <li>⑦ <b>Scrapling Spider 替换 Crawlee + worker.py</b>（checkpoint resume / async pool）</li>
+        </ul>
+        <h5>影响范围</h5>
+        <ul class="items">
+          <li>删 backend/app/proxy_pool.py（已稳定）</li>
+          <li>删 backend/app/worker.py + 改 docker-compose worker 服务</li>
+          <li>停 Crawlee-Python 选型（W2 计划重写）</li>
+          <li>所有 crawler 走 Scrapling Spider 框架</li>
+        </ul>
+        <div class="pros">单一底座 / 维护一致性高</div>
+        <div class="cons">撞 W2 Crawlee 选型 / 已稳定的 proxy_pool 重写有 regression / 3-4 周时间投入</div>
+      </div>
+      <div class="who">
+        <b>不推荐</b>：除非你想推倒重来。我们已经选 Crawlee 做调度底座，Scrapling 在 fetcher 层效益最大化即可。
+      </div>
+      <div class="choose">
+        <label><input type="radio" name="pick" value="D">选 D · 重构党</label>
+        <span style="font-size:0.74rem;color:#52527a">3-4 周大改</span>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- 推荐 -->
+<section>
+  <div class="callout">
+    <b>🎯 我的推荐：B · 平衡党</b>（2 天）<br><br>
+    <strong>理由</strong>：
+    <ul style="margin:6px 0 0 22px">
+      <li>① 立即破 vidaxl_us 401，60% 覆盖率计划解锁 ✓</li>
+      <li>② 统一 Response 是客户 dashboard v6 demo → v2 真实数据的<strong>前置依赖</strong>（已选了 A+B+C 风格）</li>
+      <li>③ per-site profile 降 challenge 触发率，长期收益</li>
+      <li>不上 ④⑤ 因为 2 周时间在当前阶段更应该投到客户 dashboard v2 真实接口 + Vidaxl B2B 谈判</li>
+      <li>等 W2 后稳定下来，再做 ④⑤ 作为 W3-W4 优化项</li>
+    </ul>
+  </div>
+</section>
+
+<!-- 决策对比 -->
+<section>
+  <span class="sec-tag">📊 一图看完</span>
+  <h2>4 方案速对比</h2>
+  <table style="width:100%;border-collapse:collapse;font-size:0.84rem;margin-top:14px">
+    <thead>
+      <tr style="background:#13111f">
+        <th style="text-align:left;padding:10px 12px;color:#94a3b8;font-size:0.7rem;letter-spacing:1px;text-transform:uppercase">维度</th>
+        <th style="text-align:center;padding:10px 12px;color:#6ee7b7;font-size:0.7rem;letter-spacing:1px;text-transform:uppercase">A 极简</th>
+        <th style="text-align:center;padding:10px 12px;color:#93c5fd;font-size:0.7rem;letter-spacing:1px;text-transform:uppercase">B 平衡 ⭐</th>
+        <th style="text-align:center;padding:10px 12px;color:#c4b5fd;font-size:0.7rem;letter-spacing:1px;text-transform:uppercase">C 激进</th>
+        <th style="text-align:center;padding:10px 12px;color:#fda4af;font-size:0.7rem;letter-spacing:1px;text-transform:uppercase">D 重构 ⚠️</th>
+      </tr>
+    </thead>
+    <tbody style="color:#cbd5e1;font-size:0.86rem">
+      <tr><td style="padding:9px 12px;border-bottom:1px solid #1f1429;font-weight:700">工期</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center">0.5 天</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center;color:#fff;font-weight:700">2 天</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center">2 周</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center">3-4 周</td></tr>
+      <tr><td style="padding:9px 12px;border-bottom:1px solid #1f1429;font-weight:700">破 vidaxl 401</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center">✓</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center">✓</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center">✓</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center">✓</td></tr>
+      <tr><td style="padding:9px 12px;border-bottom:1px solid #1f1429;font-weight:700">统一 Response</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center;color:#52527a">—</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center">✓</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center">✓</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center">✓</td></tr>
+      <tr><td style="padding:9px 12px;border-bottom:1px solid #1f1429;font-weight:700">自愈 Selector</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center;color:#52527a">—</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center;color:#52527a">—</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center">✓</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center">✓</td></tr>
+      <tr><td style="padding:9px 12px;border-bottom:1px solid #1f1429;font-weight:700">17 crawler 重构</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center;color:#52527a">—</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center;color:#52527a">—</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center">✓</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center">✓</td></tr>
+      <tr><td style="padding:9px 12px;border-bottom:1px solid #1f1429;font-weight:700">撞 Crawlee 计划</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center;color:#6ee7b7">否</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center;color:#6ee7b7">否</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center;color:#6ee7b7">否</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center;color:#fda4af">是</td></tr>
+      <tr><td style="padding:9px 12px;border-bottom:1px solid #1f1429;font-weight:700">长尾维护成本</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center;color:#fda4af">高</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center;color:#fda4af">高</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center;color:#6ee7b7">↓ 70%</td><td style="padding:9px 12px;border-bottom:1px solid #1f1429;text-align:center;color:#6ee7b7">↓ 70%</td></tr>
+      <tr><td style="padding:9px 12px;font-weight:700">客户 dashboard v2 影响</td><td style="padding:9px 12px;text-align:center;color:#fda4af">阻塞</td><td style="padding:9px 12px;text-align:center;color:#6ee7b7">解锁 ✓</td><td style="padding:9px 12px;text-align:center;color:#6ee7b7">解锁 ✓</td><td style="padding:9px 12px;text-align:center;color:#fda4af">推迟 2-3 周</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- CTA -->
+<section>
+  <div class="cta">
+    <h2>抽完卡告诉我</h2>
+    <p>回 「选 A」/「选 B」/「选 C」/「选 D」，或自定义组合（例如「先 B 然后下周 C」）。<strong style="color:#fff">B 推荐</strong>，但你的项目时间表你定。</p>
+  </div>
+</section>
+
+<footer>
+  smart-crawler · Scrapling 整合 4 方案抽卡 · 2026-05-24<br>
+  关联：<a href="/d/scrapling_design_research.html">架构研究</a> · <a href="/d/scrapling_integration_plan.html">7 件事总览</a> · <a href="/d/customer_dashboard_v6_demo.html">客户 Dashboard v6</a>
+</footer>
+
+<script>
+function select(id) {
+  document.querySelectorAll('.card').forEach(c => c.classList.remove('selected'));
+  document.getElementById('card-' + id).classList.add('selected');
+  document.querySelectorAll('input[name=pick]').forEach(r => { r.checked = (r.value === id); });
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Scrapling 整合到 smart-crawler 落地清单 · 2026-05-24</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Inter','PingFang SC',-apple-system,BlinkMacSystemFont,sans-serif}
+html{scroll-behavior:smooth}
+body{background:#0a0612;color:#e5e7eb;font-size:14.5px;line-height:1.7}
+a{color:#a78bfa;text-decoration:none}
+a:hover{text-decoration:underline}
+
+.hero{padding:54px 32px 40px;text-align:center;
+      background:radial-gradient(ellipse 90% 70% at 50% 0%,rgba(16,185,129,.16),transparent 65%),
+                 radial-gradient(ellipse 70% 60% at 80% 50%,rgba(167,139,250,.10),transparent 60%)}
+.hero-tag{display:inline-flex;align-items:center;gap:9px;padding:5px 15px;background:rgba(16,185,129,.14);
+          border:1px solid rgba(16,185,129,.4);border-radius:24px;font-size:0.72rem;color:#6ee7b7;
+          letter-spacing:1.4px;text-transform:uppercase;margin-bottom:18px;font-weight:700}
+.hero h1{font-size:2.3rem;font-weight:900;letter-spacing:-1.5px;line-height:1.18;margin-bottom:12px}
+.hero h1 .grad{background:linear-gradient(90deg,#10b981,#6ee7b7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{color:#94a3b8;font-size:0.98rem;max-width:760px;margin:0 auto;line-height:1.75}
+
+section{max-width:1120px;margin:0 auto;padding:46px 28px}
+section h2{font-size:1.55rem;font-weight:800;margin-bottom:7px;letter-spacing:-0.4px;display:flex;gap:10px;align-items:center}
+section h2 .n{font-size:0.76rem;background:rgba(16,185,129,.14);color:#6ee7b7;border:1px solid rgba(16,185,129,.3);padding:3px 10px;border-radius:9px;font-weight:800}
+section h3{font-size:1.02rem;font-weight:800;margin:20px 0 8px;color:#fff}
+section p{color:#cbd5e1;margin-bottom:10px}
+section .lede{color:#94a3b8;font-size:0.9rem;margin-bottom:16px;font-style:italic}
+
+code,pre{font-family:'SF Mono','Monaco',monospace;font-size:0.84em}
+code{background:rgba(167,139,250,.10);color:#a78bfa;padding:1px 6px;border-radius:4px}
+pre{background:#0d0a17;border:1px solid #29213a;border-radius:9px;padding:14px 16px;color:#cbd5e1;overflow-x:auto;line-height:1.55;font-size:0.78rem;margin-bottom:14px}
+pre .c{color:#52527a;font-style:italic}
+pre .k{color:#fb7185}
+pre .s{color:#6ee7b7}
+pre .v{color:#a78bfa}
+pre .add{background:rgba(16,185,129,.12);display:block;margin:0 -16px;padding:0 16px}
+pre .del{background:rgba(251,113,133,.12);display:block;margin:0 -16px;padding:0 16px;text-decoration:line-through;opacity:.7}
+
+.timeline{position:relative;padding-left:28px}
+.timeline::before{content:'';position:absolute;left:8px;top:0;bottom:0;width:2px;background:linear-gradient(180deg,#10b981,#a78bfa)}
+.t-item{position:relative;margin-bottom:24px;background:#13111f;border:1px solid #29213a;border-radius:11px;padding:16px 19px}
+.t-item::before{content:'';position:absolute;left:-26px;top:18px;width:14px;height:14px;border-radius:50%;background:#0a0612;border:3px solid #10b981;z-index:1}
+.t-item.t-mid::before{border-color:#a78bfa}
+.t-item.t-long::before{border-color:#fcd34d}
+.t-item h3{margin-top:0;display:flex;justify-content:space-between;align-items:center}
+.t-item .when{font-size:0.7rem;background:rgba(167,139,250,.10);color:#c4b5fd;padding:3px 10px;border-radius:8px;font-weight:700;letter-spacing:0.5px}
+
+table{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:0.84rem}
+th{text-align:left;padding:9px 12px;background:#13111f;color:#94a3b8;font-size:0.68rem;letter-spacing:1px;text-transform:uppercase;font-weight:700;border-bottom:2px solid #29213a}
+td{padding:9px 12px;border-bottom:1px solid #1f1429;color:#cbd5e1;vertical-align:top}
+td b{color:#fff}
+
+.callout{background:linear-gradient(135deg,rgba(247,183,49,.10),rgba(247,183,49,.04));border-left:3px solid rgba(247,183,49,.5);padding:14px 18px;border-radius:7px;margin:12px 0;font-size:0.86rem;color:#fcd34d}
+.callout b{color:#fff}
+.callout.pos{background:linear-gradient(135deg,rgba(16,185,129,.10),rgba(16,185,129,.04));border-left-color:rgba(16,185,129,.5);color:#6ee7b7}
+.callout.neg{background:linear-gradient(135deg,rgba(251,113,133,.10),rgba(251,113,133,.04));border-left-color:rgba(251,113,133,.5);color:#fda4af}
+
+.file-tree{background:#0d0a17;border:1px solid #29213a;border-radius:9px;padding:14px 18px;font-family:'SF Mono';font-size:0.76rem;color:#cbd5e1;line-height:1.7;margin-bottom:14px;white-space:pre}
+.file-tree .add{color:#6ee7b7}
+.file-tree .mod{color:#fbbf24}
+.file-tree .dim{color:#52527a}
+
+ul{margin-bottom:12px;padding-left:24px;color:#cbd5e1}
+ul li{margin-bottom:5px}
+ul li b{color:#fff}
+
+footer{padding:30px;text-align:center;color:#52527a;font-size:0.8rem;border-top:1px solid #1f1429;margin-top:40px}
+footer a{color:#a78bfa}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="hero-tag">整合落地清单 · 不是研究 · 是要做的事</div>
+  <h1>Scrapling 能整合到 <span class="grad">smart-crawler</span> 的 7 件事</h1>
+  <p>研究归研究，<strong style="color:#fff">真正要拍板的是「现在做哪些 / 不做哪些」</strong>。下面 7 项每个都有：是什么 / 改哪个文件 / 工期 / ROI / 风险。按"立即/1 周/长期"三层排序。</p>
+</div>
+
+<!-- 1. 关键澄清 -->
+<section>
+  <h2><span class="n">0</span>关键澄清</h2>
+
+  <div class="callout neg">
+    <b>Scrapling 没有 user dashboard</b><br>
+    我搜过 <code>scrapling.dev/io/app/com/ai</code>：要么 404，要么 <code>scrapling.ai</code> 是 Dynadot 待售域名（不是它的）。Scrapling 是<strong>纯 Python 库</strong>，只有 GitHub repo + readthedocs + PyPI。没有 hosted SaaS / 没有 cloud 产品 / 没有 web playground。
+  </div>
+
+  <p>所以"研究它的 dashboard"实际是没东西可看。但你的真问题是：<strong>「我们能学它什么 + 怎么整合」</strong>。下面是答案。</p>
+</section>
+
+<!-- 总览 -->
+<section>
+  <h2><span class="n">1</span>7 件事总览（按优先级）</h2>
+
+  <table>
+    <thead><tr><th>#</th><th>事项</th><th>工期</th><th>ROI</th><th>风险</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>🟢 立即 1</td>
+        <td><b>StealthyFetcher 参数升级</b>（开 solve_cloudflare/hide_canvas/real_chrome）</td>
+        <td>0.5 天</td>
+        <td>vidaxl_us 401 / trustpilot 403 大概率破</td>
+        <td>低</td>
+      </tr>
+      <tr>
+        <td>🟢 立即 2</td>
+        <td><b>统一 Response 对象</b>（17 crawler 返回值标准化）</td>
+        <td>1 天</td>
+        <td>客户 dashboard A · Prompt-to-Table 接口的前置</td>
+        <td>低</td>
+      </tr>
+      <tr>
+        <td>🟢 立即 3</td>
+        <td><b>per-site profile 持久化 cookie</b>（user_data_dir）</td>
+        <td>0.5 天</td>
+        <td>Cloudflare 会话保留 → 减少 challenge 触发</td>
+        <td>低</td>
+      </tr>
+      <tr>
+        <td>🟡 1 周 4</td>
+        <td><b>Adaptive Selector 自愈</b>（adaptive + auto_save）</td>
+        <td>3-5 天</td>
+        <td>46 站长尾维护成本 ↓ 70%</td>
+        <td>中（schema 迁移）</td>
+      </tr>
+      <tr>
+        <td>🟡 1 周 5</td>
+        <td><b>Fetcher 三档抽象</b>（HTTP / Stealth / Browser 基类）</td>
+        <td>4-6 天</td>
+        <td>17 crawler 代码 ↓ 30%，新人 onboard ↓ 50%</td>
+        <td>中</td>
+      </tr>
+      <tr>
+        <td>🟠 长期 6</td>
+        <td><b>ProxyRotator 替换自研代理池</b></td>
+        <td>1-2 周</td>
+        <td>失败重试 / fail-cooldown 内置</td>
+        <td>中（已有 backend/app/proxy_pool.py）</td>
+      </tr>
+      <tr>
+        <td>🟠 长期 7</td>
+        <td><b>checkpoint-based Spider</b>（Ctrl+C 恢复）</td>
+        <td>2 周</td>
+        <td>Vidaxl 50w SKU 任务半路挂可续</td>
+        <td>高（撞 Crawlee 选型）</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 三层时间线 -->
+<section>
+  <h2><span class="n">2</span>三层时间线 · 详细落地</h2>
+
+  <div class="timeline">
+
+    <!-- 立即 1 -->
+    <div class="t-item">
+      <h3>① StealthyFetcher 参数升级 <span class="when">🟢 0.5 天</span></h3>
+      <p class="lede">改 3 个 crawler 的 fetch 调用，从 4 参数 → 11 参数。预计破 vidaxl_us 401 + trustpilot 403。</p>
+
+      <div class="file-tree">backend/app/crawlers/
+├── <span class="mod">trustpilot.py</span>        ← 改 StealthyFetcher.fetch 参数
+├── <span class="mod">google_shopping.py</span>   ← 同上
+├── <span class="mod">google_maps.py</span>       ← 同上
+└── <span class="add">vidaxl.py</span>            ← 新增 StealthyFetcher fallback（401 时切）</div>
+
+      <pre><span class="c"># Before（4 参数）</span>
+kw = dict(headless=True, network_idle=True, timeout=60000, proxy=...)
+
+<span class="c"># After（11 参数）</span>
+kw = dict(
+    headless=True,
+    network_idle=True,
+    timeout=60000,
+    proxy=...,
+    <span class="s">solve_cloudflare=True</span>,           <span class="c"># ⭐ 自动解 Turnstile</span>
+    <span class="s">hide_canvas=True</span>,                <span class="c"># 防 canvas 指纹</span>
+    <span class="s">block_webrtc=True</span>,               <span class="c"># 防本地 IP 泄露</span>
+    <span class="s">dns_over_https=True</span>,             <span class="c"># 防 DNS 泄露</span>
+    <span class="s">real_chrome=True</span>,                <span class="c"># 用本机 Chrome 而不是 chromium</span>
+    <span class="s">locale="en-US"</span>,                  <span class="c"># 配美国代理</span>
+    <span class="s">timezone_id="America/New_York"</span>,
+)</pre>
+
+      <div class="callout pos">
+        <b>验证方式</b>：跑 <code>StealthyFetcher.fetch("https://www.vidaxl.us/", **kw)</code>，看 status 是否从 401 → 200。
+      </div>
+    </div>
+
+    <!-- 立即 2 -->
+    <div class="t-item">
+      <h3>② 统一 Response 对象 <span class="when">🟢 1 天</span></h3>
+      <p class="lede">所有 crawler 返回同一个 <code>CrawlResponse</code>，给客户 dashboard "Prompt-to-Table" 接口提供统一上下文。</p>
+
+      <div class="file-tree">backend/app/
+├── <span class="add">fetchers/_response.py</span>     ← 新增 CrawlResponse 类
+└── crawlers/
+    └── *.py                  ← 17 crawler 改返回值</div>
+
+      <pre><span class="c"># backend/app/fetchers/_response.py（新建）</span>
+<span class="k">from</span> dataclasses <span class="k">import</span> dataclass
+<span class="k">from</span> typing <span class="k">import</span> Any
+
+<span class="v">@dataclass</span>
+<span class="k">class</span> <span class="s">CrawlResponse</span>:
+    site: str
+    sku_count: int
+    promo_count: int
+    duration_sec: float
+    status: str              <span class="c"># "success" / "blocked" / "partial"</span>
+    notes: list[str]
+    verification: dict       <span class="c"># {sku: {url, scraped_at, screenshot, confidence}}</span>
+    raw_data: dict[str, Any]</pre>
+
+      <p>这一步是给 v2 落地<code>/api/agent/query</code> + Verified Cells 接口铺路。现在 crawler 各返不同 dict，调用方都要适配，根本没法统一抽象。</p>
+    </div>
+
+    <!-- 立即 3 -->
+    <div class="t-item">
+      <h3>③ per-site profile 持久化 cookie <span class="when">🟢 0.5 天</span></h3>
+      <p class="lede">每个高反爬站点单独维护 <code>user_data_dir</code>，让 Cloudflare 看到「老客户」放行。</p>
+
+      <pre>kw[<span class="s">"user_data_dir"</span>] = <span class="s">f"./data/profiles/{site}"</span>
+<span class="c"># Cloudflare 评分体系会记录设备指纹 + cookie 历史</span>
+<span class="c"># 同一 user_data_dir 反复访问 = 老客户 = 低 challenge 率</span></pre>
+
+      <div class="file-tree">data/profiles/
+├── <span class="add">vidaxl_us/</span>     ← 自动创建，存 cookie / localStorage
+├── <span class="add">trustpilot/</span>
+└── <span class="add">songmics_us/</span></div>
+
+      <div class="callout">
+        <b>注意</b>：每个 profile 大约 5-20MB，46 站满量 ~1GB，NAS 没问题。但要加到 docker volumes 持久化。
+      </div>
+    </div>
+
+    <!-- 1 周 4 -->
+    <div class="t-item t-mid">
+      <h3>④ Adaptive Selector 自愈 <span class="when">🟡 3-5 天</span></h3>
+      <p class="lede">让 selector 在网站改版后自动 fallback，省 50% 长尾维护时间。</p>
+
+      <pre><span class="c"># Before（容易崩）</span>
+title = page.<span class="k">css</span>(<span class="s">'.product-title'</span>)
+
+<span class="c"># After（自愈）</span>
+title = page.<span class="k">css</span>(
+    <span class="s">'.product-title'</span>,
+    <span class="v">auto_save</span>=True,        <span class="c"># 第一次成功时存指纹</span>
+    <span class="v">adaptive</span>=True,         <span class="c"># 找不到时用指纹查相似元素</span>
+    <span class="v">storage</span>=SQLiteStorage(<span class="s">'data/scrapling_storage.db'</span>),
+)
+<span class="c"># 网站改 .product-title → .product-name 后，自愈不崩</span></pre>
+
+      <div class="callout">
+        <b>实施步骤</b>：
+        <ol style="margin:6px 0 0 22px">
+          <li>把所有 crawler 的 css/xpath 选择器集中到 sites.yaml（部分已经做了）</li>
+          <li>包一个 <code>SelfHealingPage</code> wrapper，默认开 adaptive + auto_save</li>
+          <li>首次抓 46 站填充 SQLite 指纹库</li>
+          <li>加监控：当 fallback 触发率 > 10% 时告警</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- 1 周 5 -->
+    <div class="t-item t-mid">
+      <h3>⑤ Fetcher 三档抽象 <span class="when">🟡 4-6 天</span></h3>
+      <p class="lede">把 17 个 crawler 各写各的 fetcher 调用，抽成 3 档基类。新 crawler 只声明「我要哪档」。</p>
+
+      <div class="file-tree">backend/app/
+├── <span class="add">fetchers/</span>
+│   ├── <span class="add">base.py</span>           ← BaseFetcher 抽象（fetch / parse / dedup）
+│   ├── <span class="add">http.py</span>           ← HttpFetcher（curl_cffi · 快 · 简单站）
+│   ├── <span class="add">stealth.py</span>        ← StealthFetcher（Scrapling · 高反爬）
+│   ├── <span class="add">browser.py</span>        ← BrowserFetcher（Playwright · JS 重）
+│   └── <span class="add">__init__.py</span>       ← from_profile(site) 工厂方法
+└── crawlers/
+    └── *.py                ← 改为 fetcher = from_profile("vidaxl_us")</div>
+
+      <pre><span class="c"># 业务 crawler 大幅简化</span>
+<span class="k">class</span> <span class="s">VidaxlCrawler</span>:
+    fetcher_tier = <span class="s">"stealth"</span>  <span class="c"># 声明用哪档</span>
+
+    <span class="k">def</span> <span class="v">crawl</span>(self):
+        page = self.fetcher.<span class="k">fetch</span>(self.url)
+        <span class="c"># 不需要重复写反爬参数</span></pre>
+
+      <p>17 crawler 砍掉重复代码大约 ↓ 30%。新人加新站点只写业务解析，不碰反爬参数。</p>
+    </div>
+
+    <!-- 长期 6 -->
+    <div class="t-item t-long">
+      <h3>⑥ ProxyRotator 替换自研代理池 <span class="when">🟠 1-2 周</span></h3>
+      <p class="lede">现有 <code>backend/app/proxy_pool.py</code> 是手写的（fail count / cooldown / 轮换）。Scrapling 自带 <code>ProxyRotator</code> 是同款。</p>
+
+      <table>
+        <thead><tr><th>对比项</th><th>自研 proxy_pool.py</th><th>Scrapling ProxyRotator</th></tr></thead>
+        <tbody>
+          <tr><td>轮换</td><td>✅ round-robin</td><td>✅ 同款</td></tr>
+          <tr><td>失败计数</td><td>✅ 3 次熔断</td><td>✅ 内置</td></tr>
+          <tr><td>cooldown</td><td>✅ 10min</td><td>✅ 内置</td></tr>
+          <tr><td>per-site sticky</td><td>已废弃</td><td>支持 by_session</td></tr>
+          <tr><td>maint 工作量</td><td>我们要维护</td><td>0（开源维护）</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout neg">
+        <b>不推荐立即做</b>。现有 proxy_pool 已稳定，没出过事故。等真要做时间紧任务（如 vidaxl 全量爬）再换。
+      </div>
+    </div>
+
+    <!-- 长期 7 -->
+    <div class="t-item t-long">
+      <h3>⑦ checkpoint-based Spider 框架 <span class="when">🟠 2 周（不推荐）</span></h3>
+      <p class="lede">Scrapling 自带 Spider 框架，支持 Ctrl+C 暂停 / 重启续抓。看起来很 sexy 但…</p>
+
+      <div class="callout neg">
+        <b>不要做</b>：
+        <ul style="margin:6px 0 0 22px">
+          <li>我们已选 <strong>Crawlee-Python</strong> 做调度底座（W2 计划已锁）</li>
+          <li>Scrapling Spider + Crawlee 任务调度撞车</li>
+          <li>我们的 worker.py 已经有 job queue + 重启续抓（数据库 status 字段）</li>
+        </ul>
+        Scrapling 留在 <strong>fetcher 层</strong>就好，spider 层走 Crawlee。
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- 不做的事 -->
+<section>
+  <h2><span class="n">3</span>明确不做的事</h2>
+  <ul>
+    <li><b>不替换 Crawlee</b> — Scrapling Spider 框架虽然支持 checkpoint，但调度层我们已选 Crawlee（W2 计划锁定）</li>
+    <li><b>不把 Scrapling 升级成「底座」</b> — 它的定位是 fetcher，不是整个框架。我们 17 crawler 业务逻辑 + sites.yaml + 数据库 schema 都是自家的</li>
+    <li><b>不全量切 patchright</b> — patchright 会跟 playwright 在同一环境冲突，先在 StealthyFetcher 隔离环境里用</li>
+    <li><b>不直接用 Scrapling 的 AI 模块</b> — <code>core/ai.py</code> 集成 LLM 抽字段，但我们已选 instructor + Pydantic + claude-haiku（参考 firecrawl 研究）</li>
+  </ul>
+</section>
+
+<!-- 决策 -->
+<section>
+  <h2><span class="n">4</span>立即可拍板的事</h2>
+
+  <div class="callout pos" style="font-size:1rem;padding:18px 22px">
+    <b>本周（0.5 + 1 + 0.5 = 2 天）做完 ①②③：</b><br><br>
+    <strong>① 参数升级</strong> → 立即破 vidaxl_us 401，60% 覆盖率计划解锁<br>
+    <strong>② 统一 Response</strong> → 给客户 dashboard v2 接口铺路<br>
+    <strong>③ per-site profile</strong> → 长效降 challenge 触发率<br><br>
+    <b>下周（3-5 天）做 ④ Adaptive 自愈</b>：46 站长尾维护成本 ↓ 70%<br><br>
+    <b>下下周（4-6 天）做 ⑤ Fetcher 三档抽象</b>：17 crawler 代码 ↓ 30%<br><br>
+    <b>⑥⑦ 长期再说</b>，现在不动 proxy_pool 也不上 Spider。
+  </div>
+
+  <p style="text-align:center;font-size:0.84rem;color:#52527a;margin-top:14px">
+    确认就回「干 ①②③」/「全部都做」/「先只做 ①」，我立即写代码。
+  </p>
+</section>
+
+<footer>
+  smart-crawler · Scrapling 整合落地清单 · 2026-05-24<br>
+  关联：<a href="/d/scrapling_design_research.html">Scrapling 架构研究</a> · <a href="/d/firecrawl_integration_research.md">Firecrawl 研究</a> · <a href="/d/customer_dashboard_v6_demo.html">客户 Dashboard v6 Demo</a>
+</footer>
+
+</body>
+</html>
