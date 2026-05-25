@@ -111,8 +111,5 @@ sites:
   # ========== Article.com（US/CA 独立家居 · W2）==========
   - {site: article_us, brand: Article, country: US, url: "https://www.article.com/", platform: article, proxy_tier: none, max_products: 1000}
 
-  # ========== Houzz（高端家居社区 · W2）==========
-  - {site: houzz_us, brand: Houzz, country: US, url: "https://www.houzz.com/", platform: houzz, proxy_tier: residential, max_products: 1000}
-
   # ========== eBay.com（家居 marketplace · W3）==========
   - {site: ebay_us, brand: eBay, country: US, url: "https://www.ebay.com/", platform: ebay, proxy_tier: residential, max_products: 1000}
