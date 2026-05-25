@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AT&T 61 IP 接入 iMac · 完整教程</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,"PingFang SC","Segoe UI",sans-serif}
+body{background:#0a0612;color:#e5e7eb;font-size:14.5px;line-height:1.75}
+a{color:#a78bfa}
+.hero{padding:50px 30px;text-align:center;background:radial-gradient(ellipse 90% 70% at 50% 0%,rgba(167,139,250,.18),transparent 65%)}
+.hero h1{font-size:2.1rem;font-weight:900;letter-spacing:-1px;line-height:1.18}
+.hero h1 .grad{background:linear-gradient(90deg,#a78bfa,#f472b6);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{color:#94a3b8;font-size:0.96rem;max-width:760px;margin:8px auto 0}
+section{max-width:1020px;margin:0 auto;padding:36px 26px}
+section h2{font-size:1.4rem;font-weight:800;margin-bottom:8px;display:flex;gap:10px;align-items:center}
+section h2 .n{font-size:0.72rem;background:rgba(167,139,250,.14);color:#c4b5fd;border:1px solid rgba(167,139,250,.3);padding:3px 10px;border-radius:9px;font-weight:800}
+section h3{font-size:1rem;font-weight:800;margin:16px 0 8px;color:#fff}
+section .lede{color:#94a3b8;font-size:0.9rem;margin-bottom:14px;font-style:italic}
+code{background:rgba(167,139,250,.10);color:#a78bfa;padding:1px 6px;border-radius:4px;font-family:'SF Mono',monospace;font-size:0.9em}
+pre{background:#0d0a17;border:1px solid #29213a;border-radius:9px;padding:14px 18px;color:#cbd5e1;overflow-x:auto;line-height:1.55;font-size:0.84rem;margin-bottom:14px;font-family:'SF Mono',monospace;white-space:pre-wrap}
+pre .c{color:#52527a;font-style:italic} pre .k{color:#fb7185} pre .s{color:#6ee7b7} pre .v{color:#a78bfa}
+.step{background:#13111f;border:1px solid #29213a;border-radius:11px;padding:18px 22px;margin-bottom:14px}
+.step .num{display:inline-block;width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#a78bfa,#f472b6);color:#fff;text-align:center;line-height:28px;font-weight:900;margin-right:10px;font-size:14px}
+.callout{padding:13px 17px;border-radius:8px;margin:12px 0;font-size:0.86rem;line-height:1.7}
+.callout.pos{background:linear-gradient(135deg,rgba(16,185,129,.10),rgba(16,185,129,.04));border-left:3px solid rgba(16,185,129,.5);color:#6ee7b7}
+.callout.warn{background:linear-gradient(135deg,rgba(247,183,49,.10),rgba(247,183,49,.04));border-left:3px solid rgba(247,183,49,.5);color:#fcd34d}
+.callout.neg{background:linear-gradient(135deg,rgba(251,113,133,.10),rgba(251,113,133,.04));border-left:3px solid rgba(251,113,133,.5);color:#fda4af}
+.callout b{color:#fff}
+ul{padding-left:22px;color:#cbd5e1;line-height:1.85}
+table{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:0.84rem}
+th{text-align:left;padding:9px 12px;background:#13111f;color:#94a3b8;font-size:0.66rem;letter-spacing:1px;text-transform:uppercase;font-weight:700}
+td{padding:9px 12px;border-bottom:1px solid #1f1429;color:#cbd5e1}
+td b{color:#fff}
+footer{padding:30px;text-align:center;color:#52527a;font-size:0.8rem;border-top:1px solid #1f1429;margin-top:34px}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>AT&T 61 IP × iMac · <span class="grad">完整教程</span></h1>
+  <p>108.95.61.128/26 → iMac (192.168.1.91, Wi-Fi en0) → 61 公网出口</p>
+</div>
+
+<section>
+  <h2><span class="n">📋</span>当前状态</h2>
+  <table>
+    <tbody>
+      <tr><td>iMac IP（私网）</td><td><b>192.168.1.91</b></td></tr>
+      <tr><td>iMac 网卡</td><td><b>en0（Wi-Fi）</b></td></tr>
+      <tr><td>iMac 当前 MAC</td><td><b>76:2a:f0:73:61:3c</b>（macOS 随机化的，每个网络不同）</td></tr>
+      <tr><td>iMac 真实 MAC</td><td><b>2c:ca:16:4e:d7:4f</b></td></tr>
+      <tr><td>AT&T modem IP</td><td><b>192.168.1.254</b></td></tr>
+      <tr><td>给的 IP block</td><td><b>108.95.61.128/26</b>（61 个可用）</td></tr>
+      <tr><td>Gateway</td><td><b>108.95.61.190</b></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2><span class="n">1</span>Step 1 · 关掉 iMac 的 Wi-Fi MAC 随机化</h2>
+  <p class="lede">不然每次连 Wi-Fi MAC 变，AT&T 路由路由不到 iMac。</p>
+
+  <div class="step">
+    <p>iMac 上：</p>
+    <ul>
+      <li>① 系统设置 → Wi-Fi</li>
+      <li>② 当前连接的 Wi-Fi 右边 <code>...</code> 详细信息</li>
+      <li>③ <b>"私人 Wi-Fi 地址"</b> 关闭 OR 选 "固定"</li>
+      <li>④ 看到 MAC 变成真实的 <code>2c:ca:16:4e:d7:4f</code> 即成功</li>
+    </ul>
+    <div class="callout warn">关掉后 iMac 会断 Wi-Fi 重连一次，IP 可能变。重连后再 SSH 验证。</div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">2</span>Step 2 · 进 AT&T modem 后台开 "Public Subnet" 模式</h2>
+  <p class="lede">让 modem 把整个 /26 段路由到 iMac MAC（不要 NAT）。</p>
+
+  <div class="step">
+    <p><b>路径</b>（AT&T BGW210/BGW320/Pace 5268 通用）：</p>
+    <ul>
+      <li>① 浏览器开 <code>http://192.168.1.254</code></li>
+      <li>② 登录（密码在 modem 底标 "Device Access Code"）</li>
+      <li>③ 顶部菜单 <b>Settings → LAN → DHCP</b></li>
+      <li>④ 找 <b>"Public Subnet"</b>（有的型号叫 "Cascaded Router" 或 "Supplementary Network"）</li>
+      <li>⑤ 启用 Public Subnet</li>
+      <li>⑥ 把 <b>Subnet Range</b> 填 <code>108.95.61.128 / 255.255.255.192</code></li>
+      <li>⑦ <b>Gateway</b> 填 <code>108.95.61.190</code></li>
+      <li>⑧ Allowed IPs: 全选 .129~.189</li>
+      <li>⑨ <b>Default Server</b> 选 iMac 的 MAC <code>2c:ca:16:4e:d7:4f</code>（或 IP 192.168.1.91）</li>
+      <li>⑩ Save · modem 自动重启</li>
+    </ul>
+    <div class="callout neg">
+      <b>如果 modem 不支持 Public Subnet</b>：换 "IP Passthrough" 模式，但只能给 iMac 1 个公网 IP。或者打 AT&T 客服开 "Cascaded Router" 模式 → 给整个 /26。
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">3</span>Step 3 · iMac 上配 61 个 IP alias</h2>
+  <p class="lede">modem 重启后，iMac 应该能拿到 /26 段一个 IP。然后手动加另外 60 个 alias。</p>
+
+  <div class="step">
+    <p><b>iMac 上跑这个 (Terminal)</b>：</p>
+    <pre><span class="c"># 取消之前 192.168.1.91 的 DHCP，改静态拿一个 /26 IP</span>
+<span class="c"># 先验证 modem 配好了 - 看 iMac 能不能拿到公网 IP</span>
+ifconfig en0 | grep <span class="s">"inet "</span>
+<span class="c"># 应该看到 108.95.61.x 这样的 IP（如果还是 192.168.1.91，说明 modem 没配好）</span>
+
+<span class="c"># 加 60 个 alias（假设第 1 个 IP 已经是 .129）</span>
+<span class="k">for</span> i <span class="k">in</span> {130..189}; <span class="k">do</span>
+    sudo ifconfig en0 alias 108.95.61.<span class="v">$i</span> 255.255.255.192
+<span class="k">done</span>
+
+<span class="c"># 验证：应该看到 61 个 inet 行</span>
+ifconfig en0 | grep -c <span class="s">"inet "</span>
+
+<span class="c"># 测每个出口 IP 是否真生效（用其中一个 IP 出去打 ipify）</span>
+curl --interface 108.95.61.150 https://api.ipify.org
+<span class="c"># 应该返回 108.95.61.150（说明这个 IP 真的能出 internet）</span></pre>
+  </div>
+
+  <div class="callout warn">
+    <b>持久化</b>：上面 ifconfig alias 重启 iMac 后会丢。要 launchd 持久化。我装 brew 后给你装一个 plist。
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">4</span>Step 4 · 我接管 · 起 Python 多 IP 代理</h2>
+  <p class="lede">iMac 配好 61 alias 后，告诉我，我 ssh 进去自动跑：</p>
+
+  <div class="step">
+    <ul>
+      <li>① <code>brew install python@3.12</code> 装 Python（或用系统自带的）</li>
+      <li>② 拉 aiohttp 多 IP 代理脚本</li>
+      <li>③ 起 61 个 proxy listener，分别 bind 不同出口 IP</li>
+      <li>④ 加 launchd 开机自启</li>
+      <li>⑤ NAS proxies.txt 加 61 行 <code>http://192.168.1.91:8001</code> ... <code>http://192.168.1.91:8061</code></li>
+      <li>⑥ smart-crawler 重启自动用上 61 美国 IP</li>
+    </ul>
+    <p>这步 100% 我做，你只需要完成 Step 1+2+3。</p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">5</span>验证（最终目标）</h2>
+  <pre><span class="c"># 在 NAS 或你电脑上跑，验证 50 个出口 IP 都能用</span>
+<span class="k">for</span> i <span class="k">in</span> {129..189}; <span class="k">do</span>
+    port=$((8000 + i - 128))
+    ip=$(curl -s -x http://192.168.1.91:$port https://api.ipify.org --max-time 5)
+    echo <span class="s">"port $port -&gt; $ip"</span>
+<span class="k">done</span>
+
+<span class="c"># 期望输出</span>
+<span class="c"># port 8001 -&gt; 108.95.61.129</span>
+<span class="c"># port 8002 -&gt; 108.95.61.130</span>
+<span class="c"># ...</span>
+<span class="c"># port 8061 -&gt; 108.95.61.189</span></pre>
+</section>
+
+<section>
+  <h2><span class="n">⚠️</span>常见坑</h2>
+  <ul>
+    <li><b>modem 不在 Public Subnet 选项</b> → 打 800-288-2020 让 AT&T 帮开 "Cascaded Router" 或 "Routed Public Subnet"</li>
+    <li><b>iMac 还是私网 IP</b> → modem 配错或没重启。重启 modem（拔电 30 秒）再试</li>
+    <li><b>alias 加了但 curl --interface 失败</b> → modem 还在做 SNAT，公网 IP 被改写。检查 modem 的 "NAT/Firewall" 设置改 Pass-Through</li>
+    <li><b>iMac 睡眠后断网</b> → 系统设置 → 节能 → "防止电脑自动睡眠"</li>
+  </ul>
+</section>
+
+<footer>
+  smart-crawler · 61 IP 部署指南 · 2026-05-25 · 完成 Step 1-3 后告诉我，我跑 Step 4
+</footer>
+</body>
+</html>
