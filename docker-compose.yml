@@ -31,7 +31,8 @@ services:
     volumes:
       - ./data:/app/data            # 数据持久化（迁移脚本 / SQLite 备份等）
       - ./backend:/app/backend:ro   # 热加载后端代码（不必 rebuild image）
-      - ./deliverables:/app/deliverables:ro   # /d/* 路由提供静态托管，替代外部 CDN
+      - ./frontend:/app/frontend:ro # 热加载前端（home.html / index.html）
+      - ./deliverables:/app/deliverables   # /d/* 路由提供静态托管，替代外部 CDN
     environment:
       # 连接 postgres 服务；服务名 postgres 即容器网络内的主机名
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
@@ -42,7 +43,12 @@ services:
       - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
       - HOMARY_LIMIT=${HOMARY_LIMIT:-2000}
       - COSTWAY_PAGES_PER_CAT=${COSTWAY_PAGES_PER_CAT:-50}
-      - VIDAXL_LIMIT=${VIDAXL_LIMIT:-30000}
+      - VIDAXL_LIMIT=${VIDAXL_LIMIT:-3000}
+      - IKEA_LIMIT=${IKEA_LIMIT:-200}
+      - BESTBUY_LIMIT=${BESTBUY_LIMIT:-200}
+      - EBAY_LIMIT=${EBAY_LIMIT:-200}
+      - OTTO_LIMIT=${OTTO_LIMIT:-200}
+      - TARGET_LIMIT=${TARGET_LIMIT:-200}
       # LLM 网关 —— flatkey.ai Anthropic 兼容端点（2026-05-21 更新）
       - OPENAI_API_KEY=${OPENAI_API_KEY:-sk-1f250226e5c9469ce237769f172636ea54f0179227c57ad30f567302267bd383}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
@@ -64,7 +70,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./backend:/app/backend:ro                 # 热加载新 crawler 代码
-      - ./deliverables:/app/deliverables:ro
+      - ./deliverables:/app/deliverables
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
       - RUN_SCHEDULER=0
@@ -72,7 +78,12 @@ services:
       - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
       - HOMARY_LIMIT=${HOMARY_LIMIT:-2000}
       - COSTWAY_PAGES_PER_CAT=${COSTWAY_PAGES_PER_CAT:-50}
-      - VIDAXL_LIMIT=${VIDAXL_LIMIT:-30000}
+      - VIDAXL_LIMIT=${VIDAXL_LIMIT:-3000}
+      - IKEA_LIMIT=${IKEA_LIMIT:-200}
+      - BESTBUY_LIMIT=${BESTBUY_LIMIT:-200}
+      - EBAY_LIMIT=${EBAY_LIMIT:-200}
+      - OTTO_LIMIT=${OTTO_LIMIT:-200}
+      - TARGET_LIMIT=${TARGET_LIMIT:-200}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.flatkey.ai}
       - LLM_MODEL=${LLM_MODEL:-claude-haiku-4-5}
@@ -88,7 +99,12 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
       - RUN_SCHEDULER=0
       - WORKER_ID=worker-2
-      - VIDAXL_LIMIT=${VIDAXL_LIMIT:-30000}
+      - VIDAXL_LIMIT=${VIDAXL_LIMIT:-3000}
+      - IKEA_LIMIT=${IKEA_LIMIT:-200}
+      - BESTBUY_LIMIT=${BESTBUY_LIMIT:-200}
+      - EBAY_LIMIT=${EBAY_LIMIT:-200}
+      - OTTO_LIMIT=${OTTO_LIMIT:-200}
+      - TARGET_LIMIT=${TARGET_LIMIT:-200}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.flatkey.ai}
       - LLM_MODEL=${LLM_MODEL:-claude-haiku-4-5}
@@ -100,7 +116,12 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
       - RUN_SCHEDULER=0
       - WORKER_ID=worker-3
-      - VIDAXL_LIMIT=${VIDAXL_LIMIT:-30000}
+      - VIDAXL_LIMIT=${VIDAXL_LIMIT:-3000}
+      - IKEA_LIMIT=${IKEA_LIMIT:-200}
+      - BESTBUY_LIMIT=${BESTBUY_LIMIT:-200}
+      - EBAY_LIMIT=${EBAY_LIMIT:-200}
+      - OTTO_LIMIT=${OTTO_LIMIT:-200}
+      - TARGET_LIMIT=${TARGET_LIMIT:-200}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.flatkey.ai}
       - LLM_MODEL=${LLM_MODEL:-claude-haiku-4-5}
@@ -112,7 +133,12 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
       - RUN_SCHEDULER=0
       - WORKER_ID=worker-4
-      - VIDAXL_LIMIT=${VIDAXL_LIMIT:-30000}
+      - VIDAXL_LIMIT=${VIDAXL_LIMIT:-3000}
+      - IKEA_LIMIT=${IKEA_LIMIT:-200}
+      - BESTBUY_LIMIT=${BESTBUY_LIMIT:-200}
+      - EBAY_LIMIT=${EBAY_LIMIT:-200}
+      - OTTO_LIMIT=${OTTO_LIMIT:-200}
+      - TARGET_LIMIT=${TARGET_LIMIT:-200}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.flatkey.ai}
       - LLM_MODEL=${LLM_MODEL:-claude-haiku-4-5}

@@ -99,9 +99,15 @@ def product_dict(p: Product) -> dict:
 
 # ---------- 站点概览（R-001 / R-002 / §14.2）----------
 @router.get("/sites")
-def list_sites(db: Session = Depends(get_db)):
+def list_sites(
+    db: Session = Depends(get_db),
+    include_hidden: bool = Query(default=False, description="是否包含 hidden_sites（默认排除）"),
+):
+    hidden = _load_hidden_sites() if not include_hidden else set()
     out = []
     for s in db.query(Site).all():
+        if s.site in hidden:
+            continue
         d = site_dict(s)
         d["sku_count"] = db.query(Product).filter(Product.site == s.site).count()
         d["spu_count"] = (db.query(Product.spu)
@@ -634,25 +640,50 @@ def proxy_reload():
 
 
 # ---------- 数据覆盖率（3B 仪表盘）----------
-# 估算全量 SKU 数（基于 sitemap 实测或经验）；为 0 表示未知
+# 估算全量 SKU 数 —— **校准为现实可达上限**，不是站点真实全量
+# 现实约束：Vidaxl 直连 401，需住宅代理 + 反爬，每日单站可稳定抓 5k-15k
+# 旧的"30-50万"是站点理论总量，但我们当前未走 API 授权路径，达不到
+# 2026-05-27 aosen 反馈后校准：以"24h 内能稳定产出的上限"为 estimated_full
 _FULL_ESTIMATES: dict[str, int] = {
-    # Vidaxl: sitemap 实测每站 26 个 product sitemap × ~20k URL ≈ 30-50 万
-    "vidaxl_de": 500000, "vidaxl_uk": 450000, "vidaxl_fr": 450000,
-    "vidaxl_es": 400000, "vidaxl_it": 400000, "vidaxl_nl": 350000,
-    "vidaxl_pl": 350000, "vidaxl_pt": 350000, "vidaxl_ro": 300000,
-    "vidaxl_ie": 300000, "vidaxl_us": 300000, "vidaxl_ca": 0,  # 业务暂停
+    # Vidaxl（住宅代理 + sitemap 限流，单站日上限约 12-15k）
+    "vidaxl_de": 12000, "vidaxl_uk": 8000, "vidaxl_fr": 8000,
+    "vidaxl_es": 12000, "vidaxl_it": 8000, "vidaxl_nl": 6000,
+    "vidaxl_pl": 8000, "vidaxl_pt": 12000, "vidaxl_ro": 12000,
+    "vidaxl_ie": 8000, "vidaxl_us": 8000, "vidaxl_ca": 6000,
     # SONGMICS: Shopify 一次拉完，已是全量
     # Costway: API 分页采集，已接近全量
     # 其他：缺数据，0 = 不计入覆盖率
 }
 
 
+def _load_hidden_sites() -> set[str]:
+    """从 sites.yaml 读 settings.hidden_sites，dashboard 不展示这些站。"""
+    import os
+    import yaml
+    yaml_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "sites.yaml",
+    )
+    try:
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        return set(((cfg.get("settings") or {}).get("hidden_sites") or []))
+    except Exception:
+        return set()
+
+
 @router.get("/coverage")
-def data_coverage(db: Session = Depends(get_db)):
+def data_coverage(
+    db: Session = Depends(get_db),
+    include_hidden: bool = Query(default=False, description="是否包含 hidden_sites（默认排除）"),
+):
     """每站点数据覆盖率：当前 SKU / 估算全量。"""
     from ..models import Site as SiteModel
+    hidden = _load_hidden_sites() if not include_hidden else set()
     rows = []
     for s in db.query(SiteModel).all():
+        if s.site in hidden:
+            continue
         cur = db.query(Product).filter(Product.site == s.site).count()
         est = _FULL_ESTIMATES.get(s.site, 0)
         pct = round(cur / est * 100, 2) if est > 0 else None
@@ -743,3 +774,49 @@ def billing_usage_detail(api_key_id: int, days: int = 30,
         "key_prefix": (k.key_prefix or "") + "…",
         **get_usage_summary(api_key_id, days),
     }
+
+
+# ---------- Reports：HTML 报表见 /report?site=X · 数据走 /api/sites/{site}/overview ----------
+# （废弃 PDF 链路：删了 /api/reports/list + /api/reports/generate + app/reports.py）
+
+
+# ---------- Influencers · 替代 Apify 红人采集 actor（IG/TikTok/YT/X）----------
+@router.get("/influencers/profile")
+def influencer_profile(platform: str, username: str):
+    from ..influencers import PLATFORMS, fetch_profile
+    if platform not in PLATFORMS:
+        raise HTTPException(400, f"未知平台 {platform}，支持: {','.join(PLATFORMS)}")
+    try:
+        return fetch_profile(platform, username).to_dict()
+    except Exception as e:
+        raise HTTPException(502, f"采集失败 {type(e).__name__}: {e}")
+
+
+@router.get("/influencers/posts")
+def influencer_posts(platform: str, username: str, limit: int = 20):
+    from ..influencers import PLATFORMS, fetch_posts
+    if platform not in PLATFORMS:
+        raise HTTPException(400, f"未知平台 {platform}")
+    try:
+        return [p.to_dict() for p in fetch_posts(platform, username, limit=limit)]
+    except Exception as e:
+        raise HTTPException(502, f"采集失败 {type(e).__name__}: {e}")
+
+
+@router.get("/influencers/full")
+def influencer_full(platform: str, username: str, posts_limit: int = 12):
+    """画像 + 近期帖子，一次返回."""
+    from ..influencers import PLATFORMS, fetch_profile, fetch_posts
+    if platform not in PLATFORMS:
+        raise HTTPException(400, f"未知平台 {platform}")
+    try:
+        profile = fetch_profile(platform, username).to_dict()
+        try:
+            posts = [p.to_dict() for p in fetch_posts(
+                platform, username, limit=posts_limit)]
+        except Exception as e:
+            posts = []
+            profile["posts_error"] = f"{type(e).__name__}: {e}"
+        return {"profile": profile, "posts": posts}
+    except Exception as e:
+        raise HTTPException(502, f"采集失败 {type(e).__name__}: {e}")

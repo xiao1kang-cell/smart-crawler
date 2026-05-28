@@ -109,6 +109,82 @@ input,select{font-family:inherit}
 .cov-tile button{margin-top:8px;width:100%;background:rgba(167,139,250,.10);border:1px solid rgba(167,139,250,.25);color:#c4b5fd;padding:5px;border-radius:6px;font-size:0.72rem;font-weight:600;cursor:pointer}
 .cov-tile button:hover{background:rgba(167,139,250,.20)}
 
+.entry-row{margin-top:16px;cursor:pointer}
+.entry-card{display:flex;align-items:center;gap:14px;background:linear-gradient(135deg,rgba(167,139,250,.12),rgba(59,124,229,.06));border:1px solid rgba(167,139,250,.30);border-radius:14px;padding:14px 18px;transition:all .2s}
+.entry-card:hover{border-color:rgba(167,139,250,.55);background:linear-gradient(135deg,rgba(167,139,250,.20),rgba(59,124,229,.10))}
+.entry-icon{font-size:1.8rem;width:46px;height:46px;display:flex;align-items:center;justify-content:center;background:rgba(167,139,250,.16);border-radius:11px}
+.entry-meta{flex:1}
+.entry-title{font-size:0.95rem;font-weight:800;color:#fff;margin-bottom:3px}
+.entry-sub{font-size:0.74rem;color:#94a3b8}
+.entry-arrow{color:#c4b5fd;font-size:1.3rem;font-weight:700}
+
+.report-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:14px}
+.report-tile{background:#13111f;border:1px solid #29213a;border-radius:11px;padding:14px}
+.report-tile.ready{border-color:rgba(167,139,250,.40);background:linear-gradient(180deg,#181024,#13111f)}
+.report-tile.warning{border-color:rgba(251,191,36,.35)}
+.report-tile.critical{border-color:rgba(248,113,113,.35)}
+.report-tile .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.report-tile h6{font-size:0.86rem;font-weight:800;color:#fff;margin:0}
+.report-tile .badge{font-size:0.62rem;padding:2px 7px;border-radius:9px;font-weight:700}
+.report-tile .badge.healthy{background:rgba(74,222,128,.16);color:#86efac;border:1px solid rgba(74,222,128,.35)}
+.report-tile .badge.warning{background:rgba(251,191,36,.16);color:#fcd34d;border:1px solid rgba(251,191,36,.35)}
+.report-tile .badge.critical{background:rgba(248,113,113,.16);color:#fca5a5;border:1px solid rgba(248,113,113,.35)}
+.report-tile .badge.pending{background:rgba(82,82,122,.18);color:#64647a;border:1px solid #29213a}
+.report-tile .country{font-size:0.64rem;color:#52527a;letter-spacing:1px;margin-bottom:7px}
+.report-tile .nums{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}
+.report-tile .nums .item{padding:6px 0}
+.report-tile .nums .lbl{font-size:0.58rem;color:#52527a;letter-spacing:0.6px;margin-bottom:2px;text-transform:uppercase}
+.report-tile .nums .v{font-size:0.92rem;font-weight:900;color:#fff}
+.report-tile .nums .v.dim{color:#64647a;font-weight:700}
+.report-tile .covbar{height:5px;background:#1d1730;border-radius:3px;overflow:hidden;margin-bottom:10px}
+.report-tile .covbar > i{display:block;height:100%;background:linear-gradient(90deg,#a78bfa,#7c3aed)}
+.report-tile .covbar.warning > i{background:linear-gradient(90deg,#fcd34d,#fbbf24)}
+.report-tile .covbar.critical > i{background:linear-gradient(90deg,#fca5a5,#f87171)}
+.report-tile .num{font-size:1.1rem;font-weight:900;color:#c4b5fd;margin-bottom:10px}
+.report-tile .btns a,.report-tile .btns button{display:block;width:100%;text-align:center;padding:6px 8px;border-radius:6px;font-size:0.74rem;font-weight:600;cursor:pointer;text-decoration:none;box-sizing:border-box}
+.report-tile .btn-prim{background:linear-gradient(135deg,#a78bfa,#7c3aed);color:#fff;border:0}
+.report-tile .btn-prim:hover{filter:brightness(1.1)}
+.report-tile .btn-gen{background:rgba(167,139,250,.10);border:1px solid rgba(167,139,250,.25);color:#c4b5fd}
+.report-tile .btn-gen:hover:not(:disabled){background:rgba(167,139,250,.20)}
+.report-tile .btn-gen:disabled{opacity:.5;cursor:wait}
+
+/* 红人页 */
+.inf-form{display:flex;gap:10px;margin-bottom:18px;align-items:center}
+.inf-sel{padding:9px 14px;border:1px solid #29213a;background:#13111f;color:#fff;border-radius:8px;font-family:inherit;font-size:0.86rem;cursor:pointer}
+.inf-inp{flex:1;max-width:340px;padding:9px 14px;border:1px solid #29213a;background:#13111f;color:#fff;border-radius:8px;font-size:0.86rem;font-family:inherit;outline:none}
+.inf-inp:focus{border-color:rgba(167,139,250,.55)}
+.btn-prim{padding:9px 18px;border:0;background:linear-gradient(135deg,#a78bfa,#7c3aed);color:#fff;border-radius:8px;font-weight:700;cursor:pointer;font-size:0.86rem;font-family:inherit}
+.btn-prim:disabled{opacity:.6;cursor:wait}
+.inf-err{background:rgba(251,113,133,.1);border:1px solid rgba(251,113,133,.4);color:#fda4af;padding:12px 16px;border-radius:9px;font-size:0.84rem}
+.inf-card{background:#13111f;border:1px solid #29213a;border-radius:12px;padding:18px 22px;margin-top:10px}
+.inf-hero{display:flex;gap:18px;margin-bottom:18px;align-items:flex-start}
+.inf-avatar{width:88px;height:88px;border-radius:50%;border:2px solid rgba(167,139,250,.4);object-fit:cover;flex-shrink:0;background:#0d0a17}
+.inf-meta{flex:1}
+.inf-name{font-size:1.4rem;color:#fff;font-weight:900;margin-bottom:4px}
+.inf-name .b{margin-left:8px;font-size:0.62rem;padding:3px 9px;border-radius:9px;font-weight:700;vertical-align:middle}
+.inf-name .b.ok{background:rgba(16,185,129,.18);color:#6ee7b7;border:1px solid rgba(16,185,129,.4)}
+.inf-name .b.warn{background:rgba(247,183,49,.18);color:#fcd34d;border:1px solid rgba(247,183,49,.4)}
+.inf-handle{font-size:0.78rem;color:#94a3b8;margin-bottom:8px}
+.inf-handle a{color:#a78bfa}
+.inf-bio{font-size:0.84rem;color:#cbd5e1;line-height:1.55;white-space:pre-wrap;max-width:680px}
+.inf-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:18px}
+.inf-stats .stat{background:#0d0a17;border:1px solid #29213a;border-radius:8px;padding:10px 12px}
+.inf-stats .stat .lbl{font-size:0.62rem;color:#64647a;letter-spacing:1px;text-transform:uppercase}
+.inf-stats .stat .val{font-size:1.2rem;color:#c4b5fd;font-weight:900;margin-top:4px}
+.inf-stats .stat .val.small{font-size:0.78rem;color:#cbd5e1;font-weight:600}
+.inf-contact{background:#0d0a17;border:1px solid #29213a;border-radius:9px;padding:12px 16px;margin-bottom:18px;font-size:0.82rem;line-height:1.9}
+.inf-contact h4{font-size:0.86rem;color:#fff;margin-bottom:8px;font-weight:800}
+.inf-contact b{color:#c4b5fd}
+.inf-contact a{color:#a78bfa;word-break:break-all}
+.inf-posts h4{font-size:0.86rem;color:#fff;margin-bottom:10px;font-weight:800}
+.post-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+.post{background:#0d0a17;border:1px solid #29213a;border-radius:8px;overflow:hidden;text-decoration:none;color:inherit;display:block;transition:border-color .2s}
+.post:hover{border-color:rgba(167,139,250,.55)}
+.post img{width:100%;aspect-ratio:1/1;object-fit:cover;display:block;background:#1f1429}
+.post-info{padding:8px 11px}
+.post-info .cap{font-size:0.72rem;color:#cbd5e1;line-height:1.5;height:42px;overflow:hidden}
+.post-info .metrics{font-size:0.68rem;color:#94a3b8;margin-top:6px;display:flex;gap:10px}
+
 .jobs-list{background:#13111f;border:1px solid #29213a;border-radius:12px;overflow:hidden;margin-top:12px}
 .job-row{display:grid;grid-template-columns:50px 1fr 100px 80px 80px 120px;gap:10px;padding:9px 14px;border-bottom:1px solid #1f1429;font-size:0.8rem;color:#cbd5e1;align-items:center}
 .job-row.head{background:#0d0a17;color:#52527a;font-size:0.62rem;text-transform:uppercase;letter-spacing:1px;font-weight:700}
@@ -182,6 +258,26 @@ const App = {
     const askResult = ref(null);
     const askRunning = ref(false);
     const askInput = ref('');
+
+    const infPlatform = ref('instagram');
+    const infUsername = ref('cristiano');
+    const infResult = ref(null);
+    const infRunning = ref(false);
+    async function infFetch() {
+      if (!infUsername.value.trim()) return;
+      infRunning.value = true;
+      infResult.value = null;
+      try {
+        const u = encodeURIComponent(infUsername.value.trim());
+        const r = await fetch(`/api/influencers/full?platform=${infPlatform.value}&username=${u}&posts_limit=12`, { headers: authH() });
+        if (r.ok) infResult.value = await r.json();
+        else {
+          const e = await r.json().catch(()=>({}));
+          infResult.value = { error: e.detail || `HTTP ${r.status}` };
+        }
+      } catch(e) { infResult.value = { error: e.message }; }
+      finally { infRunning.value = false; }
+    }
     const starters = [
       { icon:'📊', title:'总览快照', desc:'46 站覆盖率 + 总 SKU', key:'overview' },
       { icon:'🆕', title:'今日 delta', desc:'昨日新增/变化', key:'new' },
@@ -286,7 +382,8 @@ const App = {
       toast, showToast, starters, askInput, askResult, askRunning, runStarter,
       loadProducts, loadCoverage, loadJobs, triggerSite, exportCSV,
       totalSku, coveragePct, healthySites, criticalSites, warningSites,
-      runningJobs, successJobs, proxyOk, proxyTotal, sortedCov
+      runningJobs, successJobs, proxyOk, proxyTotal, sortedCov,
+      infPlatform, infUsername, infResult, infRunning, infFetch
     };
   },
   template: `
@@ -310,18 +407,14 @@ const App = {
     <template v-else>
       <div class="topbar">
         <div class="brand">⚡ smart-crawler</div>
-        <div class="site-picker">
-          <div class="ws-icon">{{ (user.display_name||'A').charAt(0).toUpperCase() }}</div>
-          <select v-model="selectedSite" @change="loadProducts">
-            <option v-for="s in sites" :key="s.site" :value="s.site">{{ s.site }} · {{ s.brand }}</option>
-          </select>
-        </div>
         <div class="tab-row">
           <button class="tab" :class="{active: tab==='overview'}" @click="tab='overview'">📊 总览</button>
+          <button class="tab" :class="{active: tab==='report'}" @click="tab='report'">📄 报告</button>
           <button class="tab" :class="{active: tab==='ask'}" @click="tab='ask'">💬 Ask</button>
           <button class="tab" :class="{active: tab==='catalog'}" @click="tab='catalog';loadProducts()">📦 Catalog</button>
           <button class="tab" :class="{active: tab==='coverage'}" @click="tab='coverage';loadCoverage()">🌐 Coverage</button>
           <button class="tab" :class="{active: tab==='jobs'}" @click="tab='jobs';loadJobs()">⚙️ Jobs</button>
+          <button class="tab" :class="{active: tab==='influencers'}" @click="tab='influencers'">🌟 红人</button>
           <button class="tab" :class="{active: tab==='settings'}" @click="tab='settings'">🔧 Settings</button>
         </div>
         <div class="usage-strip">SKU <b>{{ totalSku.toLocaleString() }}</b> · <b>{{ coveragePct }}%</b></div>
@@ -345,6 +438,17 @@ const App = {
           <div class="stat"><div class="lbl">代理池</div><div class="val">{{ proxyOk }}/{{ proxyTotal }}</div><div class="delta">健康</div></div>
         </div>
 
+        <div class="entry-row" @click="tab='report'">
+          <div class="entry-card">
+            <div class="entry-icon">📊</div>
+            <div class="entry-meta">
+              <div class="entry-title">站点报表</div>
+              <div class="entry-sub">交互式 HTML 报表 · 可自定义 sections / 列 / 时间范围 · 点站点打开</div>
+            </div>
+            <div class="entry-arrow">→</div>
+          </div>
+        </div>
+
         <div style="margin-top:18px">
           <h3 style="font-size:1rem;font-weight:800;color:#fff;margin-bottom:10px">站点覆盖率 TOP 20</h3>
           <div class="cov-grid">
@@ -355,6 +459,39 @@ const App = {
               <div class="pct">{{ s.coverage_pct }}% · 满 {{ (s.estimated_full||0).toLocaleString() }}</div>
               <div class="bar"><div :style="{width: Math.min(s.coverage_pct||0, 100)+'%'}"></div></div>
               <button @click="triggerSite(s.site)">▶ 触发抓取</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="tab==='report'" class="page">
+        <div class="lead">站点报表</div>
+        <div class="sub">交互式 HTML 报表 · 可自定义 sections / 列 / 时间范围 · 点站点打开</div>
+
+        <div class="report-grid">
+          <div v-for="s in sortedCov" :key="s.site" class="report-tile" :class="[s.status, { ready: (s.current||0) > 0 }]">
+            <div class="head">
+              <h6>{{ s.site }}</h6>
+              <span v-if="s.status==='healthy'" class="badge healthy">健康</span>
+              <span v-else-if="s.status==='warning'" class="badge warning">部分</span>
+              <span v-else-if="s.status==='critical'" class="badge critical">异常</span>
+              <span v-else class="badge pending">待抓取</span>
+            </div>
+            <div class="country">{{ s.brand }} · {{ s.country }}</div>
+            <div class="nums">
+              <div class="item">
+                <div class="lbl">实际抓取</div>
+                <div class="v">{{ (s.current||0).toLocaleString() }}</div>
+              </div>
+              <div class="item">
+                <div class="lbl">应抓 SKU</div>
+                <div class="v dim">{{ (s.estimated_full||0).toLocaleString() }}</div>
+              </div>
+            </div>
+            <div class="covbar" :class="s.status"><i :style="{width: Math.min(s.coverage_pct||0, 100) + '%'}"></i></div>
+            <div style="font-size:0.66rem;color:#64647a;margin-bottom:8px">覆盖率 {{ s.coverage_pct!=null ? s.coverage_pct + '%' : '—' }}</div>
+            <div class="btns">
+              <a :href="'/report?site=' + s.site" target="_blank" class="btn-prim">📊 打开报表</a>
             </div>
           </div>
         </div>
@@ -472,6 +609,74 @@ const App = {
             <div>{{ j.duration_sec ? Math.round(j.duration_sec)+'s' : '—' }}</div>
             <div>{{ (j.finished_at||j.started_at||'').slice(11,16)||'—' }}</div>
           </div>
+        </div>
+      </div>
+
+      <div v-if="tab==='influencers'" class="page">
+        <div class="lead">🌟 多平台红人采集</div>
+        <div class="sub">替代 Apify 红人 actor · 免费 · IG / TikTok / YouTube / Twitter · 输入 username 直接抓</div>
+
+        <div class="inf-form">
+          <select v-model="infPlatform" class="inf-sel">
+            <option value="instagram">📷 Instagram</option>
+            <option value="tiktok">🎵 TikTok</option>
+            <option value="youtube">▶️ YouTube</option>
+            <option value="twitter">🐦 Twitter / X</option>
+          </select>
+          <input v-model="infUsername" class="inf-inp" placeholder="username（不带 @）" @keyup.enter="infFetch"/>
+          <button class="btn-prim" @click="infFetch" :disabled="infRunning">
+            {{ infRunning ? '采集中…' : '🚀 抓取' }}
+          </button>
+        </div>
+
+        <div v-if="infResult && infResult.error" class="inf-err">❌ {{ infResult.error }}</div>
+
+        <div v-if="infResult && infResult.profile" class="inf-card">
+          <div class="inf-hero">
+            <img v-if="infResult.profile.avatar_url" :src="infResult.profile.avatar_url" class="inf-avatar" referrerpolicy="no-referrer"/>
+            <div class="inf-meta">
+              <div class="inf-name">
+                {{ infResult.profile.display_name || infResult.profile.username }}
+                <span v-if="infResult.profile.is_verified" class="b ok">✓ 认证</span>
+                <span v-if="infResult.profile.is_business" class="b warn">商业</span>
+              </div>
+              <div class="inf-handle">@{{ infResult.profile.username }} · <a :href="infResult.profile.raw_url" target="_blank">{{ infResult.profile.platform }} 主页 ↗</a></div>
+              <div class="inf-bio">{{ infResult.profile.bio || '—' }}</div>
+            </div>
+          </div>
+          <div class="inf-stats">
+            <div class="stat"><div class="lbl">粉丝</div><div class="val">{{ (infResult.profile.followers || 0).toLocaleString() }}</div></div>
+            <div class="stat"><div class="lbl">关注</div><div class="val">{{ (infResult.profile.following || 0).toLocaleString() }}</div></div>
+            <div class="stat"><div class="lbl">帖子</div><div class="val">{{ (infResult.profile.posts_count || 0).toLocaleString() }}</div></div>
+            <div v-if="infResult.profile.likes_total" class="stat"><div class="lbl">总点赞</div><div class="val">{{ infResult.profile.likes_total.toLocaleString() }}</div></div>
+            <div class="stat"><div class="lbl">分类</div><div class="val small">{{ infResult.profile.category || '—' }}</div></div>
+            <div class="stat"><div class="lbl">采集源</div><div class="val small">{{ infResult.profile.fetched_via || '—' }}</div></div>
+          </div>
+          <div class="inf-contact">
+            <h4>📬 联系方式</h4>
+            <div>📧 邮箱：<b>{{ infResult.profile.contact.email || '—' }}</b></div>
+            <div>📱 WhatsApp：<b>{{ infResult.profile.contact.whatsapp || '—' }}</b></div>
+            <div>🌐 主页链接：<b><a v-if="infResult.profile.external_url" :href="infResult.profile.external_url" target="_blank">{{ infResult.profile.external_url }}</a><span v-else>—</span></b></div>
+            <div>🔗 linktree：<b>{{ infResult.profile.contact.linktree || '—' }}</b></div>
+          </div>
+
+          <div v-if="infResult.posts && infResult.posts.length" class="inf-posts">
+            <h4>📝 近期 {{ infResult.posts.length }} 条帖子</h4>
+            <div class="post-grid">
+              <a v-for="p in infResult.posts" :key="p.post_id" :href="p.post_url" target="_blank" class="post">
+                <img v-if="p.thumbnail_url" :src="p.thumbnail_url" referrerpolicy="no-referrer"/>
+                <div class="post-info">
+                  <div class="cap">{{ (p.caption || '').slice(0, 100) }}</div>
+                  <div class="metrics">
+                    <span v-if="p.likes">❤️ {{ p.likes.toLocaleString() }}</span>
+                    <span v-if="p.comments">💬 {{ p.comments.toLocaleString() }}</span>
+                    <span v-if="p.views">👁 {{ p.views.toLocaleString() }}</span>
+                  </div>
+                </div>
+              </a>
+            </div>
+          </div>
+          <div v-else style="color:#52527a;text-align:center;padding:20px">无近期帖子（platform 可能受限 / 账号 protected）</div>
         </div>
       </div>
 

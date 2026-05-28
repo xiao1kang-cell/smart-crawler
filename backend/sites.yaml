@@ -10,6 +10,18 @@ settings:
   freq_reviews: "0 4 * * 1"
   freq_shopping: "0 5 * * 1"
   default_freq: "0 2 * * *"
+  # Dashboard 隐藏站点（采集器仍保留，只是不在 dashboard 展示）
+  # 现阶段隐藏头部反爬大平台（需 residential 代理 + 持续投入，未稳定产出）
+  # ikea / etsy 保留：已配住宅代理，需把采集器跑到上限
+  hidden_sites:
+    - aliexpress_global
+    - allegro_pl
+    - bestbuy_us
+    - ebay_us
+    - otto_de
+    - target_us
+    - walmart_us
+    - wayfair_us
 
 sites:
   # ========== SONGMICS（致欧, P0）— Shopify ==========
@@ -113,3 +125,18 @@ sites:
 
   # ========== eBay.com（家居 marketplace · W3）==========
   - {site: ebay_us, brand: eBay, country: US, url: "https://www.ebay.com/", platform: ebay, proxy_tier: residential, max_products: 1000}
+
+  # ========== Walmart.com（US #2 · 2026-05-25 · Akamai+PX）==========
+  - {site: walmart_us, brand: Walmart, country: US, url: "https://www.walmart.com/", platform: walmart, proxy_tier: residential, max_products: 1000}
+
+  # ========== Target.com（US #3 · RedSky API · Akamai）==========
+  - {site: target_us, brand: Target, country: US, url: "https://www.target.com/", platform: target, proxy_tier: datacenter, max_products: 1000}
+
+  # ========== AliExpress.com（全球 · 阿里 nc + slider · graceful-fail）==========
+  - {site: aliexpress_global, brand: AliExpress, country: US, url: "https://www.aliexpress.com/", platform: aliexpress, proxy_tier: residential, max_products: 500}
+
+  # ========== Etsy.com（手作 marketplace · 反爬 2/5）==========
+  - {site: etsy_us, brand: Etsy, country: US, url: "https://www.etsy.com/", platform: etsy, proxy_tier: none, max_products: 1000}
+
+  # ========== Best Buy（US 电子零售 · 反爬 3/5）==========
+  - {site: bestbuy_us, brand: Best Buy, country: US, url: "https://www.bestbuy.com/", platform: bestbuy, proxy_tier: datacenter, max_products: 1000}
