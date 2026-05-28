@@ -6,7 +6,7 @@ for the per-platform mapper in discover_models.py. Adapters added incrementally
 """
 from __future__ import annotations
 
-from . import tt_discover, yt_about
+from . import ig_discover, tt_discover, yt_about
 from .discover_models import (
     CreatorRecord,
     map_facebook,
@@ -41,6 +41,7 @@ def _yt_about_run(params: dict, limit: int) -> list[dict]:
 _ADAPTERS = {
     "youtube_about": _yt_about_run,
     "tiktok": tt_discover.run,
+    "instagram": ig_discover.run,
 }
 
 

@@ -1,0 +1,80 @@
+{
+  "data": {
+    "top": {
+      "sections": [
+        {
+          "layout_content": {
+            "medias": [
+              {
+                "media": {
+                  "id": "m1",
+                  "user": {
+                    "pk": "111",
+                    "username": "sellerjoe",
+                    "full_name": "Seller Joe",
+                    "follower_count": 12345,
+                    "biography": "Reach: hi@sellerjoe.com",
+                    "external_url": "https://sellerjoe.com",
+                    "public_email": "biz@sellerjoe.com"
+                  }
+                }
+              },
+              {
+                "media": {
+                  "id": "m2",
+                  "user": {
+                    "pk": "222",
+                    "username": "fbaqueen",
+                    "full_name": "FBA Queen",
+                    "follower_count": 5000,
+                    "biography": "",
+                    "external_url": null,
+                    "public_email": null
+                  }
+                }
+              },
+              {
+                "media": {
+                  "id": "m3",
+                  "user": {
+                    "pk": "111",
+                    "username": "sellerjoe",
+                    "full_name": "Seller Joe",
+                    "follower_count": 12345,
+                    "biography": "Reach: hi@sellerjoe.com",
+                    "external_url": "https://sellerjoe.com",
+                    "public_email": "biz@sellerjoe.com"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "recent": {
+      "sections": [
+        {
+          "layout_content": {
+            "medias": [
+              {
+                "media": {
+                  "id": "m4",
+                  "user": {
+                    "pk": "333",
+                    "username": "amzpro",
+                    "full_name": "AMZ Pro",
+                    "follower_count": 80000,
+                    "biography": "DM business: biz@amzpro.io",
+                    "external_url": "https://amzpro.io",
+                    "public_email": null
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
