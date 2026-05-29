@@ -99,6 +99,7 @@ class TgeBrowserVendor:
         rate_limit_per_min: int = _DEFAULT_RATE_LIMIT,
         timeout_seconds: float = _DEFAULT_TIMEOUT_S,
         client: httpx.Client | None = None,
+        swap_profile_on_block: bool = False,
     ) -> None:
         if concurrent_limit <= 0:
             raise ValueError(f"concurrent_limit must be positive, got {concurrent_limit}")
@@ -111,6 +112,10 @@ class TgeBrowserVendor:
         # session_id → vendor_session_ref(envId)· 释放时查
         self._session_refs: dict[str, str] = {}
         self._lock = threading.RLock()
+        # Risk 3 fix: provision 时若 reuse 路径(profile_id 给定)遇 block-like 失败
+        # (403 / 429 / TGE 内部 envBlocked code),自动换 profile_id=None 重试一次.
+        # 默认 False · 维持 M0 已上线行为 · 调用方 opt-in.
+        self._swap_profile_on_block = swap_profile_on_block
 
         # 客户端注入(测试可传 mock)
         if client is None:
@@ -142,7 +147,38 @@ class TgeBrowserVendor:
         - profile_id 给 → 复用已有 envId · 跳过 create
         - 然后 POST /api/browser/start(envId)→ 返 ws_endpoint
         - cookies(若给)塞 create_env.Cookie 字段(JSON 字符串)
+
+        Risk 3 fix: 若 reuse 路径(profile_id 给)遇 block-like 错(403 / 429 /
+        TGE 内部 success=false code), 且 self._swap_profile_on_block=True,
+        自动换 profile_id=None 重试一次(单次 · 不递归).
         """
+        try:
+            return self._provision_inner(
+                profile_id, proxy, fingerprint_hint, ttl_seconds, initial_cookies
+            )
+        except _BlockedProfileError as bp:
+            if not (self._swap_profile_on_block and profile_id is not None):
+                # 没 opt-in 或本来就是 fresh path → 原样抛
+                raise bp.cause from None
+            logger.warning(
+                "tge.provision.swap_profile_on_block",
+                original_profile_id=profile_id,
+                reason=bp.reason,
+            )
+            # 单次重试 · profile_id=None 走 fresh create
+            return self._provision_inner(
+                None, proxy, fingerprint_hint, ttl_seconds, initial_cookies
+            )
+
+    def _provision_inner(
+        self,
+        profile_id: str | None,
+        proxy: Proxy | None,
+        fingerprint_hint: FingerprintHint | None,
+        ttl_seconds: int,
+        initial_cookies: list[dict[str, Any]] | None,
+    ) -> BrowserSession:
+        """provision 主逻辑 · 把 block-like 错统一包成 _BlockedProfileError."""
         self._rate_limiter.acquire()
 
         # 1. create / reuse env
@@ -170,10 +206,23 @@ class TgeBrowserVendor:
         try:
             start_resp = self._client.post("/api/browser/start", json=start_payload)
             start_resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            logger.error("tge.start_env.failed", env_id=env_id_str, error=str(e))
+            if _is_block_like_http(e):
+                raise _BlockedProfileError(
+                    f"HTTP {e.response.status_code}", cause=e
+                ) from e
+            raise
         except httpx.HTTPError as e:
             logger.error("tge.start_env.failed", env_id=env_id_str, error=str(e))
             raise
-        start_data = start_resp.json().get("data", {})
+        start_body = start_resp.json()
+        if _is_block_like_body(start_body):
+            raise _BlockedProfileError(
+                f"TGE success=false · body={start_body}",
+                cause=RuntimeError(f"Tge envBlocked · {start_body}"),
+            )
+        start_data = start_body.get("data", {})
         ws = start_data.get("ws")
         if not ws:
             raise RuntimeError(f"Tge start_env returned no ws · response: {start_resp.json()}")
@@ -541,3 +590,46 @@ def _parse_tge_records(body: Any) -> list[dict[str, Any]]:
         records = data.get("list") or data.get("records") or []
         return records if isinstance(records, list) else []
     return []
+
+
+# ── Risk 3 fix: block-like detection + 内部异常类 ──────────────────────────
+
+
+class _BlockedProfileError(Exception):
+    """provision 内部信号 · 包 block-like 错 · 顶层捕获决定是否换 profile."""
+
+    def __init__(self, reason: str, cause: BaseException) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.cause = cause
+
+
+# TGE 内部 success=false 时常见 block code (按 TGE SDK 文档收敛)
+# - envBlocked / accountSuspended → profile 级 ban
+# - rateLimited / tooManyRequests → tenant 级限流(换 profile 也救不了, 但试一次成本低)
+_TGE_BLOCK_LIKE_CODES = frozenset(
+    {
+        "envBlocked",
+        "profileBlocked",
+        "accountSuspended",
+        "rateLimited",
+        "tooManyRequests",
+    }
+)
+
+
+def _is_block_like_http(err: httpx.HTTPStatusError) -> bool:
+    """403/429 视为 block-like · 其余 5xx 走原 raise(可能是 TGE 故障 不必换 profile)."""
+    return err.response.status_code in (403, 429)
+
+
+def _is_block_like_body(body: dict) -> bool:
+    """TGE 包 `{"success": bool, "code": "...", "data": ...}` 形式 · 看 success+code."""
+    if body.get("success") is True:
+        return False
+    code = str(body.get("code", "")) or ""
+    if code in _TGE_BLOCK_LIKE_CODES:
+        return True
+    # 兜底:成功为 false + 信息含 block 字样(TGE 偶尔不带 code)
+    msg = str(body.get("message", "")).lower()
+    return any(kw in msg for kw in ("blocked", "suspended", "rate limit", "forbidden"))

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>明天收尾 · AT&T /26 切 Cascaded Router</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,"PingFang SC","Segoe UI",sans-serif}
+body{background:#0a0612;color:#e5e7eb;font-size:15px;line-height:1.75;padding:0}
+.hero{padding:40px 28px;text-align:center;background:radial-gradient(ellipse 90% 70% at 50% 0%,rgba(167,139,250,.18),transparent 65%)}
+.hero h1{font-size:1.8rem;font-weight:900;letter-spacing:-1px;line-height:1.2}
+.hero h1 .g{background:linear-gradient(90deg,#a78bfa,#f472b6);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{color:#94a3b8;font-size:0.92rem;max-width:760px;margin:8px auto 0}
+section{max-width:960px;margin:0 auto;padding:28px 22px}
+section h2{font-size:1.25rem;font-weight:800;margin-bottom:8px;display:flex;gap:10px;align-items:center}
+section h2 .n{font-size:0.72rem;background:rgba(167,139,250,.14);color:#c4b5fd;border:1px solid rgba(167,139,250,.3);padding:3px 10px;border-radius:9px;font-weight:800}
+code{background:rgba(167,139,250,.10);color:#a78bfa;padding:1px 6px;border-radius:4px;font-family:'SF Mono',monospace;font-size:0.9em}
+pre{background:#0d0a17;border:1px solid #29213a;border-radius:9px;padding:14px 18px;color:#cbd5e1;overflow-x:auto;line-height:1.5;font-size:0.82rem;margin:8px 0 14px;font-family:'SF Mono',monospace;white-space:pre-wrap}
+pre .c{color:#52527a}
+.step{background:#13111f;border:1px solid #29213a;border-radius:11px;padding:18px 22px;margin-bottom:14px}
+.callout{padding:13px 17px;border-radius:8px;margin:12px 0;font-size:0.88rem}
+.callout.pos{background:linear-gradient(135deg,rgba(16,185,129,.10),rgba(16,185,129,.04));border-left:3px solid rgba(16,185,129,.5);color:#6ee7b7}
+.callout.warn{background:linear-gradient(135deg,rgba(247,183,49,.10),rgba(247,183,49,.04));border-left:3px solid rgba(247,183,49,.5);color:#fcd34d}
+.callout b{color:#fff}
+table{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:0.86rem}
+th{text-align:left;padding:9px 12px;background:#13111f;color:#94a3b8;font-size:0.66rem;letter-spacing:1px;text-transform:uppercase}
+td{padding:9px 12px;border-bottom:1px solid #1f1429;color:#cbd5e1}
+td b{color:#fff}
+ul{padding-left:22px;color:#cbd5e1;line-height:1.85}
+footer{padding:30px;text-align:center;color:#52527a;font-size:0.78rem;border-top:1px solid #1f1429;margin-top:30px}
+</style>
+</head>
+<body>
+
+<div class="hero">
+<h1>明天收尾 · <span class="g">AT&T /26 切 Cascaded Router</span></h1>
+<p>当前 Public Subnet 模式只稳定 1/27 个 IP（modem 不学未分配 IP 的 ARP）。切 Cascaded Router 一条路由解决。</p>
+</div>
+
+<section>
+<h2><span class="n">📋</span>过夜状态</h2>
+<table>
+<tr><td>AT&T /26 块激活</td><td><b>✅</b> 108.95.61.128/26</td></tr>
+<tr><td>modem Public Subnet 配置</td><td><b>✅</b> 已开（但只学 .129 ARP）</td></tr>
+<tr><td>iMac 61 IP alias</td><td><b>✅</b> netmask 修正</td></tr>
+<tr><td>iMac multi_ip_proxy</td><td><b>✅</b> 端口 8001-8027 listen</td></tr>
+<tr><td>iMac 永不睡眠</td><td><b>✅</b> pmset sleep=0</td></tr>
+<tr><td>NAS proxies.txt</td><td><b>✅</b> 10 商业 + 27 AT&T = 37 residential</td></tr>
+<tr><td><b>真稳定可用 IP</b></td><td><b>1 个</b>（.129 漂移到 .130，但 pool 自动 fail-over）</td></tr>
+<tr><td>Vidaxl 3000 SKU 反爬</td><td><b>⏸</b> 待 Cascaded Router</td></tr>
+</table>
+</section>
+
+<section>
+<h2><span class="n">1</span>登 modem 192.168.1.254</h2>
+<div class="step">
+<p>顶部 <b>Network → Subnets & DHCP</b>（就是昨晚配 Public Subnet 那页）</p>
+</div>
+</section>
+
+<section>
+<h2><span class="n">2</span>关掉 Public Subnet</h2>
+<div class="step">
+<p><b>Public Subnet</b> 那一段，把 <b>Public Subnet Mode</b> 从 <code>On</code> 改成 <code>Off</code>。</p>
+<p>这样 modem 不再尝试把 /26 段直接 ARP 给 LAN 设备（这是昨晚卡住的根因）。</p>
+</div>
+</section>
+
+<section>
+<h2><span class="n">3</span>开 Cascaded Router</h2>
+<div class="step">
+<p>页面最底下 <b>Cascaded Router</b> 段，填：</p>
+<table>
+<tr><th>字段</th><th>值</th></tr>
+<tr><td>Cascaded Router Enable</td><td><b>On</b></td></tr>
+<tr><td>Cascaded Router Address</td><td><code>192.168.1.91</code>（iMac 的私网 IP）</td></tr>
+<tr><td>Network Address</td><td><code>108.95.61.128</code></td></tr>
+<tr><td>Subnet Mask</td><td><code>255.255.255.192</code></td></tr>
+</table>
+<p>点 <b>Save</b>。modem 不一定重启，可能立刻生效。</p>
+</div>
+<div class="callout pos">
+<b>原理</b>：modem 收到 dst=108.95.61.X 的包，直接转给 192.168.1.91（iMac），不再要求 ARP 学 /26 内每个 IP。iMac 自己接管整个段。
+</div>
+</section>
+
+<section>
+<h2><span class="n">4</span>截图发我</h2>
+<div class="step">
+<p>改完后截图 Subnets & DHCP 页面发我。我自动跑下面收尾：</p>
+<pre><span class="c"># iMac 端 ip forwarding + 自动接管</span>
+ssh guozhen@192.168.1.91
+sudo sysctl -w net.inet.ip.forwarding=1
+<span class="c"># aliases 已就位，sock_bind 应直接成功</span>
+
+<span class="c"># 全扫一遍 61 个 IP</span>
+for i in {129..189}; <span class="c">do ... 测 egress; done</span>
+
+<span class="c"># NAS proxies.txt 灌可用 IP 全部</span>
+<span class="c"># Vidaxl 3000 SKU 跑起来</span></pre>
+</div>
+</section>
+
+<section>
+<h2><span class="n">⚠️</span>失败兜底</h2>
+<ul>
+<li>如果 Cascaded Router 还是不通：打 800-288-2020 让 AT&T 客服把 modem 的 routing mode 设成 <b>"Routed Static Subnet to LAN device"</b>（他们后台能调）</li>
+<li>实在不行就把 .129 单 IP 利用起来（已经比商业 datacenter IP 信誉高），Vidaxl 用 10 商业 + 1 AT&T 跑 3000 SKU 也够 Aosen 100% 推进</li>
+</ul>
+</section>
+
+<footer>smart-crawler · 2026-05-25 03:00 · 改完 modem 联系我</footer>
+</body>
+</html>

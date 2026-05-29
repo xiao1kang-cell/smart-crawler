@@ -6,8 +6,9 @@
 设计:
 - Sliding window:不是 fixed bucket · 减少 bucket 边缘"突发翻倍"问题
 - `acquire()` 阻塞调用 · 必要时 sleep 到下一个 slot 可用
-- M2 升 Redis-backed `RateLimiter` 后 · 多 Worker 共享配额(否则会爆 vendor rate limit)·
-  接口保持兼容 · 仅替换实现
+- M2 Redis-backed `RedisSlidingWindowRateLimiter` 已在 sibling 文件 ready
+  (`rate_limiter_redis.py`) · 多 Worker 共享配额 · 接口一致.
+- 调用方推荐用 `create_rate_limiter()` factory · 不直接 new 具体类
 
 为什么用 deque 而不是 collections.OrderedDict:
 - deque popleft O(1) · 一致丢早期 timestamp
@@ -129,3 +130,38 @@ class RateLimiter:
         cutoff = now - self._period
         while self._calls and self._calls[0] < cutoff:
             self._calls.popleft()
+
+
+# ── Risk 2 fix: 工厂 + Protocol 抽象 (M1 内存默认 / M2 Redis 多 worker) ─────
+
+
+def create_rate_limiter(max_calls: int, period_seconds: int):  # noqa: ANN201
+    """工厂 · 按 env `SOURCERY_RATE_LIMITER_BACKEND` 选实现.
+
+    - `memory` (默认 · M1 单进程) → InMemorySlidingWindowRateLimiter (`RateLimiter`)
+    - `redis` (M2 多 Worker) → RedisSlidingWindowRateLimiter (`rate_limiter_redis.py`)
+      需要 `pip install redis>=5` + `SOURCERY_REDIS_URL=redis://...`
+
+    返回类型对调用方不可见 · 双方都满足同一 sync Protocol
+    (`acquire / try_acquire / remaining / reset_at`).
+    """
+    import os
+
+    backend = os.environ.get("SOURCERY_RATE_LIMITER_BACKEND", "memory").lower()
+    if backend == "memory":
+        return RateLimiter(max_calls=max_calls, period_seconds=period_seconds)
+    if backend == "redis":
+        from app.browser_pool.rate_limiter_redis import (  # noqa: PLC0415
+            RedisSlidingWindowRateLimiter,
+        )
+
+        return RedisSlidingWindowRateLimiter(
+            max_calls=max_calls, period_seconds=period_seconds
+        )
+    raise ValueError(
+        f"unknown SOURCERY_RATE_LIMITER_BACKEND={backend!r} · use 'memory' or 'redis'"
+    )
+
+
+# 别名 · 对外强调"这是 in-memory 实装" · 老引用 `RateLimiter` 仍兼容
+InMemorySlidingWindowRateLimiter = RateLimiter

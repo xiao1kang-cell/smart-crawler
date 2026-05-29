@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Vidaxl 抓取进度 · 2026-05-28</title>
+<style>
+  * { box-sizing: border-box; }
+  body{background:#0d0a18;color:#e0dff0;font-family:-apple-system,"PingFang SC","Segoe UI",sans-serif;margin:0;padding:32px;line-height:1.5}
+  .wrap{max-width:1240px;margin:0 auto}
+  h1{font-size:1.8rem;font-weight:900;color:#fff;margin:0 0 6px}
+  .sub{color:#8888a0;font-size:.95rem;margin-bottom:24px}
+  .summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:32px}
+  .stat{background:#13111f;border:1px solid #29213a;border-radius:11px;padding:18px}
+  .stat .lbl{font-size:.66rem;color:#52527a;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px}
+  .stat .val{font-size:1.8rem;font-weight:900;color:#fff;line-height:1.1}
+  .stat .sub-val{font-size:.78rem;color:#a78bfa;margin-top:4px}
+  table{width:100%;border-collapse:collapse;background:#13111f;border:1px solid #29213a;border-radius:11px;overflow:hidden}
+  th{text-align:left;padding:12px 14px;background:#181024;color:#8888a0;font-size:.74rem;letter-spacing:.5px;text-transform:uppercase;border-bottom:1px solid #29213a}
+  td{padding:11px 14px;border-bottom:1px solid #1d1730;font-size:.86rem}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:#181024}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  section{margin-bottom:34px}
+  h2{color:#a78bfa;border-bottom:1px solid #29213a;padding-bottom:10px;margin-bottom:14px;font-size:1.15rem}
+  .note{background:#13111f;border:1px solid #29213a;border-left:3px solid #fcd34d;padding:14px 18px;border-radius:8px;margin-bottom:24px;color:#fcd34d;font-size:.88rem;line-height:1.7}
+  .bar-bg{width:100%;height:6px;background:#1d1730;border-radius:3px;overflow:hidden}
+  .bar{height:100%;background:linear-gradient(90deg,#86efac,#22c55e)}
+  .bar.warning{background:linear-gradient(90deg,#fcd34d,#f59e0b)}
+  .bar.critical{background:linear-gradient(90deg,#fca5a5,#ef4444)}
+  .pill{display:inline-block;padding:2px 8px;border-radius:9px;font-size:.7rem;font-weight:700;letter-spacing:.5px}
+  .pill.success{background:rgba(74,222,128,.12);color:#86efac;border:1px solid rgba(74,222,128,.35)}
+  .pill.zero{background:rgba(248,113,113,.12);color:#fca5a5;border:1px solid rgba(248,113,113,.35)}
+  .pill.running{background:rgba(167,139,250,.10);color:#a78bfa;border:1px solid rgba(167,139,250,.30)}
+  .timeline{background:#13111f;border:1px solid #29213a;border-radius:11px;padding:18px}
+  .timeline-item{display:flex;gap:12px;padding:8px 0;border-bottom:1px solid #1d1730;font-size:.86rem}
+  .timeline-item:last-child{border-bottom:none}
+  .timeline-item .time{color:#52527a;width:80px;font-variant-numeric:tabular-nums}
+  .timeline-item .icon{width:24px}
+  .timeline-item .desc{flex:1;color:#c4b5fd}
+  .ok{color:#86efac}
+  .bad{color:#fca5a5}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Vidaxl 抓取进度报告</h1>
+  <div class="sub">生成时间 2026-05-28 · 客户反馈"数据太少"后的应对与进度</div>
+
+  <div class="summary">
+    <div class="stat">
+      <div class="lbl">当前实抓 SKU</div>
+      <div class="val">103,030</div>
+      <div class="sub-val">本 session +17,860</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">Sitemap 应抓 URL</div>
+      <div class="val">2,717,274</div>
+      <div class="sub-val">10 个 vidaxl 国家站合计</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">覆盖率</div>
+      <div class="val" style="color:#fcd34d">3.79%</div>
+      <div class="sub-val">较 session 前 3.13% 提升</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">在跑 / 队列</div>
+      <div class="val">1 / 18</div>
+      <div class="sub-val">serial 处理中</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>诚实校准说明</b>：客户截图里 vidaxl.nl "150,754 Resultaten" 是 furniture 大类的产品数；vidaxl.nl 整站 sitemap 真实 URL 304,024 条。注意：URL 数 ≠ 真实 unique SKU 数 —— vidaxl 同一 product 通常有 5+ 个变体 URL，JSON-LD 里的 SKU 才是真实 unique parent。本报告以 URL 总数作为「应抓上限」展示，实际可达 unique parent 约 60k/站。
+  </div>
+
+  <section>
+    <h2>站点级覆盖</h2>
+    <table>
+      <thead><tr>
+        <th>站点</th>
+        <th class="num">已抓 URL</th>
+        <th class="num">Sitemap URL 总数</th>
+        <th style="width:30%">覆盖率</th>
+      </tr></thead>
+      <tbody>
+        <tr><td><b>vidaxl_de</b></td><td class="num">16,012</td><td class="num">303,701</td><td><div style="display:flex;align-items:center;gap:8px"><div class="bar-bg"><div class="bar critical" style="width:5.27%"></div></div><span style="min-width:50px;text-align:right">5.27%</span></div></td></tr>
+        <tr><td><b>vidaxl_ro</b></td><td class="num">13,225</td><td class="num">297,417</td><td><div style="display:flex;align-items:center;gap:8px"><div class="bar-bg"><div class="bar critical" style="width:4.45%"></div></div><span style="min-width:50px;text-align:right">4.45%</span></div></td></tr>
+        <tr><td><b>vidaxl_pt</b></td><td class="num">12,996</td><td class="num">298,640</td><td><div style="display:flex;align-items:center;gap:8px"><div class="bar-bg"><div class="bar critical" style="width:4.35%"></div></div><span style="min-width:50px;text-align:right">4.35%</span></div></td></tr>
+        <tr><td><b>vidaxl_pl</b></td><td class="num">12,545</td><td class="num">299,421</td><td><div style="display:flex;align-items:center;gap:8px"><div class="bar-bg"><div class="bar critical" style="width:4.19%"></div></div><span style="min-width:50px;text-align:right">4.19%</span></div></td></tr>
+        <tr><td><b>vidaxl_es</b></td><td class="num">10,390</td><td class="num">297,537</td><td><div style="display:flex;align-items:center;gap:8px"><div class="bar-bg"><div class="bar critical" style="width:3.49%"></div></div><span style="min-width:50px;text-align:right">3.49%</span></div></td></tr>
+        <tr><td><b>vidaxl_ie</b></td><td class="num">9,437</td><td class="num">165,125</td><td><div style="display:flex;align-items:center;gap:8px"><div class="bar-bg"><div class="bar critical" style="width:5.71%"></div></div><span style="min-width:50px;text-align:right">5.71%</span></div></td></tr>
+        <tr><td><b>vidaxl_nl</b></td><td class="num">8,057</td><td class="num">304,024</td><td><div style="display:flex;align-items:center;gap:8px"><div class="bar-bg"><div class="bar critical" style="width:2.65%"></div></div><span style="min-width:50px;text-align:right">2.65%</span></div></td></tr>
+        <tr><td><b>vidaxl_fr</b></td><td class="num">7,994</td><td class="num">301,267</td><td><div style="display:flex;align-items:center;gap:8px"><div class="bar-bg"><div class="bar critical" style="width:2.65%"></div></div><span style="min-width:50px;text-align:right">2.65%</span></div></td></tr>
+        <tr><td><b>vidaxl_it</b></td><td class="num">6,417</td><td class="num">299,133</td><td><div style="display:flex;align-items:center;gap:8px"><div class="bar-bg"><div class="bar critical" style="width:2.15%"></div></div><span style="min-width:50px;text-align:right">2.15%</span></div></td></tr>
+        <tr><td><b>vidaxl_uk</b></td><td class="num">5,957</td><td class="num">151,009</td><td><div style="display:flex;align-items:center;gap:8px"><div class="bar-bg"><div class="bar critical" style="width:3.94%"></div></div><span style="min-width:50px;text-align:right">3.94%</span></div></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>最近 30 分钟完成的 vidaxl run</h2>
+    <table>
+      <thead><tr>
+        <th>完成时间</th>
+        <th>站点</th>
+        <th class="num">时长</th>
+        <th class="num">本 run 抓取</th>
+        <th class="num">新增 SKU</th>
+        <th>状态</th>
+      </tr></thead>
+      <tbody>
+        <tr><td>05:38:18</td><td>vidaxl_nl</td><td class="num">433s</td><td class="num">3,000</td><td class="num bad">0</td><td><span class="pill zero">全是已抓变体</span></td></tr>
+        <tr><td>05:37:23</td><td>vidaxl_fr</td><td class="num">424s</td><td class="num">2,996</td><td class="num ok">+2,996</td><td><span class="pill success">100% 新 parent</span></td></tr>
+        <tr><td>05:31:03</td><td>vidaxl_ro</td><td class="num">414s</td><td class="num">3,000</td><td class="num bad">0</td><td><span class="pill zero">全是已抓变体</span></td></tr>
+        <tr><td>05:30:16</td><td>vidaxl_de</td><td class="num">394s</td><td class="num">2,931</td><td class="num ok">+2,931</td><td><span class="pill success">100% 新 parent</span></td></tr>
+        <tr><td>05:24:07</td><td>vidaxl_uk</td><td class="num">408s</td><td class="num">3,000</td><td class="num bad">+2</td><td><span class="pill zero">99.9% 变体</span></td></tr>
+        <tr><td>05:23:40</td><td>vidaxl_pl</td><td class="num">397s</td><td class="num">2,993</td><td class="num ok">+2,991</td><td><span class="pill success">99.9% 新 parent</span></td></tr>
+        <tr><td>05:17:17</td><td>vidaxl_es</td><td class="num">448s</td><td class="num">3,000</td><td class="num bad">0</td><td><span class="pill zero">全是已抓变体</span></td></tr>
+        <tr><td>05:17:01</td><td>vidaxl_pt</td><td class="num">430s</td><td class="num">2,998</td><td class="num ok">+2,998</td><td><span class="pill success">100% 新 parent</span></td></tr>
+        <tr><td>05:09:49</td><td>vidaxl_ie</td><td class="num">413s</td><td class="num">2,985</td><td class="num ok">+2,984</td><td><span class="pill success">100% 新 parent</span></td></tr>
+        <tr><td>05:09:47</td><td>vidaxl_it</td><td class="num">402s</td><td class="num">3,000</td><td class="num bad">0</td><td><span class="pill zero">全是已抓变体</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>本 session 的工程修复（10 个根因）</h2>
+    <div class="timeline">
+      <div class="timeline-item"><span class="time">17:32</span><span class="icon">🔍</span><span class="desc">客户反馈截图：vidaxl.nl 一个 furniture 大类有 150k 产品，dashboard 应抓只显示 6,000</span></div>
+      <div class="timeline-item"><span class="time">17:45</span><span class="icon">✅</span><span class="desc">校准「应抓 SKU」：从硬编码 6,000-12,000 改为读 sitemap 真实总数 → vidaxl_nl 应抓 304,024</span></div>
+      <div class="timeline-item"><span class="time">18:10</span><span class="icon">✅</span><span class="desc">vidaxl.py 加 resume：跳过 DB 已抓的 URL，让多轮 run 推进 sitemap</span></div>
+      <div class="timeline-item"><span class="time">18:25</span><span class="icon">✅</span><span class="desc">引入 ThreadPoolExecutor 10 并发（之前是单线程串行）→ 单 run 从 6h 降到 5min</span></div>
+      <div class="timeline-item"><span class="time">18:40</span><span class="icon">✅</span><span class="desc">WORKER_JOB_TIMEOUT 1800→5400s（之前 jobs 都在 30 min 被 alarm 杀死）</span></div>
+      <div class="timeline-item"><span class="time">19:00</span><span class="icon">🐛</span><span class="desc">修 worker.py signal.alarm 非主线程崩溃 bug（守护线程无声死亡）</span></div>
+      <div class="timeline-item"><span class="time">19:30</span><span class="icon">🐛</span><span class="desc">发现「URL 中的 EAN-13」≠「JSON-LD 的 SKU」（vidaxl 用内部 item code）—— resume 失效</span></div>
+      <div class="timeline-item"><span class="time">20:00</span><span class="icon">✅</span><span class="desc">改回按 product_url dedup，让 resume 实际推进 sitemap</span></div>
+      <div class="timeline-item"><span class="time">20:30</span><span class="icon">🐛</span><span class="desc">发现 sitemap variant 聚集：顺序切片每 run 只命中 ~3k unique parent（其余是同 parent 的不同变体 URL）</span></div>
+      <div class="timeline-item"><span class="time">21:00</span><span class="icon">✅</span><span class="desc">加 random.shuffle 随机采样：理论上每 run unique parent 命中提升 4-5 倍</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>下一步</h2>
+    <div class="note" style="border-left-color:#86efac;color:#86efac">
+      <b>1. 立刻做（已设置）</b>：让 worker 继续 serial 跑队列里 18 个 vidaxl job，每 ~7min 完成一个，session 期间持续提交数据。<br>
+      <b>2. 中期（24-48h 内）</b>：随机 shuffle 后实际 yield 验证；如果 0-new 率仍高，改用 SKU-pattern dedup 或更激进的采样策略。<br>
+      <b>3. 长期（彻底解决）</b>：拿到 vidaxl Dropshipping API 凭据（VIDAXL_API_EMAIL / VIDAXL_API_TOKEN）—— 已就绪的 _crawl_api 路径绕开住宅代理和反爬，1-2 天覆盖全 12 站、字段更全、合规。<br>
+      <b>deliverables/vidaxl_credentials_request_2026-05-19.md</b> 已起草，建议陈茂杰团队走客户 IT 通道拿到 token。
+    </div>
+  </section>
+
+  <section>
+    <h2>合同口径</h2>
+    <table>
+      <thead><tr><th>项</th><th>数值</th></tr></thead>
+      <tbody>
+        <tr><td>合同总价（3年固定 + 流量）</td><td>54.46 万 RMB 起</td></tr>
+        <tr><td>当前计费档（数据获取）</td><td>2 RMB/CPM（300-600 万 req/月）</td></tr>
+        <tr><td>本次 vidaxl 全量首抓请求量预估</td><td>2.72M URL ≈ 5,440 RMB（一次性）</td></tr>
+        <tr><td>SLA P0 / P1 / P2</td><td>2h / 24h / 48h 内解决</td></tr>
+        <tr><td>违约金（迟延交付）</td><td>合同额万分之五/天（15 天宽限期后）</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+</div>
+</body>
+</html>

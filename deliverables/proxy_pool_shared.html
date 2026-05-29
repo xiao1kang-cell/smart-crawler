@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>公司 50 静态 IP · 共享代理池方案</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Inter','PingFang SC',-apple-system,sans-serif}
+body{background:#0a0612;color:#e5e7eb;font-size:14.5px;line-height:1.7}
+a{color:#a78bfa}
+.hero{padding:54px 30px 38px;text-align:center;background:radial-gradient(ellipse 90% 70% at 50% 0%,rgba(167,139,250,.18),transparent 65%)}
+.hero h1{font-size:2.1rem;font-weight:900;letter-spacing:-1px;line-height:1.18}
+.hero h1 .grad{background:linear-gradient(90deg,#a78bfa,#fb7185);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{color:#94a3b8;font-size:0.96rem;max-width:780px;margin:10px auto 0;line-height:1.75}
+.hero .meta{margin-top:14px;font-size:0.78rem;color:#52527a;letter-spacing:.5px}
+section{max-width:1080px;margin:0 auto;padding:36px 26px 12px}
+section h2{font-size:1.4rem;font-weight:800;margin-bottom:8px;display:flex;gap:10px;align-items:center}
+section h2 .n{font-size:0.72rem;background:rgba(167,139,250,.14);color:#c4b5fd;border:1px solid rgba(167,139,250,.3);padding:3px 10px;border-radius:9px;font-weight:800}
+section h2 .n.done{background:rgba(16,185,129,.14);color:#6ee7b7;border-color:rgba(16,185,129,.3)}
+section h2 .n.todo{background:rgba(247,183,49,.14);color:#fcd34d;border-color:rgba(247,183,49,.3)}
+section h3{font-size:1.02rem;font-weight:800;margin:18px 0 8px;color:#fff}
+section .lede{color:#94a3b8;font-size:0.88rem;margin-bottom:14px}
+section p{color:#cbd5e1;margin-bottom:10px}
+code{background:rgba(167,139,250,.10);color:#a78bfa;padding:1px 6px;border-radius:4px;font-family:'SF Mono',monospace;font-size:0.86em}
+pre{background:#0d0a17;border:1px solid #29213a;border-radius:9px;padding:14px 18px;color:#cbd5e1;overflow-x:auto;line-height:1.55;font-size:0.84rem;margin-bottom:14px;font-family:'SF Mono',monospace;white-space:pre-wrap;word-break:break-all}
+pre .c{color:#52527a;font-style:italic}
+pre .k{color:#fb7185}
+pre .s{color:#6ee7b7}
+pre .v{color:#a78bfa}
+.callout{padding:13px 17px;border-radius:8px;margin:12px 0;font-size:0.86rem;line-height:1.7}
+.callout.pos{background:linear-gradient(135deg,rgba(16,185,129,.10),rgba(16,185,129,.04));border-left:3px solid rgba(16,185,129,.5);color:#6ee7b7}
+.callout.warn{background:linear-gradient(135deg,rgba(247,183,49,.10),rgba(247,183,49,.04));border-left:3px solid rgba(247,183,49,.5);color:#fcd34d}
+.callout.info{background:linear-gradient(135deg,rgba(167,139,250,.10),rgba(167,139,250,.04));border-left:3px solid rgba(167,139,250,.5);color:#c4b5fd}
+.callout.danger{background:linear-gradient(135deg,rgba(248,113,113,.10),rgba(248,113,113,.04));border-left:3px solid rgba(248,113,113,.5);color:#fca5a5}
+.callout b{color:#fff}
+table{width:100%;border-collapse:collapse;margin:10px 0 14px;font-size:0.87rem}
+th{text-align:left;padding:9px 12px;background:#181024;color:#a78bfa;border:1px solid #29213a;font-weight:700;font-size:0.74rem;letter-spacing:.5px;text-transform:uppercase}
+td{padding:9px 12px;border:1px solid #29213a;color:#cbd5e1}
+td b{color:#fff}
+.arch{background:#0d0a17;border:1px solid #29213a;border-radius:9px;padding:18px 22px;margin:14px 0;color:#cbd5e1;font-family:'SF Mono',monospace;font-size:0.82rem;line-height:1.7;overflow-x:auto;white-space:pre}
+.status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:14px 0}
+.status-grid .item{background:#181024;border:1px solid #29213a;border-radius:8px;padding:11px 14px}
+.status-grid .item .lbl{font-size:0.66rem;color:#52527a;letter-spacing:.6px;text-transform:uppercase;margin-bottom:4px}
+.status-grid .item .v{font-size:0.95rem;font-weight:700;color:#fff}
+.status-grid .item.done .v{color:#6ee7b7}
+.status-grid .item.todo .v{color:#fcd34d}
+footer{text-align:center;color:#52527a;font-size:0.78rem;padding:30px 20px 40px}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>公司 50 静态 IP · <span class="grad">共享代理池方案</span></h1>
+  <p>AT&amp;T /26 段 (108.95.61.128/26) · iMac 网关 · 50 出口 IP · 跨项目共用 · NAS 上的 smart-crawler 只是第一个消费方</p>
+  <div class="meta">最后更新 2026-05-27 · smartcrawler.io/d/proxy_pool_shared.html</div>
+</div>
+
+<section>
+  <h2><span class="n">📐</span>架构</h2>
+  <p class="lede">物理拓扑（一台 iMac 接管整个 /26 段，对外暴露 50 个 HTTP proxy 端口）</p>
+
+<div class="arch">
+Internet
+    │
+    ▼  108.95.61.190 (AT&amp;T gateway · /26)
+┌─────────────────────────────────┐
+│  AT&amp;T CGW452 modem              │  Cascaded Router mode
+│  108.95.61.128/26 → 192.168.1.91│  (NOT Public Subnet — 那个不工作)
+└─────────────────────────────────┘
+    │ LAN (Wi-Fi/Ethernet)
+    ▼
+┌─────────────────────────────────┐
+│  iMac 192.168.1.91              │
+│  en0 alias × 50                 │  108.95.61.130 … 108.95.61.189
+│  multi_ip_proxy.py              │  50 个 aiohttp listener
+│  端口 8001 … 8050               │  每个 listener bind 一个出口 IP
+│  Basic Auth: shared:&lt;pwd&gt;       │
+└─────────────────────────────────┘
+    │ LAN
+    ├── NAS 192.168.1.80 (smart-crawler) ──► 接代理池
+    ├── 同事 Mac / Win                    ──► 同事手动配
+    └── 公司任意服务器                    ──► HTTP_PROXY env var
+
+外部访问（如需远程同事使用）：
+    iMac ─ Tailscale ─ 同事设备  (推荐，零端口开放)
+    或 公司 VPN / SSH 跳板</div>
+
+  <div class="status-grid">
+    <div class="item done"><div class="lbl">AT&amp;T /26 块</div><div class="v">✅ 已激活</div></div>
+    <div class="item done"><div class="lbl">iMac 长期保活</div><div class="v">✅ pmset sleep=0</div></div>
+    <div class="item done"><div class="lbl">multi_ip_proxy 服务</div><div class="v">⚠️ 27/50 在跑</div></div>
+    <div class="item todo"><div class="lbl">Cascaded Router</div><div class="v">⏸ 待切换</div></div>
+    <div class="item todo"><div class="lbl">launchd 持久化</div><div class="v">⏸ 重启 IP alias 丢</div></div>
+    <div class="item todo"><div class="lbl">共享访问 (auth)</div><div class="v">⏸ 待加</div></div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n done">1</span>AT&amp;T Modem · Cascaded Router 模式</h2>
+  <p class="lede">把整个 /26 段路由给 iMac 接管 — 不要 Public Subnet 模式（那个 modem 只学单个 ARP）</p>
+
+<pre><span class="c"># 浏览器开</span>
+http://192.168.1.254
+
+<span class="c"># 登录密码：modem 底标 "Device Access Code"</span>
+
+<span class="c"># 顶部菜单 Network → Subnets &amp; DHCP</span>
+
+<span class="c"># Public Subnet 一段：</span>
+Public Subnet Mode = <span class="k">Off</span>     <span class="c"># 改成 Off</span>
+
+<span class="c"># Cascaded Router 一段：</span>
+Cascaded Router          = <span class="s">Enable</span>
+Cascaded Router Address  = <span class="v">192.168.1.91</span>     <span class="c"># iMac 私网 IP</span>
+Network Address          = <span class="v">108.95.61.128</span>
+Subnet Mask              = <span class="v">255.255.255.192</span>
+
+<span class="c"># Save · modem 立刻生效（不一定重启）</span></pre>
+
+  <div class="callout info">
+    <b>原理：</b>Cascaded Router 模式下，modem 不再要求 ARP 学 /26 内每个 IP，而是直接转发整段给 iMac。iMac 自己接管。Public Subnet 模式下 modem 只学第一个分配的 IP，其他 alias 包被静默丢弃。
+  </div>
+
+  <div class="callout warn">
+    <b>万一 modem 没有 Cascaded Router 选项：</b>打 800-288-2020，让 AT&amp;T 客服后台把 modem 的 routing mode 设成 "Routed Static Subnet to LAN device"。
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">2</span>iMac · 50 个 IP alias（持久化）</h2>
+  <p class="lede">modem 转完，iMac 自己接管整段。一次性配 50 个 alias + launchd 开机自启</p>
+
+<h3>2.1 临时配（测试用，重启会丢）</h3>
+<pre><span class="c"># Terminal on iMac (192.168.1.91)</span>
+<span class="c"># 关闭 Wi-Fi MAC 随机化先（在系统设置里），然后：</span>
+<span class="k">for</span> i <span class="k">in</span> {130..189}; <span class="k">do</span>
+  sudo ifconfig en0 alias 108.95.61.$i 255.255.255.192
+<span class="k">done</span>
+
+<span class="c"># 验证：应该看到 51 个 inet 行（原本 1 个 + 50 alias）</span>
+ifconfig en0 | grep -c <span class="s">"inet "</span>
+
+<span class="c"># 测每个出口 IP</span>
+<span class="k">for</span> i <span class="k">in</span> {130..189}; <span class="k">do</span>
+  echo <span class="s">"$i:"</span> $(curl --interface 108.95.61.$i -s --max-time 5 https://api.ipify.org)
+<span class="k">done</span></pre>
+
+<h3>2.2 launchd 持久化（开机自启）</h3>
+<pre><span class="c"># 创建 /Library/LaunchDaemons/cx.solvea.ip-aliases.plist</span>
+sudo tee /Library/LaunchDaemons/cx.solvea.ip-aliases.plist &gt; /dev/null &lt;&lt;'EOF'
+&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd"&gt;
+&lt;plist version="1.0"&gt;&lt;dict&gt;
+  &lt;key&gt;Label&lt;/key&gt;&lt;string&gt;cx.solvea.ip-aliases&lt;/string&gt;
+  &lt;key&gt;RunAtLoad&lt;/key&gt;&lt;true/&gt;
+  &lt;key&gt;ProgramArguments&lt;/key&gt;&lt;array&gt;
+    &lt;string&gt;/bin/bash&lt;/string&gt;
+    &lt;string&gt;-c&lt;/string&gt;
+    &lt;string&gt;sleep 30; for i in $(seq 130 189); do /sbin/ifconfig en0 alias 108.95.61.$i 255.255.255.192; done&lt;/string&gt;
+  &lt;/array&gt;
+  &lt;key&gt;StandardOutPath&lt;/key&gt;&lt;string&gt;/var/log/ip-aliases.log&lt;/string&gt;
+  &lt;key&gt;StandardErrorPath&lt;/key&gt;&lt;string&gt;/var/log/ip-aliases.log&lt;/string&gt;
+&lt;/dict&gt;&lt;/plist&gt;
+EOF
+
+sudo launchctl load /Library/LaunchDaemons/cx.solvea.ip-aliases.plist
+<span class="c"># 重启 iMac → 自动配上 60 个 alias</span></pre>
+
+  <div class="callout warn">
+    <b>iMac 必须不睡眠：</b><code>sudo pmset -a sleep 0 disksleep 0 displaysleep 0</code>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">3</span>multi_ip_proxy · 50 端口 HTTP 代理</h2>
+  <p class="lede">每个端口 bind 一个出口 IP，统一 Basic Auth · aiohttp 单文件 · ~50MB RAM</p>
+
+<h3>3.1 multi_ip_proxy.py</h3>
+<pre><span class="c"># ~/multi_ip_proxy.py · 单文件，零依赖（用 stdlib + aiohttp）</span>
+<span class="k">import</span> asyncio, os, sys, ssl, base64
+<span class="k">from</span> aiohttp <span class="k">import</span> web, ClientSession, TCPConnector
+
+<span class="k">def</span> <span class="v">make_app</span>(egress_ip, listen_port, auth_user, auth_pass):
+    <span class="k">async def</span> <span class="v">handle</span>(req):
+        <span class="c"># Basic Auth 校验</span>
+        h = req.headers.get(<span class="s">"Proxy-Authorization"</span>, <span class="s">""</span>)
+        expected = <span class="s">"Basic "</span> + base64.b64encode(
+            f<span class="s">"{auth_user}:{auth_pass}"</span>.encode()).decode()
+        <span class="k">if</span> h != expected:
+            <span class="k">return</span> web.Response(status=407,
+                headers={<span class="s">"Proxy-Authenticate"</span>: <span class="s">"Basic realm=proxy"</span>})
+
+        <span class="c"># Forward via egress_ip</span>
+        connector = TCPConnector(local_addr=(egress_ip, 0))
+        <span class="k">async with</span> ClientSession(connector=connector) <span class="k">as</span> s:
+            <span class="k">async with</span> s.request(req.method, str(req.url),
+                    headers={k:v <span class="k">for</span> k,v <span class="k">in</span> req.headers.items()
+                             <span class="k">if</span> k.lower() != <span class="s">"proxy-authorization"</span>},
+                    data=<span class="k">await</span> req.read(), allow_redirects=<span class="k">False</span>) <span class="k">as</span> r:
+                body = <span class="k">await</span> r.read()
+                <span class="k">return</span> web.Response(body=body, status=r.status,
+                    headers={k:v <span class="k">for</span> k,v <span class="k">in</span> r.headers.items()
+                             <span class="k">if</span> k.lower() <span class="k">not in</span> (<span class="s">"transfer-encoding"</span>,<span class="s">"content-encoding"</span>)})
+
+    app = web.Application()
+    app.router.add_route(<span class="s">"*"</span>, <span class="s">"/{path:.*}"</span>, handle)
+    runner = web.AppRunner(app)
+    <span class="k">return</span> runner
+
+<span class="k">async def</span> <span class="v">main</span>():
+    USER = os.environ.get(<span class="s">"PROXY_USER"</span>, <span class="s">"shared"</span>)
+    PASS = os.environ[<span class="s">"PROXY_PASS"</span>]   <span class="c"># 强制 env 配密码</span>
+    runners = []
+    <span class="k">for</span> i <span class="k">in</span> range(130, 190):       <span class="c"># 60 个 IP</span>
+        egress = f<span class="s">"108.95.61.{i}"</span>
+        port = 8000 + (i - 129)         <span class="c"># 8001..8060</span>
+        runner = make_app(egress, port, USER, PASS)
+        <span class="k">await</span> runner.setup()
+        site = web.TCPSite(runner, <span class="s">"0.0.0.0"</span>, port)
+        <span class="k">await</span> site.start()
+        runners.append(runner)
+        print(f<span class="s">"listening :{port} → egress {egress}"</span>)
+    <span class="k">await</span> asyncio.Event().wait()       <span class="c"># 永久 block</span>
+
+<span class="k">if</span> __name__ == <span class="s">"__main__"</span>:
+    asyncio.run(main())</pre>
+
+<h3>3.2 launchd 跑 multi_ip_proxy</h3>
+<pre>sudo tee /Library/LaunchDaemons/cx.solvea.multi-ip-proxy.plist &gt; /dev/null &lt;&lt;'EOF'
+&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd"&gt;
+&lt;plist version="1.0"&gt;&lt;dict&gt;
+  &lt;key&gt;Label&lt;/key&gt;&lt;string&gt;cx.solvea.multi-ip-proxy&lt;/string&gt;
+  &lt;key&gt;RunAtLoad&lt;/key&gt;&lt;true/&gt;
+  &lt;key&gt;KeepAlive&lt;/key&gt;&lt;true/&gt;
+  &lt;key&gt;ProgramArguments&lt;/key&gt;&lt;array&gt;
+    &lt;string&gt;/usr/bin/python3&lt;/string&gt;
+    &lt;string&gt;/Users/guozhen/multi_ip_proxy.py&lt;/string&gt;
+  &lt;/array&gt;
+  &lt;key&gt;EnvironmentVariables&lt;/key&gt;&lt;dict&gt;
+    &lt;key&gt;PROXY_USER&lt;/key&gt;&lt;string&gt;shared&lt;/string&gt;
+    &lt;key&gt;PROXY_PASS&lt;/key&gt;&lt;string&gt;<b>YOUR-STRONG-PASSWORD-HERE</b>&lt;/string&gt;
+  &lt;/dict&gt;
+  &lt;key&gt;StandardOutPath&lt;/key&gt;&lt;string&gt;/var/log/multi-ip-proxy.log&lt;/string&gt;
+  &lt;key&gt;StandardErrorPath&lt;/key&gt;&lt;string&gt;/var/log/multi-ip-proxy.log&lt;/string&gt;
+&lt;/dict&gt;&lt;/plist&gt;
+EOF
+sudo launchctl load /Library/LaunchDaemons/cx.solvea.multi-ip-proxy.plist</pre>
+</section>
+
+<section>
+  <h2><span class="n">4</span>共享访问 · 团队跨项目用法</h2>
+  <p class="lede">公司任意服务器 / 同事 Mac / 任意项目，3 种典型用法</p>
+
+<h3>4.1 LAN 内（公司局域网设备）</h3>
+<pre><span class="c"># 直接 HTTP_PROXY env var，每个 shell session 或 cron job 都行</span>
+<span class="k">export</span> HTTP_PROXY=http://shared:&lt;pwd&gt;@192.168.1.91:8001
+<span class="k">export</span> HTTPS_PROXY=http://shared:&lt;pwd&gt;@192.168.1.91:8001
+
+<span class="c"># 验证</span>
+curl https://api.ipify.org   <span class="c"># 应该返回 108.95.61.130</span>
+
+<span class="c"># 随机切到另一个出口 IP</span>
+<span class="k">export</span> HTTP_PROXY=http://shared:&lt;pwd&gt;@192.168.1.91:8050  <span class="c"># 端口 8050 = .179 IP</span></pre>
+
+<h3>4.2 远程团队（Tailscale 推荐）</h3>
+<pre><span class="c"># iMac 上装 Tailscale，加入公司 tailnet</span>
+brew install tailscale &amp;&amp; sudo tailscale up
+
+<span class="c"># 同事在他自己设备上装 Tailscale 加入同一 tailnet</span>
+<span class="c"># 然后用 iMac 的 100.x.x.x Tailscale IP（不是 192.168.1.91）</span>
+<span class="k">export</span> HTTP_PROXY=http://shared:&lt;pwd&gt;@100.x.x.x:8001
+
+<span class="c"># Tailscale 上密码鉴权 + ACL 双重防护，无需开公网端口</span></pre>
+
+<h3>4.3 Python / requests / curl 一键脚本</h3>
+<pre><span class="c"># Python 随机轮询</span>
+<span class="k">import</span> random, requests
+PROXY_HOST = <span class="s">"192.168.1.91"</span>   <span class="c"># 或 Tailscale IP</span>
+PROXY_USER, PROXY_PASS = <span class="s">"shared"</span>, <span class="s">"&lt;pwd&gt;"</span>
+
+<span class="k">def</span> <span class="v">random_proxy</span>():
+    port = random.randint(8001, 8050)
+    <span class="k">return</span> f<span class="s">"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{port}"</span>
+
+p = random_proxy()
+r = requests.get(<span class="s">"https://api.ipify.org"</span>, proxies={<span class="s">"http"</span>:p,<span class="s">"https"</span>:p})
+print(r.text)   <span class="c"># 每次不同 IP</span></pre>
+
+<h3>4.4 smart-crawler 接入（已就绪）</h3>
+<pre><span class="c"># NAS: /volume1/docker/smart-crawler/app/backend/proxies.txt</span>
+[residential]
+<span class="c"># Company /26 pool — multi_ip_proxy on iMac</span>
+http://shared:&lt;pwd&gt;@192.168.1.91:8001
+http://shared:&lt;pwd&gt;@192.168.1.91:8002
+...
+http://shared:&lt;pwd&gt;@192.168.1.91:8050
+
+<span class="c"># 热重载（不需重启容器）</span>
+curl -X POST https://smartcrawler.io/api/proxy/reload \
+  -H <span class="s">"Authorization: Bearer &lt;admin-token&gt;"</span></pre>
+</section>
+
+<section>
+  <h2><span class="n">5</span>权限 / 安全</h2>
+
+<table>
+  <thead><tr><th>层</th><th>机制</th><th>谁能进</th></tr></thead>
+  <tbody>
+    <tr><td><b>L1 网络</b></td><td>iMac 防火墙：8001-8050 仅放给 LAN (192.168.1.0/24) + Tailscale (100.64.0.0/10)</td><td>办公室同事 + Tailscale 已加入设备</td></tr>
+    <tr><td><b>L2 鉴权</b></td><td>HTTP Basic Auth: <code>shared:&lt;pwd&gt;</code></td><td>知道密码的人</td></tr>
+    <tr><td><b>L3 审计</b></td><td>/var/log/multi-ip-proxy.log 记每条请求 (target_host + egress_ip)</td><td>事后追溯</td></tr>
+  </tbody>
+</table>
+
+  <div class="callout info">
+    <b>密码轮换：</b>改 launchd plist 的 <code>PROXY_PASS</code> → <code>sudo launchctl unload + load</code> → 通知所有项目改 URL。建议季度轮换。
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">6</span>健康监控 · 自动 failover</h2>
+
+<h3>6.1 NAS 上跑健康检查 cron</h3>
+<pre><span class="c"># /usr/local/bin/proxy_health.sh · 每 5 分钟跑一次</span>
+<span class="c"># 测每个端口的 egress IP，挂掉的标记 down</span>
+
+<span class="k">for</span> port <span class="k">in</span> {8001..8050}; <span class="k">do</span>
+  ip=$(curl -s --max-time 5 \
+    -x http://shared:$PASS@192.168.1.91:$port \
+    https://api.ipify.org)
+  <span class="k">if</span> [[ -z <span class="s">"$ip"</span> ]]; <span class="k">then</span>
+    echo <span class="s">"DOWN port=$port"</span>
+  <span class="k">else</span>
+    echo <span class="s">"OK   port=$port → $ip"</span>
+  <span class="k">fi</span>
+<span class="k">done</span> &gt; /var/log/proxy_health.log</pre>
+
+<h3>6.2 smart-crawler 已内置 failover</h3>
+  <p>每个 proxy URL 失败 3 次自动剔除 10 分钟（<code>PROXY_FAIL_THRESHOLD=3</code> / <code>PROXY_COOLDOWN_SEC=600</code>）。dashboard <code>/api/proxy/status</code> 实时看每个 IP 的 success/fail。</p>
+</section>
+
+<section>
+  <h2><span class="n todo">⏸</span>剩余 TODO（接手者按顺序做）</h2>
+
+<table>
+  <thead><tr><th>#</th><th>任务</th><th>预计时间</th><th>验收标准</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>登 modem 切 Cascaded Router（覆盖 Public Subnet）</td><td>10 min</td><td>iMac 拿到 108.95.61.x 而非 192.168.1.91</td></tr>
+    <tr><td>2</td><td>iMac 配 60 个 ifconfig alias + launchd 持久化</td><td>20 min</td><td>重启 iMac 后 <code>ifconfig en0 | grep -c "inet "</code> = 61</td></tr>
+    <tr><td>3</td><td>multi_ip_proxy.py 部署 + launchd 起服务</td><td>15 min</td><td><code>curl -x http://shared:pwd@192.168.1.91:8001 https://api.ipify.org</code> 返回 .130</td></tr>
+    <tr><td>4</td><td>iMac 防火墙规则：只放 LAN + Tailscale</td><td>10 min</td><td>外网 telnet :8001 拒绝</td></tr>
+    <tr><td>5</td><td>NAS proxies.txt 加 50 行 URL + 热重载</td><td>5 min</td><td><code>/api/proxy/status</code> 显示 60 个新代理 available</td></tr>
+    <tr><td>6</td><td>健康检查 cron 上线</td><td>10 min</td><td>/var/log/proxy_health.log 每 5 分钟 1 次</td></tr>
+    <tr><td>7</td><td>密码 rotation policy 文档化</td><td>10 min</td><td>本文档 §5 更新</td></tr>
+  </tbody>
+</table>
+
+  <div class="callout pos">
+    <b>价值：</b>50 美国住宅 IP 接入后，Vidaxl_us / Wayfair / Walmart / Home Depot 等 PerimeterX/Akamai 反爬站全面解锁。预计总 SKU 从 187k → 250k+。aosen 合同 SLA 从 50% → 80%。
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">📚</span>历史档案</h2>
+  <ul style="color:#cbd5e1;padding-left:22px;line-height:2">
+    <li><a href="/d/att_61ip_setup_guide.html">AT&amp;T 61 IP × iMac 完整教程（2026-05-24）</a></li>
+    <li><a href="/d/att_cascaded_router_tomorrow.html">明天收尾 · AT&amp;T /26 切 Cascaded Router（2026-05-25）</a></li>
+    <li><a href="/d/50_static_ip_deploy.html">50 静态 IP 接入 smart-crawler · 5 分钟部署（2026-05-24，老方案：50 台机器版）</a></li>
+  </ul>
+</section>
+
+<footer>
+  公司 50 静态 IP · 共享代理池方案 · 2026-05-27 · smartcrawler.io/d/proxy_pool_shared.html
+</footer>
+
+</body>
+</html>
