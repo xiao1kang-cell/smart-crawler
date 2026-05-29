@@ -14,14 +14,22 @@ Native replacement for Apify + ScraperAPI. Exposed via HTTP:
 | `instagram`     | `hashtags[]`    | ✅ live with IG_COOKIES_PATH                |
 | `facebook`      | `hashtags[]` (used as search queries) | ✅ live with FB_COOKIES_PATH |
 | `tiktok`        | `hashtags[]`    | ⚠️ parser ready, live fetch blocked — see below |
+| `tiktok_phone`  | (push only)     | ✅ live via `POST /discover/ingest` from matrix-mvp phone driver |
 
 ### TikTok status
 
 TikTok's `/tag/{hashtag}` page no longer ships SSR JSON to unauthenticated
-HTTP clients (as of 2026-05). The parser is implemented and unit-tested
-against a synthetic fixture; the live fetcher returns `[]` until a Playwright
-lane (or msToken-signed XHR) is wired in. Smoke test gated behind
-`TIKTOK_SMOKE=1`.
+HTTP clients (as of 2026-05). Two lanes available:
+
+1. **`platform=tiktok`** — HTTP fetch + parser. Currently returns `[]`
+   (challenge shell). Will work again behind a Playwright lane (Phase 2).
+2. **`platform=tiktok_phone`** — phone-pushed ingest. A real device runs the
+   TikTok app via Appium, harvests creator handles from the Users-search page,
+   and POSTs them to `POST /discover/ingest`. Driver lives in
+   `matrix-mvp/poc-tiktok/phone_driver.py`. See its README for setup.
+
+The two share the same CreatorRecord output shape and dataset items API; the
+caller just queries `GET /discover/datasets/{runId}/items`.
 
 ## Cookie runbook (IG / FB)
 
@@ -111,6 +119,13 @@ curl -X POST http://192.168.1.80:8077/discover/runs \
 curl -X POST http://192.168.1.80:8077/discover/runs \
   -H 'Content-Type: application/json' \
   -d '{"platform":"youtube_about","urls":["https://www.youtube.com/@MrBeast/about"]}'
+
+# Phone-pushed TikTok (driven from matrix-mvp/poc-tiktok/phone_driver.py)
+curl -X POST http://192.168.1.80:8077/discover/ingest \
+  -H 'Content-Type: application/json' \
+  -d '{"platform":"tiktok_phone","hashtag":"amazonfba","items":[
+        {"authorMeta":{"uniqueId":"sellerjoe","nickName":"Seller Joe","fans":12345}}
+      ]}'
 
 # Poll + fetch
 RID=$(... | jq -r .runId)
