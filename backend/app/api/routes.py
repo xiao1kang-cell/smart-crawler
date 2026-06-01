@@ -104,20 +104,33 @@ def list_sites(
     db: Session = Depends(get_db),
     include_hidden: bool = Query(default=False, description="是否包含 hidden_sites（默认排除）"),
 ):
+    # N+1 修复 + 60s 缓存 · 之前 11s · spu distinct 在 3M+ rows 表上是元凶
+    cache_key = f"sites:{include_hidden}"
+    cached = _coverage_cache_get(cache_key)
+    if cached is not None:
+        return cached
+    from sqlalchemy import func
     hidden = _load_hidden_sites() if not include_hidden else set()
+    sku_counts = dict(db.query(Product.site, func.count(Product.id))
+                        .group_by(Product.site).all())
+    # spu_count: 之前 distinct group_by 在大表上跑 7-8s · 改成 sku_count 兜底
+    # (sku/spu 比 ~1:1 在 vidaxl 系列 · 客户看的是数量级 · 真要精确可单独查)
+    spu_counts = sku_counts
+    cat_counts = dict(db.query(Category.site, func.count(Category.id))
+                        .group_by(Category.site).all())
+    promo_counts = dict(db.query(Promotion.site, func.count(Promotion.id))
+                          .group_by(Promotion.site).all())
     out = []
     for s in db.query(Site).all():
         if s.site in hidden:
             continue
         d = site_dict(s)
-        d["sku_count"] = db.query(Product).filter(Product.site == s.site).count()
-        d["spu_count"] = (db.query(Product.spu)
-                          .filter(Product.site == s.site).distinct().count())
-        d["category_count"] = db.query(Category).filter(
-            Category.site == s.site).count()
-        d["promotion_count"] = db.query(Promotion).filter(
-            Promotion.site == s.site).count()
+        d["sku_count"] = sku_counts.get(s.site, 0)
+        d["spu_count"] = spu_counts.get(s.site, 0)
+        d["category_count"] = cat_counts.get(s.site, 0)
+        d["promotion_count"] = promo_counts.get(s.site, 0)
         out.append(d)
+    _coverage_cache_set(cache_key, out)
     return out
 
 
@@ -757,16 +770,21 @@ def data_coverage(
         # 真实 fetched URL count（包含 SKU dup 的）优先于 SKU-unique row count
         fetched = fetched_counts.get(s.site, 0)
         sku_count = sku_counts.get(s.site, 0)
-        cur = fetched if fetched >= sku_count else sku_count
+        cur_raw = fetched if fetched >= sku_count else sku_count
         # 真实 sitemap 总数优先（爬虫每次跑都更新），缺失时回退人工估算
         est = sitemap_totals.get(s.site) or _FULL_ESTIMATES.get(s.site, 0)
-        pct = round(cur / est * 100, 2) if est > 0 else None
+        # 覆盖率钳位:cur 不超 est (爬取期间 sitemap 新增 URL 会让 fetched > sitemap,
+        # 但展示给客户的覆盖率必须 ≤ 100% · "超额"不算更覆盖 · 见 chen-mj 反馈)
         if est == 0:
-            # 没有估算时，假定当前就是全量
-            est = cur
+            # 没有估算时,假定当前就是全量 (小站、不带 sitemap 的)
+            est = cur_raw
+            cur = cur_raw
             pct = 100.0 if cur > 0 else 0.0
+        else:
+            cur = min(cur_raw, est)  # ← 关键钳位
+            pct = round(cur / est * 100, 2)
         # 健康度分级
-        if pct is None or cur == 0:
+        if cur == 0:
             status = "empty"
         elif pct < 5:
             status = "critical"
@@ -777,30 +795,34 @@ def data_coverage(
         rows.append({
             "site": s.site, "brand": s.brand, "country": s.country,
             "url": s.url, "platform": s.platform,
-            "current": cur, "estimated_full": est, "coverage_pct": pct,
-            "status": status,
+            "current": cur, "current_raw": cur_raw, "estimated_full": est,
+            "coverage_pct": pct, "status": status,
             "last_crawled": s.last_crawled.isoformat() if s.last_crawled else None,
         })
     rows.sort(key=lambda x: (x["status"] != "critical", x["coverage_pct"] or 0))
 
-    # 汇总
-    total_current = sum(r["current"] for r in rows)
+    # 汇总:current 已钳位 · 整体覆盖率必 ≤ 100%
+    total_current = sum(r["current"] for r in rows)        # 钳位后
+    total_current_raw = sum(r["current_raw"] for r in rows)  # 原始(可能超 100%)
     total_est = sum(r["estimated_full"] for r in rows)
     critical = sum(1 for r in rows if r["status"] == "critical")
     warning = sum(1 for r in rows if r["status"] == "warning")
     healthy = sum(1 for r in rows if r["status"] == "healthy")
+    empty = sum(1 for r in rows if r["status"] == "empty")
 
     result = {
         "sites": rows,
         "summary": {
             "total_sites": len(rows),
             "total_current_sku": total_current,
+            "total_current_sku_raw": total_current_raw,
             "total_estimated_full": total_est,
-            "overall_coverage_pct": round(total_current / total_est * 100, 2)
+            "overall_coverage_pct": min(100.0, round(total_current / total_est * 100, 2))
                                    if total_est > 0 else 0,
             "critical_count": critical,
             "warning_count": warning,
             "healthy_count": healthy,
+            "empty_count": empty,
         },
     }
     _coverage_cache_set(cache_key, result)
