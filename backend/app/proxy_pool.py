@@ -6,7 +6,7 @@
   · 粘性会话：同一 site 在一次 crawl 中复用同一代理（避免半途切 IP 触发反爬）
   · 多 tier 优先级：residential > datacenter > free-pool
 
-数据格式（proxies.txt）：
+数据格式（PROXIES_FILE 指向的私有文件，未设置时读取 backend/proxies.txt 模板）：
   [residential]
   http://user:pass@host:port    # 商业住宅代理
   socks5://host:port            # Tailscale/SSH 隧道
@@ -18,6 +18,7 @@
   PROXY_FAIL_THRESHOLD=3        连续失败几次剔除（默认 3）
   PROXY_COOLDOWN_SEC=600        剔除后冷却时间（默认 10min）
   PROXY_HEALTH_INTERVAL=300     健康检查间隔（默认 5min）
+  PROXIES_FILE=/path/proxies.txt 私有代理配置文件路径
 """
 from __future__ import annotations
 
@@ -27,7 +28,10 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-_PROXY_FILE = Path(__file__).resolve().parent.parent / "proxies.txt"
+_PROXY_FILE = Path(os.environ.get(
+    "PROXIES_FILE",
+    str(Path(__file__).resolve().parent.parent / "proxies.txt"),
+))
 
 FAIL_THRESHOLD = int(os.environ.get("PROXY_FAIL_THRESHOLD", "3"))
 COOLDOWN_SEC = int(os.environ.get("PROXY_COOLDOWN_SEC", "600"))

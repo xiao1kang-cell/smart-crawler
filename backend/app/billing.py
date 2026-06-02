@@ -45,7 +45,8 @@ PRICE_PER_1K_RECORDS_BULK = 0.8
 
 
 def record_usage(api_key_id: int, endpoint: str, record_count: int,
-                 bytes_returned: int, duration_ms: int) -> None:
+                 bytes_returned: int, duration_ms: int,
+                 credits_used: int | None = None) -> None:
     """记录一次调用的用量。
 
     Args:
@@ -54,12 +55,14 @@ def record_usage(api_key_id: int, endpoint: str, record_count: int,
         record_count: 该次调用返回的 records 数
         bytes_returned: 返回字节数
         duration_ms: 调用耗时（毫秒）
+        credits_used: 该次调用消耗的 credits；不传时按 record_count 兼容旧调用
     """
     with SessionLocal() as s:
         u = Usage(
             api_key_id=api_key_id,
             endpoint=endpoint,
             record_count=record_count,
+            credits_used=record_count if credits_used is None else credits_used,
             bytes_returned=bytes_returned,
             duration_ms=duration_ms,
         )
@@ -99,6 +102,7 @@ def get_usage_summary(api_key_id: int, days: int = 30) -> dict:
                           Usage.occurred_at >= cutoff)
                   .all())
         total_records = sum(r.record_count or 0 for r in rows)
+        total_credits = sum(getattr(r, "credits_used", 0) or 0 for r in rows)
         total_calls = len(rows)
         total_bytes = sum(r.bytes_returned or 0 for r in rows)
         cost_usd = _price_for(total_records)
@@ -115,6 +119,7 @@ def get_usage_summary(api_key_id: int, days: int = 30) -> dict:
             "days": days,
             "total_calls": total_calls,
             "total_records": total_records,
+            "total_credits": total_credits,
             "total_bytes": total_bytes,
             "cost_usd": round(cost_usd, 2),
             "by_endpoint": by_endpoint,

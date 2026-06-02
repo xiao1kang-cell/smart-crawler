@@ -26,24 +26,31 @@ _mcp_app = mcp.http_app(path="/")
 # 复用看板「API 接入」生成的 sck_ 密钥体系。发现层（llms.txt / .well-known）不受影响。
 async def _mcp_auth(request, call_next):
     from starlette.responses import JSONResponse as _JSON
-    from .apikey import hash_key
-    from .models import ApiKey
+    from .access import api_key_scopes, find_api_key, raw_key_from_headers
     from .db import SessionLocal
+    from .mcp_context import McpApiKeyContext, reset_current_api_key, set_current_api_key
     auth = request.headers.get("authorization", "")
-    key = (auth[7:].strip() if auth[:7].lower() == "bearer "
-           else request.headers.get("x-api-key", "").strip())
+    key = raw_key_from_headers(auth, request.headers.get("x-api-key", ""))
     if key:
         db = SessionLocal()
         try:
-            k = (db.query(ApiKey)
-                 .filter(ApiKey.key_hash == hash_key(key),
-                         ApiKey.active.is_(True)).first())
+            k = find_api_key(db, key)
             if k:
                 from datetime import datetime
                 k.last_used = datetime.utcnow()
                 k.request_count = (k.request_count or 0) + 1
+                scopes = api_key_scopes(k)
+                ctx = McpApiKeyContext(
+                    api_key_id=k.id,
+                    name=k.name or k.key_prefix or "api-key",
+                    scopes=scopes,
+                )
                 db.commit()
-                return await call_next(request)
+                token = set_current_api_key(ctx)
+                try:
+                    return await call_next(request)
+                finally:
+                    reset_current_api_key(token)
         finally:
             db.close()
     return _JSON({

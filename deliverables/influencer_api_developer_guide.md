@@ -2,7 +2,7 @@
 
 > Base URL: `https://smartcrawler.io`
 > 鉴权:`Authorization: Bearer sck_...`
-> 内测期密钥(临时): `sck_WcB-PEGjdLFeIR9MeOOsN-R7tuYV-jAE31ps-pyswik`
+> 内测期密钥(临时): `sck_EXAMPLE_REPLACE_ME`
 
 ## 1. 完整调用流程(Apify-compatible)
 
@@ -45,7 +45,7 @@ Authorization: Bearer sck_...
 **请求**:
 ```bash
 curl -X POST 'https://smartcrawler.io/discover/runs' \
-  -H 'Authorization: Bearer sck_WcB-PEGjdLFeIR9MeOOsN-R7tuYV-jAE31ps-pyswik' \
+  -H 'Authorization: Bearer sck_EXAMPLE_REPLACE_ME' \
   -H 'Content-Type: application/json' \
   -d '{
     "platform": "youtube_about",
@@ -155,7 +155,7 @@ curl -X POST 'https://smartcrawler.io/discover/runs' \
 ## 8. 内测期联系
 
 - API base: https://smartcrawler.io
-- 内测期密钥(请勿外传): `sck_WcB-PEGjdLFeIR9MeOOsN-R7tuYV-jAE31ps-pyswik`
+- 内测期密钥(请勿外传): `sck_EXAMPLE_REPLACE_ME`
 - 问题反馈: 直接联系 Bo Yuan (boyuan@solvea.cx)
 
 ---

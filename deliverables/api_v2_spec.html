@@ -90,13 +90,13 @@ footer{padding:30px;text-align:center;color:#52527a;font-size:0.8rem;border-top:
   <div class="key-box">
     <div class="label">API KEY · External Integration · 2026-05-25</div>
     <div class="val" onclick="cp(this)">
-      <span>sck_ikuBVCAjAKygdAxu8_DNSDc9iOJkgXMY7jBf5ceMmlw</span>
+      <span>sck_EXAMPLE_REPLACE_ME</span>
       <span class="copy-hint">点击复制</span>
     </div>
   </div>
 
   <pre><span class="c"># 方式 A · Bearer（Firecrawl 兼容）</span>
-curl -H <span class="s">"Authorization: Bearer sck_ikuBVCAjAKygdAxu8_DNSDc9iOJkgXMY7jBf5ceMmlw"</span> \
+curl -H <span class="s">"Authorization: Bearer sck_EXAMPLE_REPLACE_ME"</span> \
      <span class="s">"https://smartcrawler.io/api/v2/sources"</span>
 
 <span class="c"># 方式 B · X-API-Key（旧风格也支持）</span>
@@ -338,7 +338,7 @@ curl -H <span class="s">"X-API-Key: sck_..."</span> <span class="s">"https://sma
   <pre><span class="k">import</span> requests
 
 API = <span class="s">"https://smartcrawler.io/api/v2"</span>
-KEY = <span class="s">"sck_ikuBVCAjAKygdAxu8_DNSDc9iOJkgXMY7jBf5ceMmlw"</span>
+KEY = <span class="s">"sck_EXAMPLE_REPLACE_ME"</span>
 H = {<span class="s">"Authorization"</span>: <span class="s">f"Bearer {KEY}"</span>}
 
 <span class="c"># Scrape</span>
@@ -368,7 +368,7 @@ job = r.json()[<span class="s">"job_id"</span>]
 
 <span class="c"># 把 base_url 改成我们的</span>
 app = FirecrawlApp(
-    api_key=<span class="s">"sck_ikuBVCAjAKygdAxu8_DNSDc9iOJkgXMY7jBf5ceMmlw"</span>,
+    api_key=<span class="s">"sck_EXAMPLE_REPLACE_ME"</span>,
     api_url=<span class="s">"https://smartcrawler.io/api/v2"</span>
 )
 r = app.<span class="f">scrape_url</span>(<span class="s">"https://www.songmics.com/products/sol-3782"</span>)</pre>

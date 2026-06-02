@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..access import DEFAULT_API_KEY_SCOPES, api_key_scopes, normalize_scopes
 from ..apikey import generate as gen_key, hash_key, short as key_short
 from ..auth import make_token, verify_password, verify_token
 from ..db import get_db
@@ -400,6 +401,7 @@ def list_keys(user: str = Depends(require_user), db: Session = Depends(get_db)):
     return [{
         "id": k.id, "name": k.name, "key_prefix": k.key_prefix + "…",
         "active": k.active, "request_count": k.request_count,
+        "scopes": api_key_scopes(k),
         "created_at": k.created_at.isoformat() if k.created_at else None,
         "last_used": k.last_used.isoformat() if k.last_used else None,
     } for k in rows]
@@ -412,11 +414,14 @@ def create_key(payload: dict, user: str = Depends(require_user),
     if user.startswith("apikey:"):
         raise HTTPException(403, "API 密钥不能管理密钥")
     raw = gen_key()
+    scopes = normalize_scopes((payload or {}).get("scopes") or DEFAULT_API_KEY_SCOPES)
     k = ApiKey(name=(payload or {}).get("name") or "未命名",
-               key_prefix=key_short(raw), key_hash=hash_key(raw))
+               key_prefix=key_short(raw), key_hash=hash_key(raw),
+               scopes=scopes)
     db.add(k)
     db.commit()
     return {"id": k.id, "name": k.name, "key": raw,
+            "scopes": scopes,
             "note": "请立即保存，密钥明文不再展示"}
 
 

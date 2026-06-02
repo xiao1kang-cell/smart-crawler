@@ -2,7 +2,7 @@
 
 代理来源（优先级从高到低）：
   1. 环境变量 RESIDENTIAL_PROXY / DATACENTER_PROXY（单个代理 URL）
-  2. backend/proxies.txt（每行一个代理 URL，按 tier 分段）
+  2. PROXIES_FILE 指向的私有文件，未设置时读取 backend/proxies.txt 模板
   3. 无代理 → 直连
 
 对接 static-ip-manager：该项目管理 AT&T 静态块 108.95.61.128/26
@@ -17,7 +17,10 @@ import os
 import threading
 from pathlib import Path
 
-_PROXY_FILE = Path(__file__).resolve().parent.parent / "proxies.txt"
+_PROXY_FILE = Path(os.environ.get(
+    "PROXIES_FILE",
+    str(Path(__file__).resolve().parent.parent / "proxies.txt"),
+))
 _lock = threading.Lock()
 _pools: dict[str, "itertools.cycle"] = {}
 _loaded = False

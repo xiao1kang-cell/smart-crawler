@@ -217,6 +217,7 @@ class ApiKey(Base):
     last_used = Column(DateTime)
     request_count = Column(Integer, default=0)
     active = Column(Boolean, default=True)
+    scopes = Column(JSON)                            # ["crawler:read", "crawler:scrape", ...]
 
 
 class Keyword(Base):
@@ -293,6 +294,22 @@ class Usage(Base):
     api_key_id = Column(Integer, ForeignKey("api_keys.id"), index=True)
     endpoint = Column(String, index=True)            # /api/sites, /mcp/, /api/export/products...
     record_count = Column(Integer, default=0)        # 该次调用返回的 records 数
+    credits_used = Column(Integer, default=0)        # 该次调用消耗的 credits
     bytes_returned = Column(Integer, default=0)      # 返回字节数（用于带宽计费选项）
     duration_ms = Column(Integer)                    # 调用耗时（用于 SLA 监控）
+    occurred_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class RateLimitEvent(Base):
+    """持久化限流事件。
+
+    用于 NAS / 多 worker 部署下共享 v2 API 限流窗口。默认保留短窗口数据，
+    调用时顺手清理过期记录。
+    """
+
+    __tablename__ = "rate_limit_events"
+
+    id = Column(Integer, primary_key=True)
+    bucket_key = Column(String, index=True)
+    path = Column(String, index=True)
     occurred_at = Column(DateTime, default=datetime.utcnow, index=True)

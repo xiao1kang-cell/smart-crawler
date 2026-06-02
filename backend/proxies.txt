@@ -1,30 +1,21 @@
-# 代理池配置 —— app/proxy_pool.py 读取，按 tier 轮换。
-# 每行一个代理 URL；用 [residential] / [datacenter] 分段。
+# Proxy pool template.
 #
-# 协议：
-#   http://user:pass@host:port    商业 HTTP 代理（最稳定）
-#   socks5://host:port            SSH SOCKS5 隧道（mini Tailscale）
+# This file is intentionally safe to commit. Do not put real proxy usernames,
+# passwords, NAS addresses, or customer credentials in the repository.
 #
-# 失败 3 次自动剔除 10 分钟（PROXY_FAIL_THRESHOLD / PROXY_COOLDOWN_SEC）
+# Production/NAS:
+#   1. Create a private file outside the repo, for example:
+#        /srv/smart-crawler/secrets/proxies.txt
+#   2. Set:
+#        PROXIES_FILE=/srv/smart-crawler/secrets/proxies.txt
+#   3. Keep the same section format below.
+#
+# Supported URL examples:
+#   http://user:password@proxy-host:2333
+#   socks5://100.x.y.z:18443
 
 [residential]
-# === 商业住宅代理 10 个（2026-05-22 验证，独立出口 IP，350-470ms 延迟）===
-http://PsFaJMphAU0hH1s20E:iWrz7GbWhm@38.213.121.20:2333
-http://PsFaJMphAU0hH1s20E:iWrz7GbWhm@38.213.123.210:2333
-http://PsFaJMphAU0hH1s20E:iWrz7GbWhm@38.213.248.71:2333
-http://PsFaJMphAU0hH1s20E:iWrz7GbWhm@38.213.248.161:2333
-http://PsFaJMphAU0hH1s20E:iWrz7GbWhm@38.213.126.113:2333
-http://PsFaJMphAU0hH1s20E:iWrz7GbWhm@38.213.253.161:2333
-http://PsFaJMphAU0hH1s20E:iWrz7GbWhm@38.213.127.15:2333
-http://PsFaJMphAU0hH1s20E:iWrz7GbWhm@38.213.54.156:2333
-http://PsFaJMphAU0hH1s20E:iWrz7GbWhm@38.213.42.15:2333
-http://PsFaJMphAU0hH1s20E:iWrz7GbWhm@38.213.248.14:2333
-
-# === mini1-4 Tailscale SOCKS5（待用户改 ACL 后启动）===
-# socks5://100.95.220.89:18443     # mini1
-# socks5://100.65.2.60:18443       # mini2
-# socks5://100.85.173.119:18443    # mini3
-# socks5://100.72.33.57:18443      # mini4
+# http://user:password@proxy-host:2333
 
 [datacenter]
-# 数据中心代理（保留，目前空）
+# http://proxy-host:8080

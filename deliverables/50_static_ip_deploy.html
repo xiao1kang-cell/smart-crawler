@@ -62,7 +62,7 @@ footer{padding:30px;text-align:center;color:#52527a;font-size:0.8rem;border-top:
   <pre><span class="c"># 方案 A · 一行 docker 命令（推荐）</span>
 docker run -d --name sc-proxy --restart unless-stopped \
   --network host \
-  -e BASIC_AUTH=<span class="s">"smart:crawler2026"</span> \
+  -e BASIC_AUTH=<span class="s">"proxy_user:proxy_password"</span> \
   -e PORT=8087 \
   shenoise/tinyproxy:latest</pre>
 
@@ -74,7 +74,7 @@ services:
     restart: unless-stopped
     network_mode: host
     environment:
-      - BASIC_AUTH=smart:crawler2026
+      - BASIC_AUTH=proxy_user:proxy_password
       - PORT=8087
       - ALLOWED_NETWORKS=0.0.0.0/0</pre>
 
@@ -85,17 +85,17 @@ services:
     <li>NAS 出口 IP：<code>smartcrawler.io</code> 对应的 Cloudflare egress 或你的 NAS 公网 IP（告诉我也可以加白名单）</li>
   </ul>
 
-  <div class="callout warn"><b>安全</b>：BASIC_AUTH 用户密码请改，不要用 demo 的 <code>smart:crawler2026</code>。也可以加 IP 白名单只让 NAS 访问。</div>
+  <div class="callout warn"><b>安全</b>：BASIC_AUTH 用户密码请改，不要用 demo 的 <code>proxy_user:proxy_password</code>。也可以加 IP 白名单只让 NAS 访问。</div>
 </section>
 
 <section>
   <h2><span class="n">3</span>验证某台机器</h2>
   <pre><span class="c"># 假设这台机器静态 IP = 73.45.12.100</span>
-curl -x http://smart:crawler2026@73.45.12.100:8087 https://api.ipify.org
+curl -x http://proxy_user:proxy_password@73.45.12.100:8087 https://api.ipify.org
 <span class="c"># 输出应该就是 73.45.12.100（说明代理生效）</span>
 
 <span class="c"># 然后试 Wayfair（之前 PerimeterX 拦截的）</span>
-curl -x http://smart:crawler2026@73.45.12.100:8087 \
+curl -x http://proxy_user:proxy_password@73.45.12.100:8087 \
      -A <span class="s">"Mozilla/5.0 ..."</span> \
      https://www.wayfair.com/sitemap_index.xml</pre>
 </section>
@@ -103,11 +103,11 @@ curl -x http://smart:crawler2026@73.45.12.100:8087 \
 <section>
   <h2><span class="n">4</span>给我这个清单（一次性）</h2>
   <p class="lede">50 行，每行一台机器的代理 URL：</p>
-  <pre>http://smart:crawler2026@73.45.12.100:8087
-http://smart:crawler2026@73.45.12.101:8087
-http://smart:crawler2026@73.45.12.102:8087
+  <pre>http://proxy_user:proxy_password@73.45.12.100:8087
+http://proxy_user:proxy_password@73.45.12.101:8087
+http://proxy_user:proxy_password@73.45.12.102:8087
 ...
-http://smart:crawler2026@73.45.12.149:8087</pre>
+http://proxy_user:proxy_password@73.45.12.149:8087</pre>
 
   <p>我加到 NAS 的 <code>backend/proxies.txt</code> <code>[residential]</code> 段，<strong>立即生效</strong>（smart-crawler 启动时自动从该文件读）。</p>
 </section>
