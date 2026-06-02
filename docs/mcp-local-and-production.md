@@ -58,6 +58,12 @@ Authorization: Bearer sck_...
 codex mcp get smart-crawler-local
 ```
 
+npx 配置助手：
+
+```bash
+npx -y @smart-crawler/mcp install --client codex --local --env-var SMARTCRAWLER_LOCAL_API_KEY
+```
+
 线上：
 
 ```bash
@@ -70,6 +76,12 @@ codex mcp add smart-crawler \
 
 ```bash
 export SMARTCRAWLER_API_KEY=sck_xxx
+```
+
+也可以让 npx helper 打印命令：
+
+```bash
+npx -y @smart-crawler/mcp install --client codex --env-var SMARTCRAWLER_API_KEY
 ```
 
 如果使用本地脚本生成的配置，`smart-crawler-local` 会把 token 写进
@@ -100,6 +112,12 @@ Claude Desktop / Claude Code 的 MCP 配置核心字段相同：
 http://127.0.0.1:8077/mcp
 ```
 
+npx helper：
+
+```bash
+npx -y @smart-crawler/mcp install --client claude --url https://smartcrawler.io/mcp
+```
+
 ## Cursor 使用
 
 在 `~/.cursor/mcp.json` 中配置：
@@ -116,6 +134,25 @@ http://127.0.0.1:8077/mcp
   }
 }
 ```
+
+或用：
+
+```bash
+npx -y @smart-crawler/mcp install --client cursor --local
+```
+
+## Agent-first benchmark
+
+本地/线上都可以跑 50 个固定任务：
+
+```bash
+export SMARTCRAWLER_API_KEY=sck_xxx
+export SMARTCRAWLER_BASE_URL=http://127.0.0.1:8077
+./scripts/run_agent_benchmark.py > /tmp/smartcrawler-agent-benchmark.json
+```
+
+输出包含 success、credits、cache_hit、duration、token estimate。竞品列先手工补
+Firecrawl/XCrawl 的同任务结果，用来生成 Product Hunt / MCP marketplace 素材。
 
 ## 安全与生产检查
 

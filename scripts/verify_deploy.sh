@@ -2,8 +2,13 @@
 # 部署后验证脚本 - 确认 Reddit 工具已上线
 set -e
 
-KEY="sck_UYCUvxoUcmtkzNJB6hbUdHtaiFy1Dn9dHJkruvHwR50"
-ENDPOINT="https://smartcrawler.io"
+KEY="${SMARTCRAWLER_API_KEY:-${API_KEY:-}}"
+ENDPOINT="${SMARTCRAWLER_BASE_URL:-https://smartcrawler.io}"
+
+if [ -z "$KEY" ]; then
+  echo "Set SMARTCRAWLER_API_KEY or API_KEY before running this verification script."
+  exit 2
+fi
 
 echo "═══════════════════════════════════════════════"
 echo "  smart-crawler 部署后健康检查"

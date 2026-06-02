@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import time
 from functools import wraps
 
@@ -16,10 +17,16 @@ from fastmcp import FastMCP
 from sqlalchemy import func
 
 from .access import has_scope
+from .agent_runtime import (
+    agent_key_for_api_key,
+    enrich_usage,
+    insufficient_scope_response,
+    run_with_agent_memory,
+)
 from .billing import record_usage
 from .db import SessionLocal
 from .mcp_context import get_current_api_key
-from .models import (Keyword, PriceHistory, Product, Promotion, Review,
+from .models import (ApiKey, Keyword, PriceHistory, Product, Promotion, Review,
                       ShoppingResult, Site)
 
 mcp = FastMCP(
@@ -32,9 +39,9 @@ mcp = FastMCP(
         "Flexispot / Overstock / BCP / Woltu —— 61 站点矩阵持续采集。"
         "数据维度：商品 / 价格历史 / 促销 / 评分 / 评论(VOC) / Google Shopping / "
         "Amazon ASIN 评论 + AI 口碑分析。"
-        "为 AI Agent 设计的 MCP 工具集 + Firecrawl-compatible v2 API + 结构化 JSON 输出。"
-        "默认策略：先用 query_crawler_warehouse 查已有仓库，再用 scrape_url 抓单页；"
-        "crawl_site 是高成本整站采集，默认 dry_run=true，不会真正入队。"
+        "为 AI Agent 设计的 MCP-native 工具集：少参数、5分钟跨调用记忆、warehouse免费、"
+        "成本透明、自然语言错误建议。默认策略：先用 query_warehouse(intent) 查已有仓库；"
+        "需要页面内容再用 scrape_url(url)；crawl_site(url) 是高成本整站采集，默认 dry_run=true。"
     ),
 )
 
@@ -51,7 +58,7 @@ def _product(p: Product) -> dict:
     }
 
 
-def metered_tool(required_scope: str = "crawler:read"):
+def metered_tool(required_scope: str = "crawler:read", cacheable: bool = False):
     """Register an MCP tool with scope checks and usage metering."""
     def decorator(fn):
         @wraps(fn)
@@ -60,13 +67,42 @@ def metered_tool(required_scope: str = "crawler:read"):
             if ctx and not has_scope(ctx.scopes, required_scope):
                 return _insufficient_scope(required_scope, ctx.scopes)
             started = time.perf_counter()
-            result = fn(*args, **kwargs)
+            agent_key = agent_key_for_api_key(ctx.api_key_id if ctx else None)
+            use_cache = cacheable and not kwargs.get("force_live", False)
+            if kwargs.get("mode") == "advanced":
+                use_cache = False
+            if use_cache:
+                s = SessionLocal()
+                try:
+                    result = run_with_agent_memory(
+                        s,
+                        agent_key=agent_key,
+                        tool=fn.__name__,
+                        payload=_normalized_tool_payload(fn, args, kwargs),
+                        producer=lambda: fn(*args, **kwargs),
+                    )
+                finally:
+                    s.close()
+            else:
+                result = fn(*args, **kwargs)
             duration_ms = int((time.perf_counter() - started) * 1000)
+            if isinstance(result, dict):
+                _enrich_mcp_usage(ctx.api_key_id if ctx else None, result,
+                                  duration_ms=duration_ms)
             if ctx:
                 _record_mcp_usage(ctx.api_key_id, fn.__name__, result, duration_ms)
             return result
         return mcp.tool(wrapper)
     return decorator
+
+
+def _normalized_tool_payload(fn, args: tuple, kwargs: dict) -> dict:
+    try:
+        bound = inspect.signature(fn).bind_partial(*args, **kwargs)
+        bound.apply_defaults()
+        return dict(bound.arguments)
+    except Exception:
+        return {"args": args, "kwargs": kwargs}
 
 
 def _record_mcp_usage(api_key_id: int, tool_name: str, result, duration_ms: int) -> None:
@@ -111,12 +147,23 @@ def _infer_credits(result) -> int:
 
 
 def _insufficient_scope(required: str, granted: list[str]) -> dict:
-    return {
-        "error": "insufficient_scope",
-        "required_scope": required,
-        "granted_scopes": granted,
-        "message": f"API key lacks required scope: {required}",
-    }
+    return insufficient_scope_response(required, granted)
+
+
+def _enrich_mcp_usage(api_key_id: int | None, result: dict,
+                      duration_ms: int) -> None:
+    s = SessionLocal()
+    try:
+        try:
+            key = s.get(ApiKey, api_key_id) if api_key_id else None
+        except Exception:
+            s.rollback()
+            key = None
+        usage = result.setdefault("usage", {})
+        usage.setdefault("duration_ms", duration_ms)
+        enrich_usage(s, result, api_key=key, default_cost_if_retry=3)
+    finally:
+        s.close()
 
 
 @metered_tool()
@@ -458,25 +505,25 @@ def get_discover_run_items(
 # Agent-first Crawler Tools — shared with /api/v2
 # ─────────────────────────────────────────────────────────────────────────────
 
-@metered_tool(required_scope="crawler:scrape")
+@metered_tool(required_scope="crawler:scrape", cacheable=True)
 def scrape_url(url: str, formats: list[str] | None = None,
-               force_live: bool = False) -> dict:
-    """抓取单个 URL，优先查 smart-crawler 仓库，未命中再实时抓取。
+               force_live: bool = False, mode: str = "standard") -> dict:
+    """抓取单个 URL。Agent 推荐只传 url。
 
-    formats: ["markdown", "structured", "html", "links"]。默认返回 markdown +
-    structured。适合用户说"抓这个 URL / 提取标题价格图片"时调用。
-    返回 usage.cache_hit/source/credits_used，方便 Agent 判断成本和可靠性。
+    默认返回 markdown + structured，优先 warehouse，未命中再 live scrape。
+    同一 API key 5 分钟内重复调用会命中 agent memory，credits_used=0。
+    失败时看 warnings[].next_step：通常先 query_warehouse，advanced 模式预留给后续浏览器执行器。
     """
     from .agent_crawler import scrape_url as _scrape_url
     s = SessionLocal()
     try:
         return _scrape_url(s, url, formats=formats,
-                           force_live=force_live)
+                           force_live=force_live, mode=mode)
     finally:
         s.close()
 
 
-@metered_tool()
+@metered_tool(cacheable=True)
 def map_site(url: str, limit: int = 1000, search: str | None = None) -> dict:
     """列出某个已配置站点在仓库中的已知商品 URL。
 
@@ -494,9 +541,9 @@ def map_site(url: str, limit: int = 1000, search: str | None = None) -> dict:
 def crawl_site(url: str, limit: int = 1000, dry_run: bool = True) -> dict:
     """验证或触发一个已配置站点的异步整站采集。
 
-    默认 dry_run=true，只返回可执行性和预估成本，不会入队。只有用户明确要求
-    "开始采集/执行整站抓取"时，才用 dry_run=false。Agent 应优先调用
-    query_crawler_warehouse 或 map_site。
+    Agent 推荐只传 url，默认 dry_run=true，不会入队。只有用户明确要求
+    "开始采集/执行整站抓取"且 API key 有 crawler:crawl scope 时，才用 dry_run=false。
+    大规模采集前应先调用 query_warehouse 或 map_site。
     """
     from .agent_crawler import crawl_site as _crawl_site
     ctx = get_current_api_key()
@@ -520,7 +567,7 @@ def get_crawl_job(job_id: int) -> dict:
         s.close()
 
 
-@metered_tool(required_scope="crawler:scrape")
+@metered_tool(required_scope="crawler:scrape", cacheable=True)
 def extract_structured_data(urls: list[str], schema: dict | None = None,
                             instruction: str | None = None) -> dict:
     """按 JSON schema 从 URL 抽结构化字段。
@@ -535,7 +582,23 @@ def extract_structured_data(urls: list[str], schema: dict | None = None,
         s.close()
 
 
-@metered_tool()
+@metered_tool(cacheable=True)
+def query_warehouse(intent: str, limit: int = 20) -> dict:
+    """按自然语言意图查询 smart-crawler 商品仓库。
+
+    这是 Agent 的首选入口：warehouse 查询不耗 credits，毫秒级返回。
+    示例：query_warehouse("vidaxl patio storage top discounts", limit=20)
+    如果结果不足，再调用 scrape_url(url) 抓单页；不要一上来 live scrape。
+    """
+    from .agent_crawler import query_warehouse as _query
+    s = SessionLocal()
+    try:
+        return _query(s, intent, limit=limit)
+    finally:
+        s.close()
+
+
+@metered_tool(cacheable=True)
 def query_crawler_warehouse(query: str, site: str | None = None,
                             brand: str | None = None,
                             limit: int = 20) -> dict:

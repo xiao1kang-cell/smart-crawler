@@ -12,6 +12,11 @@ This branch turns the crawler surface into a shared Agent-first service layer:
   - `query_warehouse`
   - `extract_structured_data`
   - lightweight live fetch + JSON-LD/metadata/links/markdown extraction
+  - warehouse responses use 0 credits; live scrape still spends credits
+
+- `backend/app/agent_runtime.py`
+  - 5-minute cross-call memory for Agent/MCP/v2 crawler calls
+  - usage enrichment with `balance`, `cost_if_retry`, and natural-language next steps
 
 - `backend/app/api/v2.py`
   - `POST /api/v2/scrape`
@@ -33,6 +38,7 @@ This branch turns the crawler surface into a shared Agent-first service layer:
   - `get_crawl_job`
   - `extract_structured_data`
   - `query_crawler_warehouse`
+  - `query_warehouse(intent, limit)` low-parameter Agent-first alias
   - scope checks and MCP usage metering into `usage_records`
 
 - `scripts/local/start_mcp.sh`
@@ -42,15 +48,25 @@ This branch turns the crawler surface into a shared Agent-first service layer:
   - runs uvicorn in a detached `screen` session
   - updates Codex MCP config for `smart-crawler-local`
 
+- `packages/mcp`
+  - `npx -y @smart-crawler/mcp install --client codex|claude|cursor`
+  - prints safe copy/paste config without reading or storing API keys
+
+- `benchmarks/agent_first_tasks.json`
+- `scripts/run_agent_benchmark.py`
+  - 50 Agent-first GTM tasks covering warehouse, scrape, extract, crawl dry-run, memory, and error paths
+
 ## Response contract
 
 Agent-facing responses include:
 
 - `success`
 - `usage.credits_used`
+- `usage.balance`
 - `usage.cache_hit`
 - `usage.source`
 - `usage.records`
+- `usage.cost_if_retry`
 - `warnings[].message`
 - `warnings[].next_step`
 
@@ -144,8 +160,9 @@ Use smart-crawler to query the warehouse for patio storage products under $100.
 ## Next iteration
 
 - Add LLM schema extraction fallback after JSON-LD/metadata extraction.
-- Add per-key monthly quotas on top of the new scopes.
-- Add Redis rate limiting if DB-backed one-minute windows become too write-heavy.
+- Package and test the Claude Desktop `.dxt` artifact.
+- Run the 50-task benchmark against deployed staging and publish the summary.
+- Add Redis cache/rate limiting if DB-backed one-minute windows become too write-heavy.
 
 ## Security close-out
 

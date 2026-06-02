@@ -1,0 +1,12 @@
+{
+  "name": "@smart-crawler/mcp",
+  "version": "0.1.0",
+  "description": "Install helper for the smart-crawler Agent-first MCP server.",
+  "bin": {
+    "smart-crawler-mcp": "./bin/smart-crawler-mcp.js"
+  },
+  "scripts": {
+    "test": "node ./bin/smart-crawler-mcp.js install --client codex --url http://127.0.0.1:8077/mcp --env-var SMARTCRAWLER_API_KEY"
+  },
+  "license": "UNLICENSED"
+}

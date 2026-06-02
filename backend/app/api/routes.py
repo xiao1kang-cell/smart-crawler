@@ -402,6 +402,7 @@ def list_keys(user: str = Depends(require_user), db: Session = Depends(get_db)):
         "id": k.id, "name": k.name, "key_prefix": k.key_prefix + "…",
         "active": k.active, "request_count": k.request_count,
         "scopes": api_key_scopes(k),
+        "monthly_credit_quota": k.monthly_credit_quota,
         "created_at": k.created_at.isoformat() if k.created_at else None,
         "last_used": k.last_used.isoformat() if k.last_used else None,
     } for k in rows]
@@ -415,14 +416,31 @@ def create_key(payload: dict, user: str = Depends(require_user),
         raise HTTPException(403, "API 密钥不能管理密钥")
     raw = gen_key()
     scopes = normalize_scopes((payload or {}).get("scopes") or DEFAULT_API_KEY_SCOPES)
+    quota = _parse_monthly_credit_quota((payload or {}).get("monthly_credit_quota"))
     k = ApiKey(name=(payload or {}).get("name") or "未命名",
                key_prefix=key_short(raw), key_hash=hash_key(raw),
-               scopes=scopes)
+               scopes=scopes,
+               monthly_credit_quota=quota)
     db.add(k)
     db.commit()
     return {"id": k.id, "name": k.name, "key": raw,
             "scopes": scopes,
+            "monthly_credit_quota": k.monthly_credit_quota,
             "note": "请立即保存，密钥明文不再展示"}
+
+
+def _parse_monthly_credit_quota(value) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise HTTPException(400, "monthly_credit_quota 必须是非负整数")
+    try:
+        quota = int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "monthly_credit_quota 必须是非负整数")
+    if quota < 0:
+        raise HTTPException(400, "monthly_credit_quota 必须是非负整数")
+    return quota
 
 
 @router.delete("/keys/{key_id}")

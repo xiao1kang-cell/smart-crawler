@@ -94,3 +94,30 @@ def test_mcp_crawl_execution_requires_crawl_scope(monkeypatch):
 
     assert result["error"] == "insufficient_scope"
     assert result["required_scope"] == "crawler:crawl"
+
+
+def test_mcp_cache_payload_normalizes_positional_and_keyword_args():
+    from app import mcp_server
+
+    def scrape_url(url: str, formats=None, force_live: bool = False):
+        return url, formats, force_live
+
+    positional = mcp_server._normalized_tool_payload(
+        scrape_url, ("https://example.com/",), {"formats": ["markdown"]})
+    keyword = mcp_server._normalized_tool_payload(
+        scrape_url, (), {"url": "https://example.com/", "formats": ["markdown"]})
+
+    assert positional == keyword
+    assert positional["force_live"] is False
+
+
+def test_monthly_credit_quota_must_be_nonnegative_int():
+    from app.api.routes import _parse_monthly_credit_quota
+
+    assert _parse_monthly_credit_quota(None) is None
+    assert _parse_monthly_credit_quota("20") == 20
+
+    for bad in (-1, "abc", True):
+        with pytest.raises(HTTPException) as exc:
+            _parse_monthly_credit_quota(bad)
+        assert exc.value.status_code == 400

@@ -27,6 +27,11 @@ from ..agent_crawler import (
     query_warehouse,
     scrape_url,
 )
+from ..agent_runtime import (
+    agent_key_for_api_key,
+    enrich_usage,
+    run_with_agent_memory,
+)
 from ..access import (
     find_api_key,
     raw_key_from_headers,
@@ -129,6 +134,7 @@ class ScrapeRequest(BaseModel):
     wait_for: int = Field(default=0, description="Extra wait in milliseconds.")
     timeout: int = Field(default=30000, description="Timeout in milliseconds.")
     force_live: bool = Field(default=False, description="Bypass warehouse cache.")
+    mode: str = Field(default="standard", description="standard / advanced (advanced is reserved).")
 
 
 class MapRequest(BaseModel):
@@ -179,14 +185,31 @@ def scrape(
 ):
     """Single URL scrape with warehouse-first behavior."""
     _require_scope(db, authorization, x_api_key, "crawler:scrape")
-    result = scrape_url(
+    key = _api_key_row(db, authorization, x_api_key)
+    result = run_with_agent_memory(
         db,
-        req.url,
-        formats=req.formats,
-        wait_for_ms=req.wait_for,
-        timeout_ms=req.timeout,
-        force_live=req.force_live,
+        agent_key=agent_key_for_api_key(key.id if key else None),
+        tool="scrape_url",
+        payload={
+            "url": req.url,
+            "formats": req.formats,
+            "wait_for": req.wait_for,
+            "timeout": req.timeout,
+            "mode": req.mode,
+            "force_live": req.force_live,
+        },
+        cacheable=not req.force_live and req.mode == "standard",
+        producer=lambda: scrape_url(
+            db,
+            req.url,
+            formats=req.formats,
+            wait_for_ms=req.wait_for,
+            timeout_ms=req.timeout,
+            force_live=req.force_live,
+            mode=req.mode,
+        ),
     )
+    enrich_usage(db, result, api_key=key, default_cost_if_retry=3)
     _meter(db, authorization, x_api_key, "/api/v2/scrape", result)
     return result
 
@@ -200,7 +223,9 @@ def map_site(
 ):
     """Map a configured site to known product URLs from the warehouse."""
     _require_scope(db, authorization, x_api_key, "crawler:read")
+    key = _api_key_row(db, authorization, x_api_key)
     result = map_site_service(db, req.url, limit=req.limit, search=req.search)
+    enrich_usage(db, result, api_key=key)
     _meter(db, authorization, x_api_key, "/api/v2/map", result)
     if not result.get("success"):
         raise HTTPException(404, result)
@@ -223,7 +248,9 @@ def crawl(
         db, authorization, x_api_key,
         "crawler:read" if req.dry_run else "crawler:crawl",
     )
+    key = _api_key_row(db, authorization, x_api_key)
     result = crawl_site(db, req.url, limit=req.limit, dry_run=req.dry_run)
+    enrich_usage(db, result, api_key=key)
     _meter(db, authorization, x_api_key, "/api/v2/crawl", result)
     if not result.get("success"):
         raise HTTPException(404, result)
@@ -239,7 +266,9 @@ def crawl_status(
 ):
     """Poll a queued crawl job."""
     _require_scope(db, authorization, x_api_key, "crawler:read")
+    key = _api_key_row(db, authorization, x_api_key)
     result = get_crawl_job(db, job_id)
+    enrich_usage(db, result, api_key=key)
     _meter(db, authorization, x_api_key, "/api/v2/crawl/{job_id}", result)
     if not result.get("success"):
         raise HTTPException(404, result)
@@ -259,6 +288,7 @@ def batch_scrape(
     batch can be layered on top of the same service later.
     """
     _require_scope(db, authorization, x_api_key, "crawler:scrape")
+    key = _api_key_row(db, authorization, x_api_key)
     if len(req.urls) > 100:
         raise HTTPException(400, "Max 100 URLs per batch")
     batch_id = "batch_" + uuid.uuid4().hex[:16]
@@ -279,6 +309,7 @@ def batch_scrape(
         },
         "warnings": [],
     }
+    enrich_usage(db, result, api_key=key, default_cost_if_retry=3)
     _meter(db, authorization, x_api_key, "/api/v2/batch/scrape", result)
     return result
 
@@ -296,12 +327,20 @@ def extract(
     JSON schema. LLM extraction can be added as a final fallback.
     """
     _require_scope(db, authorization, x_api_key, "crawler:scrape")
-    result = extract_structured_data(
+    key = _api_key_row(db, authorization, x_api_key)
+    result = run_with_agent_memory(
         db,
-        req.urls,
-        req.schema_,
-        instruction=req.prompt,
+        agent_key=agent_key_for_api_key(key.id if key else None),
+        tool="extract_structured_data",
+        payload={"urls": req.urls, "schema": req.schema_, "prompt": req.prompt},
+        producer=lambda: extract_structured_data(
+            db,
+            req.urls,
+            req.schema_,
+            instruction=req.prompt,
+        ),
     )
+    enrich_usage(db, result, api_key=key, default_cost_if_retry=3)
     _meter(db, authorization, x_api_key, "/api/v2/extract", result)
     return result
 
@@ -315,13 +354,26 @@ def query(
 ):
     """Query smart-crawler's warehouse before spending live scrape credits."""
     _require_scope(db, authorization, x_api_key, "crawler:read")
-    result = query_warehouse(
+    key = _api_key_row(db, authorization, x_api_key)
+    result = run_with_agent_memory(
         db,
-        req.query,
-        site=req.site,
-        brand=req.brand,
-        limit=req.limit,
+        agent_key=agent_key_for_api_key(key.id if key else None),
+        tool="query_warehouse",
+        payload={
+            "query": req.query,
+            "site": req.site,
+            "brand": req.brand,
+            "limit": req.limit,
+        },
+        producer=lambda: query_warehouse(
+            db,
+            req.query,
+            site=req.site,
+            brand=req.brand,
+            limit=req.limit,
+        ),
     )
+    enrich_usage(db, result, api_key=key)
     _meter(db, authorization, x_api_key, "/api/v2/query", result)
     return result
 
@@ -334,6 +386,7 @@ def list_sources(
 ):
     """List all configured data sources with warehouse counts."""
     _require_scope(db, authorization, x_api_key, "crawler:read")
+    key = _api_key_row(db, authorization, x_api_key)
     sku_counts = dict(db.query(Product.site, func.count(Product.id))
                         .group_by(Product.site).all())
     data = []
@@ -360,6 +413,7 @@ def list_sources(
         "usage": {"credits_used": 1, "records": len(data), "source": "warehouse"},
         "warnings": [],
     }
+    enrich_usage(db, result, api_key=key)
     _meter(db, authorization, x_api_key, "/api/v2/sources", result)
     return result
 

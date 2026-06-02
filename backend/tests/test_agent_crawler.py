@@ -15,8 +15,9 @@ from app.agent_crawler import (
     html_to_markdown,
     scrape_url,
 )
+from app.agent_runtime import enrich_usage, run_with_agent_memory
 from app.db import Base
-from app.models import Product, Site
+from app.models import ApiKey, Product, Site, Usage
 
 
 pytestmark = pytest.mark.unit
@@ -73,8 +74,49 @@ def test_scrape_url_hits_warehouse_before_live_fetch(monkeypatch):
 
     assert result["success"] is True
     assert result["usage"]["source"] == "warehouse"
+    assert result["usage"]["credits_used"] == 0
     assert result["usage"]["cache_hit"] is True
     assert result["data"]["title"] == "Warehouse Chair"
+
+
+def test_agent_memory_returns_zero_credit_cache_hit():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    db = Session()
+    calls = {"n": 0}
+
+    def producer():
+        calls["n"] += 1
+        return {
+            "success": True,
+            "data": {"title": "Cached Chair"},
+            "usage": {
+                "credits_used": 2,
+                "cache_hit": False,
+                "source": "live",
+                "records": 1,
+                "duration_ms": 1,
+            },
+            "warnings": [],
+        }
+
+    first = run_with_agent_memory(
+        db, agent_key="apikey:1", tool="scrape_url",
+        payload={"url": "https://example.com/products/chair"},
+        producer=producer,
+    )
+    second = run_with_agent_memory(
+        db, agent_key="apikey:1", tool="scrape_url",
+        payload={"url": "https://example.com/products/chair"},
+        producer=producer,
+    )
+
+    assert calls["n"] == 1
+    assert first["usage"]["credits_used"] == 2
+    assert second["usage"]["credits_used"] == 0
+    assert second["usage"]["cache_hit"] is True
+    assert second["usage"]["source"] == "agent_memory"
 
 
 def test_crawl_site_defaults_to_dry_run_without_enqueue():
@@ -94,3 +136,44 @@ def test_crawl_site_defaults_to_dry_run_without_enqueue():
     assert result["job_id"] is None
     assert result["usage"]["credits_used"] == 0
     assert result["warnings"][0]["code"] == "dry_run_only"
+
+
+def test_query_warehouse_is_free_and_errors_have_next_step():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    db = Session()
+
+    from app.agent_crawler import query_warehouse
+
+    result = query_warehouse(db, "missing product", limit=5)
+    assert result["usage"]["source"] == "warehouse"
+    assert result["usage"]["credits_used"] == 0
+
+    failed = {
+        "success": False,
+        "metadata": {"error": "HTTP 403"},
+        "usage": {"credits_used": 0, "records": 0},
+        "warnings": [],
+    }
+    enrich_usage(db, failed, default_cost_if_retry=3)
+    assert failed["usage"]["cost_if_retry"] == 3
+    assert failed["warnings"][0]["next_step"]
+
+
+def test_zero_monthly_credit_quota_is_not_defaulted():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    db = Session()
+    key = ApiKey(id=7, name="zero", key_prefix="sck_x",
+                 key_hash="hash", active=True, monthly_credit_quota=0)
+    db.add(key)
+    db.add(Usage(api_key_id=7, endpoint="/api/v2/scrape",
+                 credits_used=1, record_count=1))
+    db.commit()
+
+    result = {"success": True, "usage": {"credits_used": 0}}
+    enrich_usage(db, result, api_key=key)
+
+    assert result["usage"]["balance"] == 0

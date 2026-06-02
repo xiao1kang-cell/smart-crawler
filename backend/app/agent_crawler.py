@@ -100,6 +100,7 @@ def scrape_url(
     wait_for_ms: int = 0,
     timeout_ms: int = 30_000,
     force_live: bool = False,
+    mode: str = "standard",
 ) -> dict:
     """Scrape one URL with warehouse-first behavior."""
     started = time.perf_counter()
@@ -115,7 +116,7 @@ def scrape_url(
         if product:
             data = product_to_schema(product, site)
             usage = UsageInfo(
-                credits_used=1, cache_hit=True, source="warehouse",
+                credits_used=0, cache_hit=True, source="warehouse",
                 duration_ms=_now_ms(started), records=1,
             )
             return {
@@ -182,7 +183,8 @@ def scrape_url(
             "warnings": [{
                 "code": "queued_after_live_scrape_failed",
                 "message": "Live scrape failed, but the URL belongs to a supported site. A crawl job was queued.",
-                "next_step": f"Poll /api/v2/crawl/{job_id}",
+                "next_step": f"Poll /api/v2/crawl/{job_id}, or query the warehouse while the crawl runs.",
+                "cost_if_retry": 3,
             }],
         }
 
@@ -205,7 +207,11 @@ def scrape_url(
         "warnings": [{
             "code": "unsupported_url",
             "message": "The URL is not in the configured source list and live scrape failed.",
-            "next_step": "Add the source to sites.yaml or call map_site on a supported domain.",
+            "next_step": (
+                "Call query_crawler_warehouse for cached alternatives. "
+                "If this is a new source, add it to sites.yaml before crawling."
+            ),
+            "cost_if_retry": 3,
         }],
     }
 
@@ -246,7 +252,7 @@ def map_site(
         "site": site.site,
         "links": links,
         "count": len(links),
-        "usage": UsageInfo(credits_used=1, cache_hit=True, source="warehouse",
+        "usage": UsageInfo(credits_used=0, cache_hit=True, source="warehouse",
                            duration_ms=_now_ms(started),
                            records=len(links)).to_dict(),
         "warnings": [],
@@ -374,7 +380,7 @@ def query_warehouse(
         "total": total,
         "returned": len(rows),
         "items": [product_to_schema(p, None) for p in rows],
-        "usage": UsageInfo(credits_used=1, cache_hit=True, source="warehouse",
+        "usage": UsageInfo(credits_used=0, cache_hit=True, source="warehouse",
                            duration_ms=_now_ms(started),
                            records=len(rows)).to_dict(),
         "warnings": [],
@@ -390,8 +396,10 @@ def extract_structured_data(
 ) -> dict:
     started = time.perf_counter()
     items = []
+    credits = 0
     for url in urls[:25]:
         scraped = scrape_url(db, url, formats=["structured", "markdown"])
+        credits += int((scraped.get("usage") or {}).get("credits_used") or 0)
         data = scraped.get("data") or {}
         items.append({
             "url": url,
@@ -405,7 +413,7 @@ def extract_structured_data(
         "items": items,
         "schema": schema or {},
         "instruction": instruction,
-        "usage": UsageInfo(credits_used=max(1, len(items) * 2),
+        "usage": UsageInfo(credits_used=credits,
                            source="mixed",
                            duration_ms=_now_ms(started),
                            records=len(items)).to_dict(),

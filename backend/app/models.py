@@ -218,6 +218,7 @@ class ApiKey(Base):
     request_count = Column(Integer, default=0)
     active = Column(Boolean, default=True)
     scopes = Column(JSON)                            # ["crawler:read", "crawler:scrape", ...]
+    monthly_credit_quota = Column(Integer)           # null -> default free quota
 
 
 class Keyword(Base):
@@ -313,3 +314,17 @@ class RateLimitEvent(Base):
     bucket_key = Column(String, index=True)
     path = Column(String, index=True)
     occurred_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class AgentCache(Base):
+    """Short-lived Agent memory for MCP / v2 crawler calls."""
+
+    __tablename__ = "agent_cache"
+
+    id = Column(Integer, primary_key=True)
+    agent_key = Column(String, index=True)
+    tool = Column(String, index=True)
+    cache_key = Column(String, index=True)
+    response = Column(JSON)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    expires_at = Column(DateTime, index=True)

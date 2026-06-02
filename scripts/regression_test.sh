@@ -1,12 +1,27 @@
 #!/bin/bash
 # 回归测试 · 自动跑所有关键端点，输出 pass/fail
-# 用法：bash scripts/regression_test.sh [TOKEN]
+# 用法：SMARTCRAWLER_API_KEY=sck_... bash scripts/regression_test.sh [TOKEN]
 
 set -uo pipefail
-KEY="${API_KEY:-sck_UYCUvxoUcmtkzNJB6hbUdHtaiFy1Dn9dHJkruvHwR50}"
-BASE="https://smartcrawler.io"
-TOKEN=$(curl -s -X POST "$BASE/api/login" -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin"}' 2>/dev/null | python3 -c "import json,sys;print(json.load(sys.stdin).get('token',''))")
+KEY="${SMARTCRAWLER_API_KEY:-${API_KEY:-}}"
+BASE="${SMARTCRAWLER_BASE_URL:-https://smartcrawler.io}"
+TOKEN="${1:-${SMARTCRAWLER_TOKEN:-${TOKEN:-}}}"
+
+if [ -z "$KEY" ]; then
+  echo "Set SMARTCRAWLER_API_KEY or API_KEY before running regression tests."
+  exit 2
+fi
+
+if [ -z "$TOKEN" ] && [ -n "${SMARTCRAWLER_ADMIN_USERNAME:-}" ] && [ -n "${SMARTCRAWLER_ADMIN_PASSWORD:-}" ]; then
+  TOKEN=$(curl -s -X POST "$BASE/api/login" -H "Content-Type: application/json" \
+    -d "{\"username\":\"$SMARTCRAWLER_ADMIN_USERNAME\",\"password\":\"$SMARTCRAWLER_ADMIN_PASSWORD\"}" 2>/dev/null \
+    | python3 -c "import json,sys;print(json.load(sys.stdin).get('token',''))")
+fi
+
+if [ -z "$TOKEN" ]; then
+  echo "Pass a bearer token as argv[1], set SMARTCRAWLER_TOKEN, or set SMARTCRAWLER_ADMIN_USERNAME/SMARTCRAWLER_ADMIN_PASSWORD."
+  exit 2
+fi
 
 PASS=0
 FAIL=0
