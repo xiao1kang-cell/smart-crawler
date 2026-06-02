@@ -13,6 +13,7 @@ import inspect
 import time
 from functools import wraps
 
+import structlog
 from fastmcp import FastMCP
 from sqlalchemy import func
 
@@ -28,6 +29,8 @@ from .db import SessionLocal
 from .mcp_context import get_current_api_key
 from .models import (ApiKey, Keyword, PriceHistory, Product, Promotion, Review,
                       ShoppingResult, Site)
+
+logger = structlog.get_logger(__name__)
 
 mcp = FastMCP(
     "smart-crawler",
@@ -120,8 +123,14 @@ def _record_mcp_usage(api_key_id: int, tool_name: str, result, duration_ms: int)
             bytes_returned=len(payload),
             duration_ms=duration_ms,
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(
+            "mcp.usage_record_failed",
+            api_key_id=api_key_id,
+            tool_name=tool_name,
+            duration_ms=duration_ms,
+            error=str(exc),
+        )
 
 
 def _infer_records(result) -> int:

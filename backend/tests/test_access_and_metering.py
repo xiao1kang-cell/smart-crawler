@@ -13,7 +13,7 @@ from app.mcp_context import (
     reset_current_api_key,
     set_current_api_key,
 )
-from app.models import ApiKey, Product, Site
+from app.models import ApiKey, Product, Site, Usage
 
 
 pytestmark = pytest.mark.unit
@@ -124,6 +124,70 @@ def test_monthly_credit_quota_must_be_nonnegative_int():
         with pytest.raises(HTTPException) as exc:
             _parse_monthly_credit_quota(bad)
         assert exc.value.status_code == 400
+
+
+def test_update_key_allows_admin_to_change_scopes_quota_and_active():
+    from app.api.routes import update_key
+
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    db = Session()
+    db.add(ApiKey(id=3, name="old", key_prefix="sck_old",
+                  key_hash="hash", active=True,
+                  scopes=["crawler:read"],
+                  monthly_credit_quota=None))
+    db.commit()
+
+    result = update_key(
+        3,
+        {
+            "name": "external-customer",
+            "scopes": ["crawler:read", "crawler:scrape", "crawler:crawl"],
+            "monthly_credit_quota": "5000",
+            "active": False,
+        },
+        user="admin",
+        db=db,
+    )
+
+    assert result["name"] == "external-customer"
+    assert result["active"] is False
+    assert result["scopes"] == ["crawler:crawl", "crawler:read", "crawler:scrape"]
+    assert result["monthly_credit_quota"] == 5000
+
+    with pytest.raises(HTTPException) as exc:
+        update_key(3, {"active": True}, user="apikey:test", db=db)
+    assert exc.value.status_code == 403
+
+
+def test_usage_summary_reports_credits_balance_and_legacy_record_cost(monkeypatch):
+    from app import billing
+
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    db = Session()
+    db.add(ApiKey(id=9, name="quota", key_prefix="sck_q",
+                  key_hash="hash", active=True,
+                  monthly_credit_quota=3000))
+    db.add(Usage(api_key_id=9, endpoint="/api/v2/scrape",
+                 record_count=100, credits_used=2000,
+                 bytes_returned=1234, duration_ms=50))
+    db.commit()
+    db.close()
+    monkeypatch.setattr(billing, "SessionLocal", Session)
+
+    summary = billing.get_usage_summary(9, days=30)
+
+    assert summary["billing_basis"] == "credits"
+    assert summary["total_records"] == 100
+    assert summary["total_credits"] == 2000
+    assert summary["monthly_credit_quota"] == 3000
+    assert summary["credit_balance"] == 1000
+    assert summary["cost_usd"] == 3.0
+    assert summary["estimated_cost_usd_by_credits"] == 3.0
+    assert summary["estimated_cost_usd_by_records"] == 0.15
 
 
 def _mcp_contract_session(monkeypatch):

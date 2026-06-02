@@ -398,14 +398,7 @@ def list_keys(user: str = Depends(require_user), db: Session = Depends(get_db)):
     if user.startswith("apikey:"):
         raise HTTPException(403, "API 密钥不能管理密钥")
     rows = db.query(ApiKey).order_by(ApiKey.id.desc()).all()
-    return [{
-        "id": k.id, "name": k.name, "key_prefix": k.key_prefix + "…",
-        "active": k.active, "request_count": k.request_count,
-        "scopes": api_key_scopes(k),
-        "monthly_credit_quota": k.monthly_credit_quota,
-        "created_at": k.created_at.isoformat() if k.created_at else None,
-        "last_used": k.last_used.isoformat() if k.last_used else None,
-    } for k in rows]
+    return [_key_response(k) for k in rows]
 
 
 @router.post("/keys")
@@ -423,10 +416,51 @@ def create_key(payload: dict, user: str = Depends(require_user),
                monthly_credit_quota=quota)
     db.add(k)
     db.commit()
-    return {"id": k.id, "name": k.name, "key": raw,
-            "scopes": scopes,
-            "monthly_credit_quota": k.monthly_credit_quota,
+    return {**_key_response(k), "key": raw,
             "note": "请立即保存，密钥明文不再展示"}
+
+
+@router.patch("/keys/{key_id}")
+def update_key(key_id: int, payload: dict, user: str = Depends(require_user),
+               db: Session = Depends(get_db)):
+    """更新 API key 元数据、scope、quota 或启停状态；不返回明文 key。"""
+    if user.startswith("apikey:"):
+        raise HTTPException(403, "API 密钥不能管理密钥")
+    k = db.get(ApiKey, key_id)
+    if not k:
+        raise HTTPException(404, "密钥不存在")
+    payload = payload or {}
+    if "name" in payload:
+        name = str(payload.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "name 不能为空")
+        k.name = name
+    if "scopes" in payload:
+        k.scopes = normalize_scopes(payload.get("scopes"))
+    if "monthly_credit_quota" in payload:
+        k.monthly_credit_quota = _parse_monthly_credit_quota(
+            payload.get("monthly_credit_quota"))
+    if "active" in payload:
+        if not isinstance(payload.get("active"), bool):
+            raise HTTPException(400, "active 必须是 boolean")
+        k.active = payload["active"]
+    db.commit()
+    db.refresh(k)
+    return _key_response(k)
+
+
+def _key_response(k: ApiKey) -> dict:
+    return {
+        "id": k.id,
+        "name": k.name,
+        "key_prefix": (k.key_prefix or "") + "…",
+        "active": k.active,
+        "request_count": k.request_count,
+        "scopes": api_key_scopes(k),
+        "monthly_credit_quota": k.monthly_credit_quota,
+        "created_at": k.created_at.isoformat() if k.created_at else None,
+        "last_used": k.last_used.isoformat() if k.last_used else None,
+    }
 
 
 def _parse_monthly_credit_quota(value) -> int | None:

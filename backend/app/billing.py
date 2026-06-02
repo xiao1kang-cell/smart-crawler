@@ -33,6 +33,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from .db import SessionLocal
+from .agent_runtime import DEFAULT_FREE_CREDITS
 from .models import ApiKey, Usage
 
 
@@ -101,11 +102,22 @@ def get_usage_summary(api_key_id: int, days: int = 30) -> dict:
                   .filter(Usage.api_key_id == api_key_id,
                           Usage.occurred_at >= cutoff)
                   .all())
+        key = s.get(ApiKey, api_key_id)
         total_records = sum(r.record_count or 0 for r in rows)
         total_credits = sum(getattr(r, "credits_used", 0) or 0 for r in rows)
         total_calls = len(rows)
         total_bytes = sum(r.bytes_returned or 0 for r in rows)
-        cost_usd = _price_for(total_records)
+        record_cost_usd = _price_for(total_records)
+        credit_cost_usd = _price_for(total_credits)
+        quota = None
+        credit_balance = None
+        if key is not None:
+            quota = (
+                key.monthly_credit_quota
+                if key.monthly_credit_quota is not None
+                else DEFAULT_FREE_CREDITS
+            )
+            credit_balance = max(0, int(quota) - int(total_credits))
 
         # 按 endpoint 分组
         by_endpoint: dict[str, int] = {}
@@ -120,7 +132,12 @@ def get_usage_summary(api_key_id: int, days: int = 30) -> dict:
             "total_calls": total_calls,
             "total_records": total_records,
             "total_credits": total_credits,
+            "monthly_credit_quota": quota,
+            "credit_balance": credit_balance,
             "total_bytes": total_bytes,
-            "cost_usd": round(cost_usd, 2),
+            "billing_basis": "credits",
+            "cost_usd": round(credit_cost_usd, 2),
+            "estimated_cost_usd_by_credits": round(credit_cost_usd, 2),
+            "estimated_cost_usd_by_records": round(record_cost_usd, 2),
             "by_endpoint": by_endpoint,
         }
