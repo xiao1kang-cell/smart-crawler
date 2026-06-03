@@ -119,7 +119,8 @@ def promotions_sample_df(session: Session, site=None,
     if categories:
         # Promotion 没 category_path，通过 Product join 过滤
         from sqlalchemy import or_
-        skus = [r[0] for r in session.query(Product.sku).filter(
+        sku_q = _apply_site_filter(session.query(Product.sku), Product, site)
+        skus = [r[0] for r in sku_q.filter(
             or_(*[Product.category_path.ilike(f"%{c}%") for c in categories])).all()]
         if skus:
             q = q.filter(Promotion.sku.in_(skus))
@@ -200,9 +201,10 @@ def categories_df(session: Session, site=None) -> pd.DataFrame:
 
 
 # ---------- 扩展表：站点概览 ----------
-def sites_overview_df(session: Session) -> pd.DataFrame:
+def sites_overview_df(session: Session, site=None) -> pd.DataFrame:
     rows = []
-    for i, s in enumerate(session.query(Site).all(), start=1):
+    q = _apply_site_filter(session.query(Site), Site, site)
+    for i, s in enumerate(q.all(), start=1):
         sku = session.query(Product).filter(Product.site == s.site).count()
         spu = (session.query(Product.spu)
                .filter(Product.site == s.site).distinct().count())
@@ -248,7 +250,7 @@ def export_workbook(session: Session, site=None,
         full_df.to_excel(w, sheet_name="商品全字段(扩展)", index=False)
         categories_df(session, site).to_excel(
             w, sheet_name="分类树(扩展)", index=False)
-        sites_overview_df(session).to_excel(
+        sites_overview_df(session, site).to_excel(
             w, sheet_name="站点概览(扩展)", index=False)
 
         # 可选 sheets
@@ -324,6 +326,8 @@ def price_history_df(session: Session, site=None,
     q = session.query(PriceHistory).filter(
         PriceHistory.date >= cutoff,
         PriceHistory.sku.in_(skus))
+    if site:
+        q = _apply_site_filter(q, PriceHistory, site)
     rows = []
     for i, p in enumerate(q.order_by(PriceHistory.site, PriceHistory.sku,
                                      PriceHistory.date).all(), start=1):

@@ -24,6 +24,10 @@ input,select{font-family:inherit}
 .login-btn{width:100%;background:linear-gradient(135deg,#a78bfa,#f472b6);color:#fff;border:none;padding:11px;border-radius:8px;font-size:0.92rem;font-weight:700;cursor:pointer;margin-top:8px}
 .login-btn:disabled{opacity:.5;cursor:not-allowed}
 .login-err{color:#fda4af;font-size:0.78rem;margin-top:8px;min-height:18px}
+.login-tabs{display:grid;grid-template-columns:1fr 1fr;background:#0d0a17;border:1px solid #29213a;border-radius:8px;padding:3px;margin-bottom:18px}
+.login-tab{border:0;background:transparent;color:#94a3b8;border-radius:6px;padding:8px;font-weight:700;cursor:pointer}
+.login-tab.active{background:#211735;color:#fff}
+.login-note{font-size:0.72rem;color:#64647a;line-height:1.6;margin-top:10px}
 
 /* TOP BAR */
 .topbar{position:sticky;top:0;z-index:100;background:rgba(10,6,18,.94);backdrop-filter:blur(12px);border-bottom:1px solid #29213a;padding:11px 22px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
@@ -197,6 +201,13 @@ input,select{font-family:inherit}
 .key-row .info{display:flex;flex-direction:column;gap:3px}
 .key-prefix{font-family:'SF Mono',monospace;font-size:0.7rem;color:#a78bfa}
 .meta{font-size:0.66rem;color:#52527a}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.form-grid.one{grid-template-columns:1fr}
+.set-inp,.set-sel{width:100%;box-sizing:border-box;background:#0d0a17;border:1px solid #29213a;border-radius:7px;color:#fff;padding:8px 10px;font-size:0.78rem;outline:none}
+.set-inp:focus,.set-sel:focus{border-color:rgba(167,139,250,.55)}
+.mini-btn{background:rgba(167,139,250,.16);border:1px solid rgba(167,139,250,.34);color:#c4b5fd;border-radius:7px;padding:7px 10px;font-weight:700;cursor:pointer;font-size:0.74rem}
+.mini-btn.bad{background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.30);color:#fca5a5}
+.secret-box{margin-top:8px;background:#0d0a17;border:1px solid rgba(167,139,250,.35);border-radius:8px;padding:9px 10px;font-family:'SF Mono',monospace;font-size:0.72rem;color:#c4b5fd;word-break:break-all}
 
 .toast{position:fixed;bottom:24px;right:24px;background:linear-gradient(135deg,#a78bfa,#f472b6);color:#fff;padding:11px 18px;border-radius:10px;box-shadow:0 18px 50px rgba(167,139,250,.45);font-size:0.84rem;font-weight:700;z-index:500;animation:toastIn .25s}
 @keyframes toastIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
@@ -217,31 +228,83 @@ const App = {
   setup() {
     const token = ref(localStorage.getItem('sc_token') || '');
     const user = ref({});
-    const loginForm = ref({ username: 'aosen', password: '' });
+    const loginMode = ref('login');
+    const loginForm = ref({ identifier: '', password: '' });
+    const registerForm = ref({ username:'', email:'', display_name:'', password:'', confirm_password:'', invite_code:'' });
     const loginErr = ref('');
     const logging = ref(false);
+    const accountForm = ref({ display_name:'' });
+    const passwordForm = ref({ old_password:'', new_password:'', confirm_password:'' });
+    const newKeyName = ref('Agent API Key');
+    const createdKey = ref('');
+    const users = ref([]);
+    const invites = ref([]);
+    const inviteForm = ref({ max_uses:1, expires_in_days:7, default_role:'user' });
+    const newInviteCode = ref('');
+    const adminUserForm = ref({ username:'', email:'', display_name:'', role:'user', password:'' });
+    const createdUserPassword = ref('');
+    const workspaces = ref([]);
+    const currentWorkspaceId = ref(localStorage.getItem('sc_workspace_id') || '');
+    const workspaceForm = ref({ name:'', slug:'' });
+    const workspaceSites = ref([]);
+    const addWorkspaceSiteForm = ref({ site:'' });
 
     async function doLogin() {
       loginErr.value = ''; logging.value = true;
       try {
-        const r = await fetch('/api/login', {
+        const r = await fetch('/api/auth/login', {
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify(loginForm.value)
         });
         const d = await r.json();
         if (!r.ok) { loginErr.value = d.detail || '登录失败'; return; }
         token.value = d.token; user.value = d;
+        currentWorkspaceId.value = '';
+        localStorage.removeItem('sc_workspace_id');
         localStorage.setItem('sc_token', d.token);
         localStorage.setItem('sc_user', JSON.stringify(d));
         await loadAll();
       } catch(e) { loginErr.value = '网络错误'; }
       finally { logging.value = false; }
     }
-    function logout() {
-      localStorage.removeItem('sc_token'); localStorage.removeItem('sc_user');
-      token.value = ''; user.value = {};
+    async function doRegister() {
+      loginErr.value = ''; logging.value = true;
+      try {
+        const r = await fetch('/api/auth/register', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(registerForm.value)
+        });
+        const d = await r.json();
+        if (!r.ok) { loginErr.value = d.detail || '注册失败'; return; }
+        token.value = d.token; user.value = d;
+        currentWorkspaceId.value = '';
+        localStorage.removeItem('sc_workspace_id');
+        localStorage.setItem('sc_token', d.token);
+        localStorage.setItem('sc_user', JSON.stringify(d));
+        await loadAll();
+      } catch(e) { loginErr.value = '网络错误'; }
+      finally { logging.value = false; }
     }
-    function authH() { return { 'Authorization': 'Bearer ' + token.value }; }
+    async function logout() {
+      try { await fetch('/api/auth/logout', { method:'POST', headers: authH() }); } catch(e) {}
+      localStorage.removeItem('sc_token'); localStorage.removeItem('sc_user');
+      localStorage.removeItem('sc_workspace_id');
+      token.value = ''; user.value = {};
+      currentWorkspaceId.value = '';
+    }
+    function authH() {
+      const h = { 'Authorization': 'Bearer ' + token.value };
+      if (currentWorkspaceId.value) h['X-Workspace-ID'] = String(currentWorkspaceId.value);
+      return h;
+    }
+    async function apiJson(path, opts={}) {
+      const headers = { ...(opts.headers || {}), ...authH() };
+      if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+      const r = await fetch(path, { ...opts, headers });
+      const d = await r.json().catch(()=>({}));
+      if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+      return d;
+    }
 
     const tab = ref('overview');
     const sites = ref([]);
@@ -312,7 +375,9 @@ const App = {
     async function loadSites() {
       const r = await fetch('/api/sites', { headers: authH() });
       sites.value = await r.json();
-      if (!selectedSite.value && sites.value.length) selectedSite.value = sites.value[0].site;
+      if (sites.value.length && !sites.value.some(s=>s.site===selectedSite.value)) {
+        selectedSite.value = sites.value[0].site;
+      }
     }
     async function loadCoverage() {
       const r = await fetch('/api/coverage', { headers: authH() });
@@ -348,10 +413,153 @@ const App = {
         apiKeys.value = await r.json();
       } catch(e) {}
     }
+    async function loadMe() {
+      try {
+        const d = await apiJson('/api/me');
+        user.value = d;
+        workspaces.value = d.workspaces || [];
+        const allowedWorkspaceIds = new Set(workspaces.value.map(w => String(w.id)));
+        if (!allowedWorkspaceIds.has(String(currentWorkspaceId.value))) {
+          currentWorkspaceId.value = d.current_workspace_id ? String(d.current_workspace_id) :
+            (workspaces.value[0] ? String(workspaces.value[0].id) : '');
+        }
+        if (currentWorkspaceId.value) {
+          localStorage.setItem('sc_workspace_id', currentWorkspaceId.value);
+        } else {
+          localStorage.removeItem('sc_workspace_id');
+        }
+        accountForm.value.display_name = d.display_name || d.username || '';
+        localStorage.setItem('sc_user', JSON.stringify(d));
+      } catch(e) {
+        logout();
+      }
+    }
+    async function loadAdmin() {
+      if (user.value.role !== 'admin') return;
+      try {
+        users.value = await apiJson('/api/admin/users');
+        invites.value = await apiJson('/api/admin/invites');
+        workspaces.value = await apiJson('/api/workspaces');
+        await loadWorkspaceSites();
+      } catch(e) {}
+    }
     async function loadAll() {
       const cached = localStorage.getItem('sc_user');
       if (cached) try { user.value = JSON.parse(cached); } catch {}
-      await Promise.all([loadSites(), loadCoverage(), loadJobs(), loadProxy(), loadBilling(), loadKeys()]);
+      await loadMe();
+      await Promise.all([loadSites(), loadCoverage(), loadJobs(), loadProxy(), loadBilling(), loadKeys(), loadAdmin()]);
+    }
+    async function saveAccount() {
+      try {
+        user.value = await apiJson('/api/me', { method:'PATCH', body: JSON.stringify(accountForm.value) });
+        localStorage.setItem('sc_user', JSON.stringify(user.value));
+        showToast('账号已更新');
+      } catch(e) { showToast(e.message); }
+    }
+    async function changePassword() {
+      try {
+        await apiJson('/api/auth/change-password', { method:'POST', body: JSON.stringify(passwordForm.value) });
+        passwordForm.value = { old_password:'', new_password:'', confirm_password:'' };
+        showToast('密码已更新');
+      } catch(e) { showToast(e.message); }
+    }
+    async function createMyKey() {
+      try {
+        const d = await apiJson('/api/keys', { method:'POST', body: JSON.stringify({ name:newKeyName.value }) });
+        createdKey.value = d.key;
+        await Promise.all([loadKeys(), loadBilling()]);
+        showToast('API Key 已创建');
+      } catch(e) { showToast(e.message); }
+    }
+    async function revokeKey(id) {
+      try {
+        await apiJson(`/api/keys/${id}`, { method:'DELETE' });
+        await Promise.all([loadKeys(), loadBilling()]);
+        showToast('API Key 已停用');
+      } catch(e) { showToast(e.message); }
+    }
+    async function createInvite() {
+      try {
+        const d = await apiJson('/api/admin/invites', { method:'POST', body: JSON.stringify({ ...inviteForm.value, workspace_id:Number(currentWorkspaceId.value) }) });
+        newInviteCode.value = d.code;
+        await loadAdmin();
+        showToast('邀请码已创建');
+      } catch(e) { showToast(e.message); }
+    }
+    async function disableInvite(id) {
+      try {
+        await apiJson(`/api/admin/invites/${id}`, { method:'PATCH', body: JSON.stringify({ active:false }) });
+        await loadAdmin();
+        showToast('邀请码已禁用');
+      } catch(e) { showToast(e.message); }
+    }
+    async function toggleUser(row) {
+      try {
+        const next = row.status === 'active' ? 'disabled' : 'active';
+        await apiJson(`/api/admin/users/${row.id}`, { method:'PATCH', body: JSON.stringify({ status:next }) });
+        await loadAdmin();
+        showToast('用户状态已更新');
+      } catch(e) { showToast(e.message); }
+    }
+    async function resetUserPassword(row) {
+      try {
+        const d = await apiJson(`/api/admin/users/${row.id}/reset-password`, { method:'POST', body: JSON.stringify({}) });
+        createdUserPassword.value = `${row.username}: ${d.temporary_password}`;
+        showToast('临时密码已生成');
+      } catch(e) { showToast(e.message); }
+    }
+    async function createAdminUser() {
+      try {
+        const d = await apiJson('/api/admin/users', { method:'POST', body: JSON.stringify({ ...adminUserForm.value, workspace_id:Number(currentWorkspaceId.value) }) });
+        createdUserPassword.value = `${d.username}: ${d.temporary_password}`;
+        adminUserForm.value = { username:'', email:'', display_name:'', role:'user', password:'' };
+        await loadAdmin();
+        showToast('用户已创建');
+      } catch(e) { showToast(e.message); }
+    }
+    async function switchWorkspace() {
+      localStorage.setItem('sc_workspace_id', currentWorkspaceId.value);
+      selectedSite.value = '';
+      await Promise.all([loadSites(), loadCoverage(), loadJobs(), loadBilling(), loadKeys(), loadWorkspaceSites()]);
+      if (sites.value.length) selectedSite.value = sites.value[0].site;
+      showToast('Workspace 已切换');
+    }
+    async function createWorkspace() {
+      try {
+        const d = await apiJson('/api/admin/workspaces', { method:'POST', body: JSON.stringify(workspaceForm.value) });
+        workspaces.value = await apiJson('/api/workspaces');
+        currentWorkspaceId.value = String(d.id);
+        localStorage.setItem('sc_workspace_id', currentWorkspaceId.value);
+        workspaceForm.value = { name:'', slug:'' };
+        await switchWorkspace();
+      } catch(e) { showToast(e.message); }
+    }
+    async function loadWorkspaceSites() {
+      if (user.value.global_role !== 'super_admin' || !currentWorkspaceId.value) return;
+      try {
+        workspaceSites.value = await apiJson(`/api/admin/workspaces/${currentWorkspaceId.value}/sites`);
+      } catch(e) {}
+    }
+    async function addWorkspaceSite() {
+      try {
+        await apiJson(`/api/admin/workspaces/${currentWorkspaceId.value}/sites`, { method:'POST', body: JSON.stringify(addWorkspaceSiteForm.value) });
+        addWorkspaceSiteForm.value = { site:'' };
+        await Promise.all([loadWorkspaceSites(), loadSites(), loadCoverage()]);
+        showToast('站点已加入 workspace');
+      } catch(e) { showToast(e.message); }
+    }
+    async function toggleWorkspaceSite(row) {
+      try {
+        await apiJson(`/api/admin/workspaces/${currentWorkspaceId.value}/sites/${row.id}`, { method:'PATCH', body: JSON.stringify({ enabled:!row.enabled }) });
+        await Promise.all([loadWorkspaceSites(), loadSites(), loadCoverage()]);
+      } catch(e) { showToast(e.message); }
+    }
+    async function updateUserRole(row) {
+      try {
+        await apiJson(`/api/admin/users/${row.id}`, { method:'PATCH', body: JSON.stringify({ role:row.role }) });
+        await loadAdmin();
+        showToast('角色已更新');
+      } catch(e) { showToast(e.message); }
     }
     async function triggerSite(site) {
       const r = await fetch(`/api/jobs/trigger?site=${site}`, { method:'POST', headers: authH() });
@@ -360,7 +568,13 @@ const App = {
       setTimeout(loadJobs, 1500);
     }
     function exportCSV() {
-      window.open(`/api/export/products?token=${token.value}&site=${selectedSite.value}&format=csv`, '_blank');
+      const params = new URLSearchParams({
+        token: token.value,
+        site: selectedSite.value,
+        format: 'csv',
+      });
+      if (currentWorkspaceId.value) params.set('workspace_id', currentWorkspaceId.value);
+      window.open(`/api/export/products?${params}`, '_blank');
     }
 
     const totalSku = computed(() => coverage.value.summary?.total_current_sku || 0);
@@ -377,10 +591,16 @@ const App = {
     onMounted(()=> { if (token.value) loadAll(); });
 
     return {
-      token, user, loginForm, loginErr, logging, doLogin, logout,
+      token, user, loginMode, loginForm, registerForm, loginErr, logging, doLogin, doRegister, logout,
       tab, sites, selectedSite, coverage, jobs, products, proxyStatus, apiKeys, billing,
+      accountForm, passwordForm, newKeyName, createdKey, users, invites, inviteForm, newInviteCode,
+      adminUserForm, createdUserPassword, workspaces, currentWorkspaceId, workspaceForm,
+      workspaceSites, addWorkspaceSiteForm,
       toast, showToast, starters, askInput, askResult, askRunning, runStarter,
       loadProducts, loadCoverage, loadJobs, triggerSite, exportCSV,
+      saveAccount, changePassword, createMyKey, revokeKey, createInvite, disableInvite, toggleUser,
+      resetUserPassword, createAdminUser, updateUserRole, switchWorkspace,
+      createWorkspace, addWorkspaceSite, toggleWorkspaceSite,
       totalSku, coveragePct, healthySites, criticalSites, warningSites,
       runningJobs, successJobs, proxyOk, proxyTotal, sortedCov,
       infPlatform, infUsername, infResult, infRunning, infFetch
@@ -391,15 +611,49 @@ const App = {
       <div class="login-card">
         <div class="login-brand">⚡ smart-crawler</div>
         <div class="login-sub">Aosom 竞品情报 · 授权访问</div>
-        <div class="login-field">
-          <label>账号</label>
-          <input v-model="loginForm.username" placeholder="aosen" @keyup.enter="doLogin"/>
+        <div class="login-tabs">
+          <button class="login-tab" :class="{active:loginMode==='login'}" @click="loginMode='login'">登录</button>
+          <button class="login-tab" :class="{active:loginMode==='register'}" @click="loginMode='register'">注册</button>
         </div>
-        <div class="login-field">
-          <label>密码</label>
-          <input v-model="loginForm.password" type="password" placeholder="密码" @keyup.enter="doLogin"/>
-        </div>
-        <button class="login-btn" :disabled="logging" @click="doLogin">{{ logging ? '登录中…' : '登录' }}</button>
+        <template v-if="loginMode==='login'">
+          <div class="login-field">
+            <label>邮箱或用户名</label>
+            <input v-model="loginForm.identifier" placeholder="email@example.com 或 username" @keyup.enter="doLogin"/>
+          </div>
+          <div class="login-field">
+            <label>密码</label>
+            <input v-model="loginForm.password" type="password" placeholder="密码" @keyup.enter="doLogin"/>
+          </div>
+          <button class="login-btn" :disabled="logging" @click="doLogin">{{ logging ? '登录中…' : '登录' }}</button>
+        </template>
+        <template v-else>
+          <div class="login-field">
+            <label>用户名</label>
+            <input v-model="registerForm.username" placeholder="3-32 位用户名"/>
+          </div>
+          <div class="login-field">
+            <label>邮箱</label>
+            <input v-model="registerForm.email" placeholder="email@example.com"/>
+          </div>
+          <div class="login-field">
+            <label>显示名</label>
+            <input v-model="registerForm.display_name" placeholder="可选"/>
+          </div>
+          <div class="login-field">
+            <label>邀请码</label>
+            <input v-model="registerForm.invite_code" placeholder="内部邀请码"/>
+          </div>
+          <div class="login-field">
+            <label>密码</label>
+            <input v-model="registerForm.password" type="password" placeholder="至少 8 位，含字母和数字"/>
+          </div>
+          <div class="login-field">
+            <label>确认密码</label>
+            <input v-model="registerForm.confirm_password" type="password" placeholder="再次输入密码" @keyup.enter="doRegister"/>
+          </div>
+          <button class="login-btn" :disabled="logging" @click="doRegister">{{ logging ? '注册中…' : '注册并登录' }}</button>
+          <div class="login-note">邀请码只能由内部管理员生成。注册后可在 Settings 创建自己的 API Key。</div>
+        </template>
         <div class="login-err">{{ loginErr }}</div>
       </div>
     </div>
@@ -491,7 +745,7 @@ const App = {
             <div class="covbar" :class="s.status"><i :style="{width: Math.min(s.coverage_pct||0, 100) + '%'}"></i></div>
             <div style="font-size:0.66rem;color:#64647a;margin-bottom:8px">覆盖率 {{ s.coverage_pct!=null ? s.coverage_pct + '%' : '—' }}</div>
             <div class="btns">
-              <a :href="'/report?site=' + s.site" target="_blank" class="btn-prim">📊 打开报表</a>
+              <a :href="'/report?site=' + encodeURIComponent(s.site) + (currentWorkspaceId ? '&workspace_id=' + encodeURIComponent(currentWorkspaceId) : '')" target="_blank" class="btn-prim">📊 打开报表</a>
             </div>
           </div>
         </div>
@@ -686,15 +940,137 @@ const App = {
 
         <div class="set-grid">
           <div class="set-block">
+            <h3>🏢 Workspace</h3>
+            <div class="form-grid one">
+              <select class="set-sel" v-model="currentWorkspaceId" @change="switchWorkspace">
+                <option v-for="w in workspaces" :key="w.id" :value="String(w.id)">{{ w.name }} · {{ w.slug }}</option>
+              </select>
+            </div>
+            <div class="key-row">
+              <div class="info">
+                <b>{{ (workspaces.find(w=>String(w.id)===String(currentWorkspaceId))||{}).name || '—' }}</b>
+                <span class="meta">当前看板、报告、导出和 API Key 都按这个 workspace 隔离</span>
+              </div>
+            </div>
+            <template v-if="user.global_role==='super_admin'">
+              <div class="form-grid">
+                <input class="set-inp" v-model="workspaceForm.name" placeholder="新 workspace 名称"/>
+                <input class="set-inp" v-model="workspaceForm.slug" placeholder="slug"/>
+                <button class="mini-btn" @click="createWorkspace">创建 Workspace</button>
+              </div>
+            </template>
+          </div>
+
+          <div v-if="user.global_role==='super_admin'" class="set-block">
+            <h3>🌐 Workspace 站点</h3>
+            <div class="form-grid">
+              <input class="set-inp" v-model="addWorkspaceSiteForm.site" placeholder="全局 site code，例如 songmics_us"/>
+              <button class="mini-btn" @click="addWorkspaceSite">加入站点</button>
+            </div>
+            <div v-for="s in workspaceSites" :key="s.id" class="key-row">
+              <div class="info">
+                <b>{{ s.site }}</b>
+                <span class="key-prefix">{{ s.brand || '—' }} · {{ s.country || '—' }}</span>
+                <span class="meta">enabled={{ s.enabled }} · hidden={{ s.hidden }}</span>
+              </div>
+              <button class="mini-btn" :class="s.enabled?'bad':''" @click="toggleWorkspaceSite(s)">{{ s.enabled ? '停用' : '启用' }}</button>
+            </div>
+          </div>
+
+          <div class="set-block">
+            <h3>👤 我的账号</h3>
+            <div class="key-row">
+              <div class="info">
+                <b>{{ user.display_name || user.username }}</b>
+                <span class="key-prefix">{{ user.email || user.username }}</span>
+                <span class="meta">role={{ user.role }} · status={{ user.status || 'active' }}</span>
+              </div>
+            </div>
+            <div class="form-grid one">
+              <input class="set-inp" v-model="accountForm.display_name" placeholder="显示名"/>
+              <button class="mini-btn" @click="saveAccount">保存资料</button>
+            </div>
+            <div class="form-grid">
+              <input class="set-inp" type="password" v-model="passwordForm.old_password" placeholder="旧密码"/>
+              <input class="set-inp" type="password" v-model="passwordForm.new_password" placeholder="新密码"/>
+              <input class="set-inp" type="password" v-model="passwordForm.confirm_password" placeholder="确认新密码"/>
+              <button class="mini-btn" @click="changePassword">修改密码</button>
+            </div>
+          </div>
+
+          <div class="set-block">
             <h3>🔑 API Keys</h3>
+            <div class="form-grid">
+              <input class="set-inp" v-model="newKeyName" placeholder="Key 名称"/>
+              <button class="mini-btn" @click="createMyKey">创建 Key</button>
+            </div>
+            <div v-if="createdKey" class="secret-box">{{ createdKey }}</div>
             <div v-for="k in apiKeys" :key="k.id" class="key-row">
               <div class="info">
                 <b>{{ k.name }}</b>
                 <span class="key-prefix">{{ k.key_prefix }}</span>
-                <span class="meta">{{ (k.request_count||0).toLocaleString() }} 次调用</span>
+                <span class="meta">{{ (k.request_count||0).toLocaleString() }} 次调用 · {{ (k.scopes||[]).join(', ') }}</span>
               </div>
+              <button class="mini-btn bad" v-if="k.active" @click="revokeKey(k.id)">停用</button>
             </div>
             <div v-if="!apiKeys.length" style="color:#52527a;font-size:0.78rem;padding:14px 0;text-align:center">暂无 key</div>
+          </div>
+
+          <div v-if="user.role==='admin'" class="set-block">
+            <h3>👥 用户管理</h3>
+            <div class="form-grid">
+              <input class="set-inp" v-model="adminUserForm.username" placeholder="用户名"/>
+              <input class="set-inp" v-model="adminUserForm.email" placeholder="邮箱"/>
+              <input class="set-inp" v-model="adminUserForm.display_name" placeholder="显示名"/>
+              <select class="set-sel" v-model="adminUserForm.role">
+                <option value="user">user</option>
+                <option value="viewer">viewer</option>
+                <option value="admin">admin</option>
+              </select>
+              <input class="set-inp" type="password" v-model="adminUserForm.password" placeholder="密码，留空自动生成"/>
+              <button class="mini-btn" @click="createAdminUser">创建用户</button>
+            </div>
+            <div v-if="createdUserPassword" class="secret-box">{{ createdUserPassword }}</div>
+            <div v-for="u in users" :key="u.id" class="key-row">
+              <div class="info">
+                <b>{{ u.display_name || u.username }}</b>
+                <span class="key-prefix">{{ u.email }} · @{{ u.username }}</span>
+                <span class="meta">role={{ u.role }} · status={{ u.status }}</span>
+              </div>
+              <div style="display:flex;gap:6px">
+                <select class="set-sel" style="width:92px" v-model="u.role" @change="updateUserRole(u)">
+                  <option value="admin">admin</option>
+                  <option value="user">user</option>
+                  <option value="viewer">viewer</option>
+                </select>
+                <button class="mini-btn" @click="resetUserPassword(u)">重置密码</button>
+                <button class="mini-btn bad" @click="toggleUser(u)">{{ u.status==='active' ? '禁用' : '启用' }}</button>
+              </div>
+            </div>
+            <div v-if="!users.length" style="color:#52527a;font-size:0.78rem;padding:14px 0;text-align:center">暂无用户</div>
+          </div>
+
+          <div v-if="user.role==='admin'" class="set-block">
+            <h3>🎟 邀请码</h3>
+            <div class="form-grid">
+              <input class="set-inp" type="number" min="1" v-model="inviteForm.max_uses" placeholder="可用次数"/>
+              <input class="set-inp" type="number" min="1" v-model="inviteForm.expires_in_days" placeholder="有效天数"/>
+              <select class="set-sel" v-model="inviteForm.default_role">
+                <option value="user">user</option>
+                <option value="viewer">viewer</option>
+              </select>
+              <button class="mini-btn" @click="createInvite">生成邀请码</button>
+            </div>
+            <div v-if="newInviteCode" class="secret-box">{{ newInviteCode }}</div>
+            <div v-for="i in invites" :key="i.id" class="key-row">
+              <div class="info">
+                <b>{{ i.code_prefix }}</b>
+                <span class="meta">used {{ i.used_count }}/{{ i.max_uses }} · role={{ i.default_role }}</span>
+                <span class="meta">expires {{ i.expires_at || '—' }}</span>
+              </div>
+              <button v-if="i.active" class="mini-btn bad" @click="disableInvite(i.id)">禁用</button>
+              <span v-else class="pill bad">disabled</span>
+            </div>
           </div>
 
           <div class="set-block">

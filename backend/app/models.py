@@ -155,6 +155,84 @@ class Trend(Base):
     delta_summary = Column(Text)                     # LLM 生成的一句话总结
 
 
+class Workspace(Base):
+    """租户工作区 —— 只隔离视图、报告、API key 与用量，不复制 warehouse 数据。"""
+
+    __tablename__ = "workspaces"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, unique=True, index=True)
+    slug = Column(String, unique=True, index=True)
+    type = Column(String, default="customer")        # internal / customer
+    status = Column(String, default="active")        # active / disabled
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WorkspaceMember(Base):
+    """用户与工作区的成员关系。"""
+
+    __tablename__ = "workspace_members"
+    __table_args__ = (UniqueConstraint("workspace_id", "user_id",
+                                       name="uq_workspace_user"),)
+
+    id = Column(Integer, primary_key=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    role = Column(String, default="member")          # owner / admin / member / viewer
+    status = Column(String, default="active")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WorkspaceSite(Base):
+    """工作区可见站点清单 —— 引用全局 Site.site。"""
+
+    __tablename__ = "workspace_sites"
+    __table_args__ = (UniqueConstraint("workspace_id", "site",
+                                       name="uq_workspace_site"),)
+
+    id = Column(Integer, primary_key=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)
+    site = Column(String, index=True)
+    display_name = Column(String)
+    enabled = Column(Boolean, default=True)
+    hidden = Column(Boolean, default=False)
+    sort_order = Column(Integer, default=0)
+    target_coverage_pct = Column(Float)
+    report_config = Column(JSON)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ReportConfig(Base):
+    """租户私有报告配置。报告数据仍从共享 warehouse 按 WorkspaceSite 读取。"""
+
+    __tablename__ = "report_configs"
+
+    id = Column(Integer, primary_key=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)
+    name = Column(String)
+    sites = Column(JSON)
+    categories = Column(JSON)
+    settings = Column(JSON)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ReportRun(Base):
+    """报告生成记录。"""
+
+    __tablename__ = "report_runs"
+
+    id = Column(Integer, primary_key=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)
+    report_config_id = Column(Integer, ForeignKey("report_configs.id"))
+    status = Column(String, default="pending")
+    output_path = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    finished_at = Column(DateTime)
+    error = Column(Text)
+
+
 class User(Base):
     """后台账号 —— 登录鉴权。"""
 
@@ -162,11 +240,54 @@ class User(Base):
 
     id = Column(Integer, primary_key=True)
     username = Column(String, unique=True, index=True)
+    email = Column(String, unique=True, index=True)
     password_hash = Column(String)
-    role = Column(String, default="admin")          # admin / viewer
+    role = Column(String, default="admin")          # admin / user / viewer
+    global_role = Column(String)                    # super_admin / null
+    default_workspace_id = Column(Integer, ForeignKey("workspaces.id"))
+    status = Column(String, default="active")       # active / disabled
     display_name = Column(String)
+    email_verified = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     last_login = Column(DateTime)
+    password_changed_at = Column(DateTime)
+    failed_login_count = Column(Integer, default=0)
+    locked_until = Column(DateTime)
+    last_login_ip = Column(String)
+
+
+class UserSession(Base):
+    """登录会话 —— 支持 logout / 改密撤销。"""
+
+    __tablename__ = "user_sessions"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    session_hash = Column(String, unique=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, index=True)
+    revoked_at = Column(DateTime)
+    ip_address = Column(String)
+    user_agent = Column(String)
+
+
+class InviteCode(Base):
+    """内部邀请码 —— 明文只在创建时返回，库中只存 hash。"""
+
+    __tablename__ = "invite_codes"
+
+    id = Column(Integer, primary_key=True)
+    code_prefix = Column(String, index=True)
+    code_hash = Column(String, unique=True, index=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"))
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, index=True)
+    max_uses = Column(Integer, default=1)
+    used_count = Column(Integer, default=0)
+    active = Column(Boolean, default=True)
+    default_role = Column(String, default="user")
+    last_used_at = Column(DateTime)
 
 
 class Review(Base):
@@ -219,6 +340,8 @@ class ApiKey(Base):
     active = Column(Boolean, default=True)
     scopes = Column(JSON)                            # ["crawler:read", "crawler:scrape", ...]
     monthly_credit_quota = Column(Integer)           # null -> default free quota
+    owner_user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)
 
 
 class Keyword(Base):
@@ -268,6 +391,8 @@ class CrawlJob(Base):
     site = Column(String, index=True)
     status = Column(String, default="pending", index=True)
     trigger = Column(String, default="manual")       # manual / scheduled
+    requested_by_workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)
+    requested_by_user_id = Column(Integer, ForeignKey("users.id"), index=True)
     worker = Column(String)                          # 领取该任务的 worker 标识
     created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime)
@@ -293,6 +418,7 @@ class Usage(Base):
 
     id = Column(Integer, primary_key=True)
     api_key_id = Column(Integer, ForeignKey("api_keys.id"), index=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)
     endpoint = Column(String, index=True)            # /api/sites, /mcp/, /api/export/products...
     record_count = Column(Integer, default=0)        # 该次调用返回的 records 数
     credits_used = Column(Integer, default=0)        # 该次调用消耗的 credits

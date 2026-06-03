@@ -47,7 +47,8 @@ PRICE_PER_1K_RECORDS_BULK = 0.8
 
 def record_usage(api_key_id: int, endpoint: str, record_count: int,
                  bytes_returned: int, duration_ms: int,
-                 credits_used: int | None = None) -> None:
+                 credits_used: int | None = None,
+                 workspace_id: int | None = None) -> None:
     """记录一次调用的用量。
 
     Args:
@@ -59,8 +60,11 @@ def record_usage(api_key_id: int, endpoint: str, record_count: int,
         credits_used: 该次调用消耗的 credits；不传时按 record_count 兼容旧调用
     """
     with SessionLocal() as s:
+        key = s.get(ApiKey, api_key_id) if api_key_id else None
         u = Usage(
             api_key_id=api_key_id,
+            workspace_id=workspace_id if workspace_id is not None
+            else (key.workspace_id if key else None),
             endpoint=endpoint,
             record_count=record_count,
             credits_used=record_count if credits_used is None else credits_used,

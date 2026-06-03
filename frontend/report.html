@@ -133,14 +133,20 @@ const App = {
   setup() {
     /* Auth */
     const token = ref(localStorage.getItem('sc_token') || '');
-    function authH() { return { 'Authorization': 'Bearer ' + token.value }; }
+    const url = new URL(window.location.href);
+    const currentWorkspaceId = ref(url.searchParams.get('workspace_id') ||
+                                   localStorage.getItem('sc_workspace_id') || '');
+    function authH() {
+      const h = { 'Authorization': 'Bearer ' + token.value };
+      if (currentWorkspaceId.value) h['X-Workspace-ID'] = currentWorkspaceId.value;
+      return h;
+    }
     if (!token.value) {
       // 简易跳登录
       window.location.href = '/app';
     }
 
     /* Site picker */
-    const url = new URL(window.location.href);
     const initialSite = url.searchParams.get('site') || 'songmics_us';
     const site = ref(initialSite);
     const sites = ref([]);

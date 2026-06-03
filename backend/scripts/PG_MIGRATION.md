@@ -70,7 +70,7 @@ docker compose logs -f smart-crawler   # 确认启动无 DB 报错
 ## 5. 验证
 
 - 打开 `http://<NAS-IP>:8077` 看板，确认商品 / 促销 / 评论数量与迁移前一致。
-- 用账号 `aosen / admin` 登录（`_seed_users()` 若用户已迁移则不会重复创建）。
+- 用 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 登录（`_seed_users()` 若用户已迁移则不会重复创建）。
 - 触发一次采集任务，确认能正常写入 PostgreSQL。
 
 ## 回滚

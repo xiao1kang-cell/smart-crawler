@@ -24,7 +24,7 @@
 2. 进入「Docker」应用 →「项目 / Compose」→ 新建项目
 3. 上传本仓库（或 `git clone`），选择 `docker-compose.yml`
 4. 启动 → 容器 `smart-crawler` 跑在 NAS 的 `:8077`
-5. 验证：`http://192.168.1.80:8077` 出现登录页（aosen / admin）
+5. 验证：`http://192.168.1.80:8077` 出现登录页，用 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 登录
 
 ## 2. 部署方式 B —— 命令行（从 iMac 操作）
 
@@ -67,13 +67,16 @@ docker compose up -d --build          # NAS 若装了 Docker，也可 scp 过去
 
 ---
 
-## 4. 默认账号
+## 4. 管理员账号
 
-| 账号 | 密码 | 角色 |
-|------|------|------|
-| aosen | admin | admin |
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `ADMIN_USERNAME` | `admin` | 初始管理员用户名 |
+| `ADMIN_EMAIL` | `admin@local.smartcrawler` | 初始管理员邮箱 |
+| `ADMIN_PASSWORD` | 无 | 初始管理员密码；未设置时首次启动随机生成并打印到日志 |
 
-首次启动 `init_db()` 自动创建。**上线后请立即改密码**（见下）。
+首次启动 `init_db()` 自动创建管理员。生产部署请显式设置 `ADMIN_PASSWORD`
+和强随机 `SC_SECRET`，不要依赖随机日志密码。
 
 改密码（在容器内）：
 ```bash
@@ -81,7 +84,7 @@ docker exec -it smart-crawler python -c "
 from app.db import session_scope; from app.models import User
 from app.auth import hash_password
 with session_scope() as s:
-    u=s.query(User).filter(User.username=='aosen').first()
+    u=s.query(User).filter(User.username=='admin').first()
     u.password_hash=hash_password('新密码')
 "
 ```
@@ -91,8 +94,8 @@ with session_scope() as s:
 ## 5. 上线后检查清单
 
 - [ ] `https://smartcrawler.io` 出现登录页，HTTPS 证书正常（Cloudflare 自动签）
-- [ ] aosen 登录成功，46 站点列表可见
-- [ ] 改掉默认密码、改掉 `SC_SECRET`
+- [ ] 管理员登录成功，46 站点列表可见
+- [ ] 已设置强随机 `ADMIN_PASSWORD` 和 `SC_SECRET`
 - [ ] `data/` 卷已挂载（SQLite 持久化，容器重建不丢数据）
 - [ ] 定时调度生效（容器内 APScheduler 自动起）
 - [ ] 如需采 Vidaxl：配置 `backend/proxies.txt` 住宅代理（见风控评估报告）

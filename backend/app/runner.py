@@ -19,13 +19,17 @@ from .db import session_scope
 from .models import Category, CrawlJob, Product, Promotion, Site
 
 
-def enqueue(site_name: str, trigger: str = "manual") -> int:
+def enqueue(site_name: str, trigger: str = "manual",
+            requested_by_workspace_id: int | None = None,
+            requested_by_user_id: int | None = None) -> int:
     """入队一条采集任务，返回 job_id。"""
     with session_scope() as s:
         if not s.query(Site).filter(Site.site == site_name).first():
             raise ValueError(f"站点不存在: {site_name}")
         job = CrawlJob(site=site_name, status="pending", trigger=trigger,
-                       created_at=datetime.utcnow())
+                       created_at=datetime.utcnow(),
+                       requested_by_workspace_id=requested_by_workspace_id,
+                       requested_by_user_id=requested_by_user_id)
         s.add(job)
         s.flush()
         return job.id

@@ -29,13 +29,15 @@ if [[ -z "$API_KEY" ]]; then
 from app.db import init_db, SessionLocal
 from app.access import DEFAULT_API_KEY_SCOPES
 from app.apikey import generate, hash_key, short
-from app.models import ApiKey
+from app.models import ApiKey, Workspace
 
 init_db()
 with SessionLocal() as db:
+    ws = db.query(Workspace).filter(Workspace.slug == "internal").first()
     raw = generate()
     k = ApiKey(name="$KEY_NAME", key_prefix=short(raw), key_hash=hash_key(raw),
-               scopes=DEFAULT_API_KEY_SCOPES)
+               scopes=DEFAULT_API_KEY_SCOPES,
+               workspace_id=ws.id if ws else None)
     db.add(k)
     db.commit()
     print(raw)
