@@ -445,10 +445,108 @@ a{color:var(--ui-purple)}
   .job-row{grid-template-columns:48px minmax(110px,1fr) 92px 70px 70px 96px}
   .inf-workbench,.inf-placeholder{grid-template-columns:1fr}
 }
+
+/* ============ DARK THEME（html[data-theme="dark"]） ============ */
+html[data-theme="dark"]{
+  --ui-bg:#0a0612; --ui-bg-2:#0d0a17; --ui-card:#13111f; --ui-card-soft:#0d0a17;
+  --ui-border:#29213a; --ui-border-strong:#3a2f56;
+  --ui-text:#cbd5e1; --ui-heading:#ffffff; --ui-muted:#94a3b8; --ui-dim:#6b6480;
+  --ui-purple:#a78bfa; --ui-purple-strong:#c4b5fd; --ui-purple-soft:rgba(167,139,250,.14); --ui-purple-line:rgba(167,139,250,.55);
+  --ui-green:#6ee7b7; --ui-amber:#fcd34d; --ui-red:#fda4af;
+}
+html[data-theme="dark"],html[data-theme="dark"] body{background:linear-gradient(180deg,#0d0a17 0,#0a0612 210px,#0a0612 520px)}
+html[data-theme="dark"] .topbar{background:linear-gradient(90deg,rgba(13,10,23,.92),rgba(19,17,31,.92));box-shadow:0 12px 30px rgba(0,0,0,.4)}
+html[data-theme="dark"] .site-picker:hover,html[data-theme="dark"] .icon-btn:hover,html[data-theme="dark"] .acct:hover,html[data-theme="dark"] .acct.active{background:rgba(167,139,250,.10)}
+html[data-theme="dark"] .tab{color:var(--ui-muted)}
+html[data-theme="dark"] .tab.active{background:rgba(167,139,250,.18)}
+html[data-theme="dark"] .usage-strip{background:rgba(16,185,129,.10);border-color:rgba(16,185,129,.25);color:#6ee7b7}
+html[data-theme="dark"] .usage-strip b{color:#6ee7b7}
+html[data-theme="dark"] .login-wrap{background:linear-gradient(180deg,#0a0612,#0d0a17)}
+html[data-theme="dark"] .login-card,html[data-theme="dark"] .stat,html[data-theme="dark"] .ask-input,html[data-theme="dark"] .starter,html[data-theme="dark"] .trace,html[data-theme="dark"] .cat-filters,html[data-theme="dark"] .cat-table-wrap,html[data-theme="dark"] .cov-tile,html[data-theme="dark"] .report-tile,html[data-theme="dark"] .inf-card,html[data-theme="dark"] .jobs-list,html[data-theme="dark"] .set-block,html[data-theme="dark"] .inf-contact,html[data-theme="dark"] .post,html[data-theme="dark"] .overview-section{box-shadow:0 14px 34px rgba(0,0,0,.35)}
+html[data-theme="dark"] .subnav{background:rgba(19,17,31,.72);box-shadow:0 10px 26px rgba(0,0,0,.25)}
+html[data-theme="dark"] .subnav-item.active{background:rgba(167,139,250,.18)}
+html[data-theme="dark"] .subnav-item.active small{color:var(--ui-muted)}
+html[data-theme="dark"] .ask-input textarea::placeholder{color:#6b6480}
+html[data-theme="dark"] .stats-hero .stat:first-child{background:linear-gradient(135deg,#1b1530,#241a3d);border-color:rgba(167,139,250,.3);box-shadow:0 16px 36px rgba(0,0,0,.35)}
+html[data-theme="dark"] .stats-hero .stat:first-child .lbl{color:#b9aef0}
+html[data-theme="dark"] .stats-hero .stat:first-child .delta{color:#6ee7b7}
+html[data-theme="dark"] .entry-card{background:linear-gradient(135deg,rgba(167,139,250,.12),rgba(59,124,229,.06));border-color:rgba(167,139,250,.3);box-shadow:0 16px 38px rgba(0,0,0,.3)}
+html[data-theme="dark"] .entry-card:hover{background:linear-gradient(135deg,rgba(167,139,250,.20),rgba(59,124,229,.10))}
+html[data-theme="dark"] .entry-icon{background:rgba(167,139,250,.16)}
+html[data-theme="dark"] .overview-section{background:rgba(255,255,255,.03)}
+html[data-theme="dark"] .cov-tile,html[data-theme="dark"] .report-tile{border-color:var(--ui-border);box-shadow:0 16px 36px rgba(0,0,0,.3)}
+html[data-theme="dark"] .report-tile.empty{background:#13111f}
+html[data-theme="dark"] .report-tile.ready{background:linear-gradient(180deg,#181024,#13111f);border-color:rgba(167,139,250,.40)}
+html[data-theme="dark"] .stat,html[data-theme="dark"] .starter,html[data-theme="dark"] .set-block,html[data-theme="dark"] .inf-panel,html[data-theme="dark"] .inf-placeholder-card{box-shadow:0 14px 32px rgba(0,0,0,.28)}
+html[data-theme="dark"] .cov-tile .bar,html[data-theme="dark"] .report-tile .covbar{background:#29213a}
+html[data-theme="dark"] .cov-tile button,html[data-theme="dark"] .mini-btn,html[data-theme="dark"] .report-tile .btn-gen{border-color:rgba(167,139,250,.25);color:var(--ui-purple-strong)}
+html[data-theme="dark"] .cov-tile button:hover,html[data-theme="dark"] .mini-btn:hover,html[data-theme="dark"] .report-tile .btn-gen:hover:not(:disabled){background:rgba(167,139,250,.22)}
+html[data-theme="dark"] .mini-btn.bad{background:rgba(251,113,133,.14);border-color:rgba(251,113,133,.3);color:#fda4af}
+html[data-theme="dark"] .cat-table tr:hover,html[data-theme="dark"] .job-row:hover:not(.head){background:rgba(167,139,250,.05)}
+html[data-theme="dark"] .thumb{background:linear-gradient(135deg,#475569,#1f2937);color:#c4b5fd}
+html[data-theme="dark"] .pill.ok{background:rgba(16,185,129,.14);color:#6ee7b7;border-color:rgba(16,185,129,.3)}
+html[data-theme="dark"] .pill.warn{background:rgba(247,183,49,.14);color:#fcd34d;border-color:rgba(247,183,49,.3)}
+html[data-theme="dark"] .pill.bad{background:rgba(251,113,133,.14);color:#fda4af;border-color:rgba(251,113,133,.3)}
+html[data-theme="dark"] .pill.pending{background:rgba(96,165,250,.14);color:#93c5fd;border-color:rgba(96,165,250,.3)}
+html[data-theme="dark"] .inf-avatar,html[data-theme="dark"] .post img{background:rgba(167,139,250,.14);border-color:rgba(167,139,250,.3)}
+html[data-theme="dark"] .secret-box{color:#c4b5fd}
+html[data-theme="dark"] .settings-scroll-list::-webkit-scrollbar-thumb{background:#3a2f56}
+html[data-theme="dark"] .hint-box{background:rgba(167,139,250,.08);border-color:rgba(167,139,250,.2)}
+html[data-theme="dark"] .invite-code-box code{color:#c4b5fd}
+html[data-theme="dark"] .report-tile .badge.pending{background:rgba(167,139,250,.14);color:#c4b5fd;border:1px solid rgba(167,139,250,.3)}
+html[data-theme="dark"] .report-tile .btn-muted{background:rgba(167,139,250,.14);border:1px solid rgba(167,139,250,.25);color:#c4b5fd}
+html[data-theme="dark"] .inf-chip:hover{background:rgba(167,139,250,.10)}
+html[data-theme="dark"] .inf-line{background:#29213a}
+/* 内联深色样式补丁：暗色模式下保持原深色，不再翻成浅色 */
+html[data-theme="dark"] #app [style*="color:#fff"]{color:#fff!important}
+html[data-theme="dark"] #app [style*="background:#13111f"]{background:#13111f!important}
+html[data-theme="dark"] #app [style*="background:#0d0a17"]{background:#0d0a17!important}
+html[data-theme="dark"] #app [style*="border:1px solid #29213a"]{border-color:#29213a!important}
+
+/* ============ 主题切换按钮（左下角） ============ */
+#theme-toggle{position:fixed;left:18px;bottom:18px;z-index:9000;display:flex;align-items:center;gap:8px;
+  background:var(--ui-card);border:1px solid var(--ui-border);color:var(--ui-text);
+  padding:9px 14px;border-radius:999px;cursor:pointer;font-family:inherit;font-size:0.8rem;font-weight:600;
+  box-shadow:0 8px 24px rgba(37,29,61,.18);transition:all .18s}
+#theme-toggle:hover{border-color:var(--ui-purple-line);transform:translateY(-1px)}
+html[data-theme="dark"] #theme-toggle{box-shadow:0 8px 24px rgba(0,0,0,.4)}
+#theme-toggle .ico{font-size:1rem;line-height:1}
 </style>
 </head>
 <body>
+<script>
+/* 主题初始化：在首屏绘制前应用，避免闪烁。默认浅色。 */
+(function(){
+  try{
+    var t = localStorage.getItem('sc_theme') || 'light';
+    if(t === 'dark') document.documentElement.setAttribute('data-theme','dark');
+  }catch(e){}
+})();
+</script>
 <div id="app"></div>
+
+<!-- 主题切换按钮（左下角，独立于 Vue） -->
+<button id="theme-toggle" type="button" aria-label="切换主题">
+  <span class="ico">🌙</span><span class="txt">暗色</span>
+</button>
+<script>
+(function(){
+  var btn = document.getElementById('theme-toggle');
+  var root = document.documentElement;
+  function render(){
+    var dark = root.getAttribute('data-theme') === 'dark';
+    btn.querySelector('.ico').textContent = dark ? '☀️' : '🌙';
+    btn.querySelector('.txt').textContent = dark ? '浅色' : '暗色';
+  }
+  btn.addEventListener('click', function(){
+    var dark = root.getAttribute('data-theme') === 'dark';
+    if(dark){ root.removeAttribute('data-theme'); try{localStorage.setItem('sc_theme','light')}catch(e){} }
+    else   { root.setAttribute('data-theme','dark'); try{localStorage.setItem('sc_theme','dark')}catch(e){} }
+    render();
+  });
+  render();
+})();
+</script>
 
 <script>
 const { createApp, ref, computed, onMounted } = Vue;

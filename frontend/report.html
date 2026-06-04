@@ -112,10 +112,103 @@ tr:hover td{background:#fafbfc}
 .cfg-foot button{padding:8px 16px;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid #d1d5db;background:#fff;color:#6b7280;font-family:inherit}
 .cfg-foot button.primary{background:#7c6ce0;color:#fff;border-color:#7c6ce0}
 .cfg-row select{margin-left:10px;padding:4px 8px;border:1px solid #d1d5db;border-radius:5px;font-size:12.5px;font-family:inherit}
+
+/* ============ DARK THEME（html[data-theme="dark"]，共用 localStorage.sc_theme） ============ */
+html[data-theme="dark"] body{background:#0a0612;color:#e5e7eb}
+html[data-theme="dark"] a{color:#a78bfa}
+html[data-theme="dark"] .crumb{color:#94a3b8}
+html[data-theme="dark"] .crumb a{color:#a78bfa}
+html[data-theme="dark"] .crumb .last-update{color:#52527a}
+html[data-theme="dark"] .site-card{background:linear-gradient(135deg,rgba(167,139,250,.12),rgba(59,124,229,.06));border-color:rgba(167,139,250,.30)}
+html[data-theme="dark"] .site-card h2{color:#fff}
+html[data-theme="dark"] .site-card .url{color:#a78bfa}
+html[data-theme="dark"] .site-card .meta{color:#94a3b8}
+html[data-theme="dark"] .site-card .meta b{color:#fff}
+html[data-theme="dark"] .date-picker select,html[data-theme="dark"] .icon-btn{background:#13111f;border-color:#29213a;color:#e5e7eb}
+html[data-theme="dark"] .icon-btn{color:#94a3b8}
+html[data-theme="dark"] .icon-btn:hover{background:rgba(167,139,250,.10);color:#c4b5fd}
+html[data-theme="dark"] .tab-row{border-bottom-color:#29213a}
+html[data-theme="dark"] .tab-row button{color:#94a3b8}
+html[data-theme="dark"] .tab-row button:hover{color:#e5e7eb}
+html[data-theme="dark"] .tab-row button.active{color:#c4b5fd;border-bottom-color:#a78bfa}
+html[data-theme="dark"] .stat{background:#13111f;border-color:#29213a}
+html[data-theme="dark"] .stat .lbl{color:#94a3b8}
+html[data-theme="dark"] .stat .val{color:#fff}
+html[data-theme="dark"] .stat .sub{color:#52527a}
+html[data-theme="dark"] .section{background:#13111f;border-color:#29213a}
+html[data-theme="dark"] .section-head h3{color:#fff}
+html[data-theme="dark"] .section-head h3 .desc{color:#52527a}
+html[data-theme="dark"] .legend{color:#94a3b8}
+html[data-theme="dark"] .chart-svg{background:#0d0a17}
+html[data-theme="dark"] .chart-svg .grid{stroke:#29213a}
+html[data-theme="dark"] .chart-svg .axis-label{fill:#52527a}
+html[data-theme="dark"] .sub-tabs button{background:#13111f;border-color:#29213a;color:#94a3b8}
+html[data-theme="dark"] .sub-tabs button.active{background:rgba(167,139,250,.14);border-color:#a78bfa;color:#c4b5fd}
+html[data-theme="dark"] .search-box{background:#0d0a17;border-color:#29213a;color:#e5e7eb}
+html[data-theme="dark"] .search-box::placeholder{color:#52527a}
+html[data-theme="dark"] .search-box:focus{border-color:#a78bfa}
+html[data-theme="dark"] th{background:#0d0a17;color:#52527a;border-bottom-color:#29213a}
+html[data-theme="dark"] td{border-bottom-color:#1f1429;color:#cbd5e1}
+html[data-theme="dark"] tr:hover td{background:rgba(167,139,250,.05)}
+html[data-theme="dark"] .thumb{background:linear-gradient(135deg,#475569,#1f2937)}
+html[data-theme="dark"] .sku-link{color:#a78bfa}
+html[data-theme="dark"] .add-btn{background:rgba(167,139,250,.14);color:#c4b5fd}
+html[data-theme="dark"] .attr-cell{color:#94a3b8}
+html[data-theme="dark"] .new-badge{background:rgba(247,183,49,.14);color:#fcd34d}
+html[data-theme="dark"] .op-btn{border-color:#29213a;background:#13111f;color:#c4b5fd}
+html[data-theme="dark"] .pagination button{border-color:#29213a;background:#13111f;color:#e5e7eb}
+html[data-theme="dark"] .pagination button:hover:not(:disabled){background:rgba(167,139,250,.10)}
+html[data-theme="dark"] .pagination button.active{background:#a78bfa;color:#fff;border-color:#a78bfa}
+html[data-theme="dark"] .pagination select{background:#13111f;border-color:#29213a;color:#e5e7eb}
+html[data-theme="dark"] .loading,html[data-theme="dark"] .empty{color:#52527a}
+html[data-theme="dark"] .cfg-mask{background:rgba(0,0,0,.6)}
+html[data-theme="dark"] .cfg-drawer{background:#13111f;box-shadow:-4px 0 24px rgba(0,0,0,.5)}
+html[data-theme="dark"] .cfg-head{border-bottom-color:#29213a}
+html[data-theme="dark"] .cfg-head h3{color:#fff}
+html[data-theme="dark"] .cfg-head .close{color:#94a3b8}
+html[data-theme="dark"] .cfg-group h4{color:#94a3b8}
+html[data-theme="dark"] .cfg-row{color:#e5e7eb}
+html[data-theme="dark"] .cfg-row input[type=checkbox]{accent-color:#a78bfa}
+html[data-theme="dark"] .cfg-foot{border-top-color:#29213a}
+html[data-theme="dark"] .cfg-foot button{border-color:#29213a;background:#13111f;color:#94a3b8}
+html[data-theme="dark"] .cfg-foot button.primary{background:#a78bfa;color:#fff;border-color:#a78bfa}
+html[data-theme="dark"] .cfg-row select{background:#0d0a17;border-color:#29213a;color:#e5e7eb}
+
+/* 主题切换按钮（左下角） */
+#theme-toggle{position:fixed;left:18px;bottom:18px;z-index:9000;display:flex;align-items:center;gap:8px;
+  background:#fff;border:1px solid #e5e7eb;color:#1f2329;padding:9px 14px;border-radius:999px;cursor:pointer;
+  font-family:inherit;font-size:13px;font-weight:600;box-shadow:0 8px 24px rgba(37,29,61,.18);transition:all .18s}
+#theme-toggle:hover{transform:translateY(-1px)}
+html[data-theme="dark"] #theme-toggle{background:#13111f;border-color:#29213a;color:#e5e7eb;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+#theme-toggle .ico{font-size:15px;line-height:1}
 </style>
 </head>
 <body>
+<script>
+/* 主题初始化（与控制台共用 localStorage.sc_theme），首屏前应用防闪烁 */
+(function(){
+  try{ if((localStorage.getItem('sc_theme')||'light')==='dark') document.documentElement.setAttribute('data-theme','dark'); }catch(e){}
+})();
+</script>
 <div id="app"></div>
+
+<!-- 主题切换按钮（左下角） -->
+<button id="theme-toggle" type="button" aria-label="切换主题">
+  <span class="ico">🌙</span><span class="txt">暗色</span>
+</button>
+<script>
+(function(){
+  var btn=document.getElementById('theme-toggle'),root=document.documentElement;
+  function render(){var d=root.getAttribute('data-theme')==='dark';
+    btn.querySelector('.ico').textContent=d?'☀️':'🌙';btn.querySelector('.txt').textContent=d?'浅色':'暗色';}
+  btn.addEventListener('click',function(){
+    var d=root.getAttribute('data-theme')==='dark';
+    if(d){root.removeAttribute('data-theme');try{localStorage.setItem('sc_theme','light')}catch(e){}}
+    else {root.setAttribute('data-theme','dark');try{localStorage.setItem('sc_theme','dark')}catch(e){}}
+    render();});
+  render();
+})();
+</script>
 
 <script>
 const { createApp, ref, computed, onMounted, watch } = Vue;
