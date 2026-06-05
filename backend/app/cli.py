@@ -74,6 +74,13 @@ def main(argv=None) -> int:
     ps.add_argument("--all", action="store_true", help="采集全部已导入关键词")
     ps.add_argument("--import-file", help="从 Excel/CSV 导入关键词（首列）")
 
+    pf = sub.add_parser("fetch-url", help="按需抓取:指定 URL → listing + VOC")
+    pf.add_argument("--url", required=True, help="商品页或店铺/类目页 URL")
+    pf.add_argument("--max-items", type=int, default=100,
+                    help="列表页枚举商品数上限")
+    pf.add_argument("--review-limit", type=int, default=100,
+                    help="每商品评论抓取上限")
+
     args = parser.parse_args(argv)
     init_db()
 
@@ -157,6 +164,16 @@ def main(argv=None) -> int:
         r = analyze_pending(args.limit)
         print(f"✓ NLP 分析：{r['analyzed']} 成功 / {r['failed']} 失败 "
               f"/ {r['candidates']} 待分析")
+        return 0
+
+    if args.cmd == "fetch-url":
+        from . import ondemand
+        res = ondemand.fetch(args.url, max_items=args.max_items,
+                             review_limit=args.review_limit)
+        print(f"✓ 抓取 {args.url}")
+        print(f"    listing {len(res.listings)} / 评论 {len(res.reviews)}")
+        for n in res.notes:
+            print(f"    {n}")
         return 0
 
     if args.cmd == "export":
