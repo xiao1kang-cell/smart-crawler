@@ -630,6 +630,35 @@ def query_crawler_warehouse(query: str, site: str | None = None,
         s.close()
 
 
+def _call_fetch_listing_voc(url: str, max_items: int = 100,
+                            review_limit: int = 100) -> dict:
+    """按需抓取核心逻辑(供 MCP 工具与测试共用)。"""
+    from . import ondemand
+
+    res = ondemand.fetch(url, max_items=max_items, review_limit=review_limit)
+    return {
+        "url": url,
+        "listings": res.listings,
+        "listings_count": len(res.listings),
+        "reviews": res.reviews,
+        "reviews_count": len(res.reviews),
+        "notes": res.notes,
+    }
+
+
+@metered_tool(required_scope="crawler:scrape")
+def fetch_listing_voc(url: str, max_items: int = 100,
+                      review_limit: int = 100) -> dict:
+    """[ADVANCED] 指定 URL 抓取 listing + VOC(评论原文)。
+
+    支持 美客多(MercadoLibre)/ Lazada / 虾皮(Shopee)。
+    url 可为单商品页(精抓一条)或店铺/类目/搜索页(枚举批量抓)。
+    max_items: 列表页枚举上限;review_limit: 每商品评论上限。
+    数据同时落 Product/Review 表,可在控制台看板查看。"""
+    return _call_fetch_listing_voc(url, max_items=max_items,
+                                   review_limit=review_limit)
+
+
 if __name__ == "__main__":
     import os
     mcp.run(transport="http", host="0.0.0.0",
