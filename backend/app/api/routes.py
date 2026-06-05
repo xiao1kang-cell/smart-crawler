@@ -691,6 +691,30 @@ def list_products(
             "items": [product_dict(p) for p in rows]}
 
 
+@router.post("/ondemand/fetch")
+def ondemand_fetch(payload: dict, user: str = Depends(require_user)):
+    """按需抓取:指定 URL → listing + VOC。
+
+    payload: {"url": "...", "max_items"?: int, "review_limit"?: int}
+    """
+    from .. import ondemand
+
+    url = (payload or {}).get("url", "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="url 必填")
+    max_items = int(payload.get("max_items", 100))
+    review_limit = int(payload.get("review_limit", 100))
+    res = ondemand.fetch(url, max_items=max_items, review_limit=review_limit)
+    return {
+        "url": url,
+        "listings": res.listings,
+        "listings_count": len(res.listings),
+        "reviews": res.reviews,
+        "reviews_count": len(res.reviews),
+        "notes": res.notes,
+    }
+
+
 @router.get("/products/{pid}")
 def get_product(pid: int, user: str = Depends(require_user),
                 x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
