@@ -6,5 +6,6 @@
 from __future__ import annotations
 
 from .base import OnDemandResult
+from .runner import fetch
 
-__all__ = ["OnDemandResult"]
+__all__ = ["OnDemandResult", "fetch"]

@@ -75,36 +75,45 @@ def _upsert_reviews(reviews: list[dict]) -> dict:
     if not reviews:
         return stats
     with session_scope() as s:
-        for r in reviews:
-            rid, plat = r.get("review_id"), r.get("platform")
-            if not rid:
-                continue
-            row = (s.query(Review)
-                   .filter(Review.platform == plat, Review.review_id == rid)
-                   .first())
-            payload = dict(
-                review_id=rid, platform=plat, site=r.get("site"),
-                reviewer_name=clean_text(r.get("reviewer_name")),
-                reviewer_country=r.get("reviewer_country"),
-                rating=_int(r.get("rating")),
-                title=clean_text(r.get("title")),
-                content=clean_text(r.get("content")),
-                language=r.get("language"),
-                review_date=parse_dt(r.get("review_date")),
-                purchase_date=parse_dt(r.get("purchase_date")),
-                reply_content=clean_text(r.get("reply_content")),
-                reply_date=parse_dt(r.get("reply_date")),
-                sku=r.get("sku"), product_url=r.get("product_url"),
-                order_id=r.get("order_id"), is_verified=r.get("is_verified"),
-                review_topics=r.get("review_topics"),
-            )
-            if row is None:
-                s.add(Review(collected_time=datetime.utcnow(), **payload))
-                stats["inserted"] += 1
-            else:
-                for k, v in payload.items():
-                    setattr(row, k, v)
-                stats["updated"] += 1
+        return upsert_reviews_into(s, reviews)
+
+
+def upsert_reviews_into(session, reviews: list[dict]) -> dict:
+    """评论入库去重（platform + review_id 唯一），写入传入的 session。
+
+    供 review_runner 与 ondemand.runner 共用，写入完整评论列集。
+    """
+    stats = {"inserted": 0, "updated": 0}
+    for r in reviews:
+        rid, plat = r.get("review_id"), r.get("platform")
+        if not rid:
+            continue
+        row = (session.query(Review)
+               .filter(Review.platform == plat, Review.review_id == rid)
+               .first())
+        payload = dict(
+            review_id=rid, platform=plat, site=r.get("site"),
+            reviewer_name=clean_text(r.get("reviewer_name")),
+            reviewer_country=r.get("reviewer_country"),
+            rating=_int(r.get("rating")),
+            title=clean_text(r.get("title")),
+            content=clean_text(r.get("content")),
+            language=r.get("language"),
+            review_date=parse_dt(r.get("review_date")),
+            purchase_date=parse_dt(r.get("purchase_date")),
+            reply_content=clean_text(r.get("reply_content")),
+            reply_date=parse_dt(r.get("reply_date")),
+            sku=r.get("sku"), product_url=r.get("product_url"),
+            order_id=r.get("order_id"), is_verified=r.get("is_verified"),
+            review_topics=r.get("review_topics"),
+        )
+        if row is None:
+            session.add(Review(collected_time=datetime.utcnow(), **payload))
+            stats["inserted"] += 1
+        else:
+            for k, v in payload.items():
+                setattr(row, k, v)
+            stats["updated"] += 1
     return stats
 
 
