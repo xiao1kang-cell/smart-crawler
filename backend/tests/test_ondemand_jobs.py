@@ -239,3 +239,84 @@ def test_fetch_endpoint_records_job(monkeypatch):
     assert jobs[0].item_skus == ["LZ1"]
     after_sess.close()
     app.dependency_overrides.clear()
+
+
+def _override_ws(routes, app, monkeypatch, ws_id):
+    app.dependency_overrides[routes.require_user] = lambda: "tester"
+    monkeypatch.setattr(routes, "_current_workspace",
+                        lambda user, db, x=None: type("W", (), {"id": ws_id})())
+
+
+def test_jobs_endpoints_crud(monkeypatch):
+    from fastapi.testclient import TestClient
+    import app.api.routes as routes
+    from app.main import app
+    from app.db import SessionLocal, init_db
+    from app.api.ondemand_jobs import record_job
+
+    init_db()
+    from app.models import Product, OnDemandJob
+    s = SessionLocal()
+    # 清理上次运行可能残留的数据(测试用持久库,需自清以保证幂等)
+    s.query(OnDemandJob).filter(OnDemandJob.workspace_id == 777).delete()
+    s.query(Product).filter_by(site="ondemand_mercadolibre", sku="EP1").delete()
+    s.commit()
+    # 造一条 ws=777 的 job(用独特 ws 避免与其它测试数据混)
+    job = record_job(s, ws_id=777, username="tester", url="https://x/p/MLA1",
+                     result=_result([{"sku": "EP1", "title": "t",
+                                      "site": "ondemand_mercadolibre"}], [], []))
+    s.add(Product(site="ondemand_mercadolibre", sku="EP1", title="t",
+                  sale_price=5.0, product_url="u"))
+    s.commit()
+    job_id = job.id
+    s.close()
+
+    _override_ws(routes, app, monkeypatch, 777)
+    client = TestClient(app)
+
+    # 列表
+    r = client.get("/api/ondemand/jobs")
+    assert r.status_code == 200
+    body = r.json()
+    assert any(j["id"] == job_id for j in body["jobs"])
+
+    # 详情
+    r = client.get(f"/api/ondemand/jobs/{job_id}")
+    assert r.status_code == 200
+    assert r.json()["listings"][0]["sku"] == "EP1"
+
+    # 删除
+    r = client.delete(f"/api/ondemand/jobs/{job_id}")
+    assert r.status_code == 200
+    # 删后详情 404
+    r = client.get(f"/api/ondemand/jobs/{job_id}")
+    assert r.status_code == 404
+
+    app.dependency_overrides.clear()
+
+
+def test_jobs_detail_cross_workspace_403(monkeypatch):
+    from fastapi.testclient import TestClient
+    import app.api.routes as routes
+    from app.main import app
+    from app.db import SessionLocal, init_db
+    from app.api.ondemand_jobs import record_job
+
+    init_db()
+    from app.models import OnDemandJob
+    s = SessionLocal()
+    s.query(OnDemandJob).filter(OnDemandJob.workspace_id == 888).delete()
+    s.commit()
+    job = record_job(s, ws_id=888, username="other", url="https://x/p/MLA2",
+                     result=_result([{"sku": "Z1", "title": "t",
+                                      "site": "ondemand_mercadolibre"}], [], []))
+    s.commit(); job_id = job.id; s.close()
+
+    # 当前用户在 ws=999,访问 ws=888 的 job
+    _override_ws(routes, app, monkeypatch, 999)
+    client = TestClient(app)
+    r = client.get(f"/api/ondemand/jobs/{job_id}")
+    assert r.status_code == 403
+    r = client.delete(f"/api/ondemand/jobs/{job_id}")
+    assert r.status_code == 403
+    app.dependency_overrides.clear()

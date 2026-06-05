@@ -729,6 +729,61 @@ def ondemand_fetch(payload: dict, user: str = Depends(require_user),
     }
 
 
+@router.get("/ondemand/jobs")
+def ondemand_jobs_list(platform: str | None = None, page: int = 1,
+                       page_size: int = 20,
+                       user: str = Depends(require_user),
+                       x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
+                       db: Session = Depends(get_db)):
+    from .ondemand_jobs import list_jobs_logic
+    ws = _current_workspace(user, db, x_workspace_id)
+    return list_jobs_logic(db, ws_id=ws.id, platform=platform,
+                           page=page, page_size=page_size)
+
+
+@router.get("/ondemand/jobs/{job_id}")
+def ondemand_job_detail(job_id: int, user: str = Depends(require_user),
+                        x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
+                        db: Session = Depends(get_db)):
+    from .ondemand_jobs import job_detail_logic
+    ws = _current_workspace(user, db, x_workspace_id)
+    detail = job_detail_logic(db, ws_id=ws.id, job_id=job_id)
+    if detail is None:
+        # 区分 404(不存在)与 403(越权):存在但不属于本 ws → 403
+        from ..models import OnDemandJob
+        exists = db.get(OnDemandJob, job_id)
+        raise HTTPException(status_code=403 if exists else 404,
+                            detail="无权访问" if exists else "记录不存在")
+    return detail
+
+
+@router.delete("/ondemand/jobs/{job_id}")
+def ondemand_job_delete(job_id: int, user: str = Depends(require_user),
+                        x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
+                        db: Session = Depends(get_db)):
+    from .ondemand_jobs import delete_job_logic
+    from ..models import OnDemandJob
+    ws = _current_workspace(user, db, x_workspace_id)
+    ok = delete_job_logic(db, ws_id=ws.id, job_id=job_id)
+    if not ok:
+        exists = db.get(OnDemandJob, job_id)
+        raise HTTPException(status_code=403 if exists else 404,
+                            detail="无权删除" if exists else "记录不存在")
+    db.commit()
+    return {"deleted": True, "id": job_id}
+
+
+@router.delete("/ondemand/jobs")
+def ondemand_jobs_clear(user: str = Depends(require_user),
+                        x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
+                        db: Session = Depends(get_db)):
+    from .ondemand_jobs import clear_jobs_logic
+    ws = _current_workspace(user, db, x_workspace_id)
+    n = clear_jobs_logic(db, ws_id=ws.id)
+    db.commit()
+    return {"deleted": n}
+
+
 @router.get("/products/{pid}")
 def get_product(pid: int, user: str = Depends(require_user),
                 x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
