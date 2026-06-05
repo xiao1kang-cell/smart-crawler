@@ -1,9 +1,24 @@
 """美客多(MercadoLibre)按需采集器。
 
-listing:  GET https://api.mercadolibre.com/items/{id}
-reviews:  GET https://api.mercadolibre.com/reviews/item/{id}
-URL→id:   商品页 URL 含 MLM-123 / MLB-123 / MLA-123 编码,去掉短横即 itemId。
-反爬:     公开 API,最宽松,默认直连(proxy_tier=none)。
+⚠️ 状态(2026-06-05 实测):**当前不可用,待接 OAuth**。
+    api.mercadolibre.com/items/{id} 现已强制 OAuth 鉴权 —— 无 token 直连一律返回
+    403(PA_UNAUTHORIZED_RESULT_FROM_POLICIES,PolicyAgent)。
+    实测矩阵(本地 / 住宅代理 / curl_cffi / 真浏览器 全试过):
+      · items API 直连(含住宅代理)        -> 403 OAuth
+      · 商品页 HTML(curl_cffi / 真浏览器)  -> 只拿到无价格的 SEO 占位页;价格/评论
+                                              需登录态 + 真实交互后异步加载,抓不到
+    结论:listing/评论都拿不到。下一步二选一:
+      (A) 接入官方 OAuth(developers.mercadolibre 注册应用 -> access_token,带 token
+          调 items + reviews API,最稳最全);
+      (B) 坚持免 token 则需更深的浏览器自动化(登录态 + 行为模拟),成本高、不稳。
+    落地前,本采集器对真实 URL 会因 403 触发 runner 切代理重试并最终放弃,notes 有
+    明确提示。下面的 parse_listing/parse_reviews 是按 items API 响应结构写的,接上
+    OAuth 后即可复用。
+
+listing:  GET https://api.mercadolibre.com/items/{id}        (需 OAuth)
+reviews:  GET https://api.mercadolibre.com/reviews/item/{id}  (需 OAuth)
+URL->id:  商品页 URL 含 MLM-123 / MLB-123 / MLA-123 编码,去掉短横即 itemId。
+反爬:     PolicyAgent 强制鉴权(非简单封禁),无 token 不可达。
 """
 from __future__ import annotations
 

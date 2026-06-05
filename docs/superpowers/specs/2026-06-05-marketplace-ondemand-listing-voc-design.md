@@ -6,6 +6,22 @@
 
 ---
 
+## 0. 实测落地状态(2026-06-05 更新,重要)
+
+设计阶段假设三平台均为「内部 JSON API 可直连」(类比 Costway),**真实落地后该假设被推翻**,各平台实况差异很大:
+
+| 平台 | 状态 | 实测结论 / 下一步 |
+|------|------|------|
+| **Lazada** | ✅ **已做通(样板)** | listing 必须 **StealthyFetcher 真浏览器渲染**(裸 HTTP 只拿到反爬占位页);解析路径全部按真实结构重写;评论走 `my.<region>` 子域接口。**端到端验证通过**(NAS + ProxyJet 住宅代理:真 URL → 价格 RM114 + 9 图 + 6 评论 → 入库)。 |
+| **美客多** | ❌ **不可用,待 OAuth** | `items` API 现强制 OAuth(403 PolicyAgent);商品页 HTML 即便真浏览器也只有无价格占位页。需接官方 OAuth(注册开发者应用拿 token)才能抓。 |
+| **Shopee** | ⏳ **未经真实验证** | 仅过假 fixture 单测,从未打真实站点。参照 Lazada 的教训,大概率需同样一轮逆向 + 真浏览器改造;`get_pc`/`get_ratings` 可能已加签名头。 |
+
+**两条贯穿性教训(后续做 Shopee / 复活美客多前必读):**
+1. **不要用假 fixture 替代真实结构**:三平台的 `parse_*` 最初都是按臆想结构写的,无一对得上真实站点。正确流程是先 `StealthyFetcher` 抓真实页/接口 → dump 结构 → 按真实路径写解析 + 用真实数据做 fixture(见 Lazada 的做法)。
+2. **生产可用的前提是住宅代理**:Lazada listing 在 NAS 机房 IP 会被 `_____tmd_____/punish` 拦截,必须经住宅代理(ProxyJet,已配在 `backend/proxies.txt` 的 `[residential]` 段)。代码读代理依赖 `PROXIES_FILE` / 默认 `/app/backend/proxies.txt`——脱离该路径跑(如临时目录)会取不到代理而误判为「不可用」。
+
+---
+
 ## 1. 背景与需求
 
 需求来自甲方表格(截图):

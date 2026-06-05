@@ -1,11 +1,20 @@
 """虾皮(Shopee)按需采集器。
 
-listing:  GET https://{host}/api/v4/pdp/get_pc?shop_id={s}&item_id={i}
-reviews:  GET https://{host}/api/v2/item/get_ratings?shopid={s}&itemid={i}&offset=N&limit=20
-URL→id:   单品 URL 形如  .../<slug>-i.<shopid>.<itemid>  或  /product/<shopid>/<itemid>
+⚠️ 状态(2026-06-05):**未经真实站点验证**。下面的接口路径与 parse_* 解析逻辑是
+    按「假设的 Shopee API 结构」写的,只过了用假 fixture 的单测,从未打过真实 Shopee。
+    姊妹平台 Lazada 已踩过坑:实测后发现原先假设的 JSON 结构与真实站点完全对不上,
+    listing 必须改真浏览器渲染、解析路径全部重写。**Shopee 大概率需要同样一轮逆向**:
+      · get_pc / get_ratings 近年常加签名头(af-ac-enc-dat 等),裸调可能直接被拒;
+      · 真实响应字段名/层级需以实测为准(参考 Lazada 重写的做法:
+        先 StealthyFetcher 抓真实页/接口 -> dump 结构 -> 按真实路径写 parse + 真实 fixture)。
+    在完成真实验证前,勿把本采集器当作可用。
+
+listing:  GET https://{host}/api/v4/pdp/get_pc?shop_id={s}&item_id={i}       (待验证)
+reviews:  GET https://{host}/api/v2/item/get_ratings?shopid={s}&itemid={i}    (待验证)
+URL->id:  单品 URL 形如  .../<slug>-i.<shopid>.<itemid>  或  /product/<shopid>/<itemid>
 反爬:     最强,强制住宅代理(proxy_tier=residential)+ 拟人头/限速;失败由 runner 切代理重试。
-价格:     Shopee 价格字段放大 100000 倍,解析时除回。
-图片:     字段是 hash,需拼 https://cf.{host}/file/<hash>;单测固定用 shopee.com.my。
+价格:     (假设)Shopee 价格字段放大 100000 倍,解析时除回 —— 需真实验证。
+图片:     (假设)字段是 hash,拼 https://cf.{host}/file/<hash> —— 需真实验证。
 """
 from __future__ import annotations
 
