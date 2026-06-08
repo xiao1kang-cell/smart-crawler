@@ -67,6 +67,14 @@ def stealth_kwargs(
         "IE": ("en-IE", "Europe/Dublin"),
         "BR": ("pt-BR", "America/Sao_Paulo"),
         "MX": ("es-MX", "America/Mexico_City"),
+        # 美客多其余拉美站点（locale 必须与目标域名 ccTLD 对齐，否则反爬易弹验证页）
+        "AR": ("es-AR", "America/Argentina/Buenos_Aires"),
+        "CL": ("es-CL", "America/Santiago"),
+        "CO": ("es-CO", "America/Bogota"),
+        "UY": ("es-UY", "America/Montevideo"),
+        "PE": ("es-PE", "America/Lima"),
+        "EC": ("es-EC", "America/Guayaquil"),
+        "VE": ("es-VE", "America/Caracas"),
         "JP": ("ja-JP", "Asia/Tokyo"),
     }
     if country and country.upper() in locale_map:

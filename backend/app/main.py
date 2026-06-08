@@ -68,6 +68,14 @@ _mcp_app.add_middleware(BaseHTTPMiddleware, dispatch=_mcp_auth)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # 进程重启后,把残留 queued/running 的按需抓取 job 重新入队(内存队列已丢)
+    try:
+        from .ondemand.queue import requeue_pending
+        n = requeue_pending()
+        if n:
+            print(f"[ondemand] 重新入队 {n} 条未完成任务")
+    except Exception as exc:
+        print(f"[ondemand] requeue 跳过: {exc}")
     # 单机模式（RUN_SCHEDULER!=0）：进程内起调度 + worker 线程，开箱即用。
     # 服务化部署时 web 容器设 RUN_SCHEDULER=0，调度/worker 由独立容器承担。
     if os.environ.get("RUN_SCHEDULER", "1") != "0":

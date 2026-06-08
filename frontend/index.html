@@ -656,7 +656,7 @@ const App = {
       if (next === 'catalog') loadProducts();
       if (next === 'coverage') loadCoverage();
       if (next === 'jobs') loadJobs();
-      if (next === 'ondemand') loadOndemandJobs();
+      if (next === 'ondemand') loadOndemandJobs().then(() => { if (odHasPending.value) startOdPolling(); });
     }
     window.addEventListener('hashchange', () => {
       const next = (location.hash || '').replace(/^#\/?/, '');
@@ -772,6 +772,98 @@ const App = {
         const r = await fetch('/api/ondemand/jobs', { method: 'DELETE', headers: authH() });
         if (r.ok) { odJobs.value = []; expandedJobId.value = null; odJobDetail.value = null; }
       } catch (e) {}
+    }
+    // ---- 批量上传 + 失败重试 ----
+    const odBatchText = ref('');
+    const odBatchMsg = ref('');
+    const odBatchErr = ref('');
+    const odBatchSubmitting = ref(false);
+    let odPollTimer = null;
+    const OD_MAX_BATCH = 1000;
+
+    // 解析多行文本为 URL 数组(去空行、去首尾空白)
+    function odParseUrls(text) {
+      return (text || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    }
+    // 是否有未完成任务(queued/running)→ 禁止再次提交
+    const odHasPending = computed(() =>
+      odJobs.value.some(j => j.status === 'queued' || j.status === 'running'));
+    const odBatchCount = computed(() => odParseUrls(odBatchText.value).length);
+
+    // 选择 .txt/.csv 文件 → 读出内容填入 textarea
+    function odOnFile(ev) {
+      const f = ev.target.files && ev.target.files[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        // CSV 取每行第一列;txt 直接每行
+        const raw = String(reader.result || '');
+        const lines = raw.split(/\r?\n/).map(l => l.split(',')[0].trim()).filter(Boolean);
+        odBatchText.value = lines.join('\n');
+      };
+      reader.readAsText(f);
+      ev.target.value = '';  // 允许重复选同一文件
+    }
+
+    async function submitBatch() {
+      odBatchErr.value = ''; odBatchMsg.value = '';
+      const urls = odParseUrls(odBatchText.value);
+      if (!urls.length) { odBatchErr.value = '请粘贴或上传至少一条 URL'; return; }
+      if (urls.length > OD_MAX_BATCH) {
+        odBatchErr.value = `单批最多 ${OD_MAX_BATCH} 条,当前 ${urls.length} 条`; return;
+      }
+      if (odHasPending.value) {
+        odBatchErr.value = '有未完成任务,请等待完成后再提交'; return;
+      }
+      odBatchSubmitting.value = true;
+      try {
+        const r = await fetch('/api/ondemand/batch', {
+          method: 'POST',
+          headers: { ...authH(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urls, max_items: odMaxItems.value }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
+        odBatchMsg.value = `已入队 ${d.queued} 条` +
+          (d.skipped && d.skipped.length ? `,跳过 ${d.skipped.length} 条(无法识别平台)` : '');
+        odBatchText.value = '';
+        await loadOndemandJobs();
+        startOdPolling();
+      } catch (e) {
+        odBatchErr.value = '提交失败:' + e.message;
+      } finally {
+        odBatchSubmitting.value = false;
+      }
+    }
+
+    async function retryJob(id) {
+      try {
+        const r = await fetch(`/api/ondemand/jobs/${id}/retry`, { method: 'POST', headers: authH() });
+        if (!r.ok) { const e = await r.json().catch(()=>({})); alert(e.detail || ('HTTP ' + r.status)); return; }
+        await loadOndemandJobs();
+        startOdPolling();
+      } catch (e) {}
+    }
+
+    async function retryFailedBatch(batchId) {
+      try {
+        const r = await fetch(`/api/ondemand/batch/${batchId}/retry-failed`, { method: 'POST', headers: authH() });
+        if (r.ok) { await loadOndemandJobs(); startOdPolling(); }
+      } catch (e) {}
+    }
+
+    // 有未完成任务时每 3 秒轮询一次,全终态后停
+    function startOdPolling() {
+      if (odPollTimer) return;
+      odPollTimer = setInterval(async () => {
+        await loadOndemandJobs();
+        if (!odHasPending.value) { clearInterval(odPollTimer); odPollTimer = null; }
+      }, 3000);
+    }
+
+    // 批次内是否有失败项(用于显示"重试全部失败")
+    function batchHasFailed(batchId) {
+      return odJobs.value.some(j => j.batch_id === batchId && j.status === 'failed');
     }
     const starters = [
       { icon:'📊', title:'总览快照', desc:'当前工作区覆盖率和商品总数', key:'overview' },
@@ -1162,6 +1254,9 @@ const App = {
       odUrl, odMaxItems, odLoading, odError, odResult, runOndemand,
       odJobs, odJobsLoading, expandedJobId, odJobDetail,
       loadOndemandJobs, toggleJobDetail, deleteOndemandJob, clearOndemandJobs,
+      odBatchText, odBatchMsg, odBatchErr, odBatchSubmitting, odBatchCount,
+      odHasPending, OD_MAX_BATCH, odOnFile, submitBatch, retryJob,
+      retryFailedBatch, batchHasFailed,
     };
   },
   template: `
@@ -1588,6 +1683,22 @@ const App = {
           </div>
         </div>
         <div class="inf-panel" style="margin-top:16px">
+          <h3>批量抓取(每行一个 URL，最多 {{ OD_MAX_BATCH }} 条)</h3>
+          <textarea v-model="odBatchText" class="inf-inp"
+                    placeholder="每行粘贴一个商品/店铺/类目 URL，或选择 .txt/.csv 文件导入"
+                    style="width:100%;min-height:120px;margin-top:8px;resize:vertical;font-family:inherit"></textarea>
+          <div class="inf-form" style="flex-wrap:wrap;margin-top:8px;align-items:center">
+            <input type="file" accept=".txt,.csv" @change="odOnFile" style="font-size:0.8rem"/>
+            <span class="inf-empty-note" style="margin:0">已识别 {{ odBatchCount }} 条</span>
+            <button class="btn-prim" @click="submitBatch"
+                    :disabled="odBatchSubmitting || odHasPending || !odBatchCount || odBatchCount > OD_MAX_BATCH">
+              {{ odBatchSubmitting ? '提交中…' : '批量抓取' }}</button>
+            <span v-if="odHasPending" class="inf-empty-note" style="margin:0;color:#fcd34d">有未完成任务，请等待完成后再提交</span>
+          </div>
+          <div v-if="odBatchErr" class="inf-err" style="margin-top:8px">{{ odBatchErr }}</div>
+          <div v-if="odBatchMsg" class="inf-empty-note" style="margin-top:8px;color:#86efac">{{ odBatchMsg }}</div>
+        </div>
+        <div class="inf-panel" style="margin-top:16px">
           <div style="display:flex;justify-content:space-between;align-items:center">
             <h3>抓取历史</h3>
             <button class="btn-prim" style="background:rgba(248,113,113,.18);color:#fca5a5"
@@ -1614,10 +1725,19 @@ const App = {
                   <td style="padding:6px 8px;border-bottom:1px solid var(--ui-border)">{{ j.listing_count }}</td>
                   <td style="padding:6px 8px;border-bottom:1px solid var(--ui-border)">{{ j.review_count }}</td>
                   <td style="padding:6px 8px;border-bottom:1px solid var(--ui-border)">
-                    <span :style="{color: j.status==='success'?'#86efac':(j.status==='partial'?'#fcd34d':'#fca5a5')}">
+                    <span v-if="j.status==='queued'" style="color:var(--ui-muted)">⏳ 排队中</span>
+                    <span v-else-if="j.status==='running'" style="color:#93c5fd">⚙️ 抓取中…</span>
+                    <span v-else :style="{color: j.status==='success'?'#86efac':(j.status==='partial'?'#fcd34d':'#fca5a5')}">
                       {{ j.status==='success'?'成功':(j.status==='partial'?'部分':'失败') }}</span>
+                    <span v-if="j.attempts > 1" class="inf-empty-note" style="margin-left:4px">·重试{{ j.attempts - 1 }}次</span>
                   </td>
-                  <td style="padding:6px 8px;border-bottom:1px solid var(--ui-border)">
+                  <td style="padding:6px 8px;border-bottom:1px solid var(--ui-border);white-space:nowrap">
+                    <button v-if="j.status==='failed' || j.status==='partial'" class="btn-prim"
+                            style="padding:2px 8px;font-size:0.72rem;margin-right:4px;background:rgba(147,197,253,.18);color:#93c5fd"
+                            @click.stop="retryJob(j.id)">重试</button>
+                    <button v-if="batchHasFailed(j.batch_id)" class="btn-prim"
+                            style="padding:2px 8px;font-size:0.72rem;margin-right:4px;background:rgba(252,211,77,.16);color:#fcd34d"
+                            @click.stop="retryFailedBatch(j.batch_id)" title="重试该批次全部失败项">重试整批失败</button>
                     <button class="btn-prim" style="padding:2px 8px;font-size:0.72rem;background:rgba(248,113,113,.18);color:#fca5a5"
                             @click.stop="deleteOndemandJob(j.id)">删除</button>
                   </td>

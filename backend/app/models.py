@@ -410,7 +410,8 @@ class OnDemandJob(Base):
     """按需抓取任务记录 —— 每次 fetch(url) 一条。
 
     摘要入库;详情(listing/评论)按 item_skus 现查 Product/Review。
-    status: success / partial / failed。
+    status: queued / running / success / partial / failed。
+    批量上传时同批共享 batch_id;失败重试原地复用本行(status 回 queued)。
     """
 
     __tablename__ = "ondemand_jobs"
@@ -421,9 +422,14 @@ class OnDemandJob(Base):
     kind = Column(String)                            # product / listing
     listing_count = Column(Integer, default=0)
     review_count = Column(Integer, default=0)
-    status = Column(String, index=True)              # success / partial / failed
+    status = Column(String, index=True)              # queued/running/success/partial/failed
     notes = Column(JSON)                             # res.notes(失败原因/截断)
     item_skus = Column(JSON)                         # 本次抓到的 sku 列表
+    batch_id = Column(String, index=True)            # 同批共享;单条抓取也分配一个
+    max_items = Column(Integer, default=100)         # 原始抓取参数(重试复跑用)
+    review_limit = Column(Integer, default=100)      # 原始抓取参数(重试复跑用)
+    attempts = Column(Integer, default=0)            # 执行次数,worker 每跑一次 +1
+    error = Column(Text)                             # 最后一次失败的简短原因
     workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)
     created_by = Column(String)                      # 发起用户 username
     created_at = Column(DateTime, default=datetime.utcnow, index=True)

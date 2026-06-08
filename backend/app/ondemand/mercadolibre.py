@@ -16,8 +16,10 @@
 反爬:     强,强制住宅代理(proxy_tier=residential)+ 真浏览器 + 滚动;裸 IP / 无滚动
           会被弹到 /gz/account-verification 或只拿到壳页。
           ⚠️ 稳定性:住宅 IP 信誉时好时坏,同一商品有时第 1 次就成、有时连续几次被弹
-          验证页;runner 已切代理重试 _MAX_RETRY 次。实测可稳定跑通(价格 208739 ARS +
-          评分 4.6 + 评论原文 → 入库),但生产高频抓取建议偏好已验证放行的代理区域。
+          验证页;runner 已切代理重试 _MAX_RETRY 次。浏览器 locale 必须随站点 ccTLD
+          走(BR 站 -> pt-BR/巴西时区),locale 与域名不符会显著抬高被弹验证页的概率。
+          实测可稳定跑通(价格 208739 ARS + 评分 4.6 + 评论原文 → 入库),但生产高频
+          抓取建议偏好已验证放行的代理区域。
 URL->id:  商品页 URL 含 MLM-/MLB-/MLA- 编码(catalog 用 /p/MLA…;单卖家 wid=MLA…)。
 """
 from __future__ import annotations
@@ -31,12 +33,33 @@ from .base import BaseOnDemand
 _ID_RE = re.compile(r"(ML[A-Z])-?(\d+)")
 _LD_RE = re.compile(
     r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', re.S)
-# 评论:正文 p.__comment__content;星级取正文前最近的 "Calificación N de 5"
+# 评论按 article 块切分,块内取正文 + 星级。块锚点 = comment class(非 __xxx 子类)。
+_REVIEW_BLOCK_RE = re.compile(
+    r'ui-review-capability-comments__comment(?![_\w])')
 _REVIEW_BODY_RE = re.compile(
     r'ui-review-capability-comments__comment__content[^>]*>([^<]+)</')
-_REVIEW_CALIF_RE = re.compile(r'Calificaci[oó]n\s+(\d)\s+de\s+5')
+# 星级文案多语言:ES "Calificación N de 5" / PT "Avaliação N de 5"。优先取
+# aria-label(评论星级 section,干净),回退纯文本(块内第一个即该评论星级)。
+_REVIEW_STAR_ARIA_RE = re.compile(
+    r'aria-label="(?:Calificaci[oó]n|Avalia[çc][aã]o)\s+(\d)\s+de\s+5"', re.I)
+_REVIEW_STAR_TEXT_RE = re.compile(
+    r'(?:Calificaci[oó]n|Avalia[çc][aã]o)\s+(\d)\s+de\s+5', re.I)
 PLATFORM = "mercadolibre"
 SITE = f"ondemand_{PLATFORM}"
+
+# 域名 ccTLD -> 国家代码(决定浏览器 locale/timezone 指纹)。美客多多国站,
+# locale 必须与目标域名对齐,否则反爬易弹 /gz/account-verification 壳页。
+_TLD_COUNTRY = {
+    "br": "BR", "mx": "MX", "ar": "AR", "cl": "CL", "co": "CO",
+    "uy": "UY", "pe": "PE", "ec": "EC", "ve": "VE",
+}
+
+
+def _country_for(url: str) -> str:
+    """从 URL 域名末段 ccTLD 推断国家;无法识别时退回 BR(站点流量最大)。"""
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "").lower()
+    return _TLD_COUNTRY.get(host.rsplit(".", 1)[-1] if "." in host else "", "BR")
 
 
 def _ld_product(html: str) -> dict | None:
@@ -102,26 +125,29 @@ class MercadoLibreOnDemand(BaseOnDemand):
     def parse_reviews(html: str, item_id, url: str) -> list[dict]:
         """从渲染后的页面 HTML 解析评论原文(数据源:评论 DOM)。
 
-        每条评论 = 一段正文 p.__content;其星级取**正文之前最近的**
-        "Calificación N de 5" 隐藏文本(article 块切分会错位,故按正文锚点回溯)。
+        按评论 article 块切分(块锚点 = comment class),块内取正文 +
+        星级。星级优先 aria-label 的 "Calificación/Avaliação N de 5"
+        section,回退块内首个同款纯文本——按块隔离可避开评分直方图里
+        重复的 "N de 5" 噪声(ES 站干净,PT 站直方图噪声多)。
         """
         sku = item_id[0] if isinstance(item_id, tuple) else item_id
         out = []
-        # 先收集所有星级标注的位置,再为每条正文回溯最近的星级
-        califs = [(m.start(), int(m.group(1)))
-                  for m in _REVIEW_CALIF_RE.finditer(html)]
-        for idx, mb in enumerate(_REVIEW_BODY_RE.finditer(html), start=1):
+        # 按块锚点切分;每块 = 从本锚点到下一锚点(末块到文末)
+        starts = [m.start() for m in _REVIEW_BLOCK_RE.finditer(html)]
+        starts.append(len(html))
+        idx = 0
+        for i in range(len(starts) - 1):
+            block = html[starts[i]:starts[i + 1]]
+            mb = _REVIEW_BODY_RE.search(block)
+            if not mb:
+                continue
             content = mb.group(1).strip()
             if not content:
                 continue
-            pos = mb.start()
-            # 该正文之前最近的一个 Calificación 即其星级
-            rating = None
-            for cpos, cval in califs:
-                if cpos < pos:
-                    rating = cval
-                else:
-                    break
+            idx += 1
+            ms = (_REVIEW_STAR_ARIA_RE.search(block)
+                  or _REVIEW_STAR_TEXT_RE.search(block))
+            rating = int(ms.group(1)) if ms else None
             out.append({
                 # 美客多评论 DOM 无稳定 id,用 sku + 序号合成唯一键
                 "review_id": f"{sku}_{idx}",
@@ -153,7 +179,8 @@ class MercadoLibreOnDemand(BaseOnDemand):
                 pass
             return page
 
-        kw = stealth_kwargs(proxy=proxy, country="AR", solve_cloudflare=True,
+        kw = stealth_kwargs(proxy=proxy, country=_country_for(url),
+                            solve_cloudflare=True,
                             network_idle=True, timeout_ms=90000,
                             extra={"wait": 4000, "page_action": _scroll})
         page = StealthyFetcher.fetch(url, **kw)
