@@ -31,10 +31,10 @@ function usage() {
   console.log(`smart-crawler MCP install helper
 
 Usage:
-  npx -y @smart-crawler/mcp install --client codex --env-var SMARTCRAWLER_API_KEY
-  npx -y @smart-crawler/mcp install --client claude --url https://smartcrawler.io/mcp
-  npx -y @smart-crawler/mcp install --client cursor --local
-  npx -y @smart-crawler/mcp dxt --env-var SMARTCRAWLER_API_KEY
+  npx -y smart-crawler-mcp install --client codex --env-var SMARTCRAWLER_API_KEY
+  npx -y smart-crawler-mcp install --client claude --url https://smartcrawler.io/mcp
+  npx -y smart-crawler-mcp install --client cursor --local
+  npx -y smart-crawler-mcp dxt --env-var SMARTCRAWLER_API_KEY
 
 Commands:
   install   Print Codex / Claude / Cursor MCP config.
@@ -117,11 +117,22 @@ function codexCommand(config) {
   --bearer-token-env-var ${config.envVar}`;
 }
 
+function claudeCommand(config) {
+  return `claude mcp add --scope user --transport http ${config.name} \\
+  ${config.url} \\
+  --header "Authorization: Bearer \${${config.envVar}}"`;
+}
+
 function printInstall(config, jsonOnly) {
   if (jsonOnly) {
-    const payload = config.client === "codex"
-      ? { command: codexCommand(config), ...config }
-      : { config: clientJson(config), ...config };
+    let payload;
+    if (config.client === "codex") {
+      payload = { command: codexCommand(config), ...config };
+    } else if (config.client === "claude") {
+      payload = { command: claudeCommand(config), config: clientJson(config), ...config };
+    } else {
+      payload = { config: clientJson(config), ...config };
+    }
     console.log(JSON.stringify(payload, null, 2));
     return;
   }
@@ -134,6 +145,17 @@ function printInstall(config, jsonOnly) {
 
   if (config.client === "codex") {
     console.log(codexCommand(config));
+    return;
+  }
+
+  if (config.client === "claude") {
+    console.log("# Run this command (--scope user makes it visible in every project):");
+    console.log(claudeCommand(config));
+    console.log("");
+    console.log("# Or paste this JSON into your Claude MCP config manually.");
+    console.log("# Replace ${...} with the real key if your client does not expand environment variables.");
+    console.log("");
+    console.log(JSON.stringify(clientJson(config), null, 2));
     return;
   }
 
@@ -231,6 +253,7 @@ module.exports = {
   DEFAULT_REMOTE_URL,
   bearerPlaceholder,
   clientJson,
+  claudeCommand,
   codexCommand,
   dxtManifest,
   parseArgs,

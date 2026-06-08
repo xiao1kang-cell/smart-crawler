@@ -12,6 +12,24 @@ npx -y smart-crawler-mcp dxt --env-var SMARTCRAWLER_API_KEY
 The helper prints copy/paste configuration only. It never stores or prints the
 actual API key.
 
+## Connect (Claude Code / Codex)
+
+```bash
+export SMARTCRAWLER_API_KEY=sck_xxx   # generate in the smart-crawler console
+
+# Claude Code — the helper prints a `claude mcp add --scope user ...` command.
+# --scope user makes the server visible in EVERY project. Without it,
+# `claude mcp add` defaults to local scope (current directory only), which is a
+# common "I added it but /mcp is empty" pitfall.
+npx -y smart-crawler-mcp install --client claude
+
+# Codex
+npx -y smart-crawler-mcp install --client codex
+```
+
+Run the printed command, then check with `claude mcp list` / `/mcp` (Claude) or
+`codex mcp list` (Codex).
+
 ## Commands
 
 - `install`: prints Codex / Claude / Cursor MCP config.

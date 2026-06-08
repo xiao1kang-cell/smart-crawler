@@ -65,6 +65,21 @@ describe("smart-crawler MCP helper", () => {
     });
   });
 
+  it("prints Claude command with --scope user so it is visible in every project", () => {
+    const config = helper.resolveConfig(helper.parseArgs([
+      "install",
+      "--client",
+      "claude",
+    ]));
+
+    assert.equal(
+      helper.claudeCommand(config),
+      "claude mcp add --scope user --transport http smart-crawler \\\n" +
+        "  https://smartcrawler.io/mcp \\\n" +
+        '  --header "Authorization: Bearer ${SMARTCRAWLER_API_KEY}"',
+    );
+  });
+
   it("generates Cursor MCP JSON", () => {
     const config = helper.resolveConfig(helper.parseArgs([
       "install",
