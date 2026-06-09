@@ -17,6 +17,7 @@ from .analytics import recompute
 from .db import session_scope
 from .models import CrawlJob
 from .runner import claim_job, execute_job
+from . import memory_gate
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [worker] %(message)s")
@@ -25,6 +26,10 @@ logger = logging.getLogger("smart-crawler.worker")
 WORKER_ID = os.environ.get("WORKER_ID") or f"{socket.gethostname()}-{os.getpid()}"
 POLL_INTERVAL = int(os.environ.get("WORKER_POLL", "10"))
 JOB_TIMEOUT = int(os.environ.get("WORKER_JOB_TIMEOUT", "1800"))  # 30 min 默认
+# 内存自适应并发闸 —— 主机已用内存超阈值则暂停领新 job。设 0/100 关闸。
+MEM_THRESHOLD = float(os.environ.get("MEM_GATE_THRESHOLD", "80"))
+MEM_CHECK_INTERVAL = float(os.environ.get("MEM_GATE_CHECK_INTERVAL", "2"))
+MEM_MAX_WAIT = float(os.environ.get("MEM_GATE_MAX_WAIT", "300"))
 _running = True
 
 
@@ -69,6 +74,12 @@ def run_loop(should_continue=None) -> None:
     logger.info("worker %s 启动，轮询间隔 %ds，单 job 超时 %ds",
                 WORKER_ID, POLL_INTERVAL, JOB_TIMEOUT)
     while should_continue():
+        # 内存安全闸:已用内存超阈值则暂停领新 job(不起新浏览器),
+        # 内存回落自动恢复。超时回循环重判,绝不在内存高位硬领。
+        if not memory_gate.wait_until_ok(
+                MEM_THRESHOLD, check_interval=MEM_CHECK_INTERVAL,
+                max_wait=MEM_MAX_WAIT, should_continue=should_continue):
+            continue
         try:
             job_id = claim_job(WORKER_ID)
         except Exception as exc:
