@@ -53,3 +53,50 @@ def test_run_loop_claims_when_gate_open(monkeypatch):
     worker.run_loop(should_continue=lambda: next(ticks, False))
 
     assert claimed                         # 闸放行 → 领了 job
+
+
+def test_run_loop_sleeps_and_warns_when_blocked_by_high_memory(monkeypatch):
+    """闸挡住且内存仍高时:记一条 warning + sleep 一拍(防 MEM_MAX_WAIT=0 空转)。"""
+    from app import worker
+
+    monkeypatch.setattr(worker, "MEM_THRESHOLD", 80.0)
+    monkeypatch.setattr(worker.memory_gate, "wait_until_ok",
+                        lambda threshold, **kw: False)   # 一直挡
+    # 内存仍高(95% ≥ 阈值 80)→ 应进 log+sleep 分支
+    monkeypatch.setattr(worker.memory_gate, "used_percent",
+                        lambda *a, **k: 95.0)
+
+    slept = []
+    monkeypatch.setattr(worker.time, "sleep", lambda s: slept.append(s))
+    warnings = []
+    monkeypatch.setattr(worker.logger, "warning",
+                        lambda *a, **k: warnings.append(a))
+    monkeypatch.setattr(worker, "claim_job",
+                        lambda wid: pytest.fail("内存高位不该领 job"))
+
+    ticks = iter([True, False])
+    worker.run_loop(should_continue=lambda: next(ticks, False))
+
+    assert slept == [worker.POLL_INTERVAL]   # sleep 了一拍,没空转
+    assert warnings                          # 记了 warning,运维可见
+
+
+def test_run_loop_shutdown_during_block_exits_without_sleep(monkeypatch):
+    """闸挡住但内存已回落(=停机路径)时:不 sleep、快速退出。"""
+    from app import worker
+
+    monkeypatch.setattr(worker, "MEM_THRESHOLD", 80.0)
+    monkeypatch.setattr(worker.memory_gate, "wait_until_ok",
+                        lambda threshold, **kw: False)
+    # 内存已回落(30% < 阈值)→ False 是停机所致,不该 sleep
+    monkeypatch.setattr(worker.memory_gate, "used_percent",
+                        lambda *a, **k: 30.0)
+
+    slept = []
+    monkeypatch.setattr(worker.time, "sleep", lambda s: slept.append(s))
+
+    ticks = iter([True, False])
+    worker.run_loop(should_continue=lambda: next(ticks, False))
+
+    assert slept == []                       # 停机路径:不 sleep,快速退出
+

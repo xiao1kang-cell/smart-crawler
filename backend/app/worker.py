@@ -79,6 +79,13 @@ def run_loop(should_continue=None) -> None:
         if not memory_gate.wait_until_ok(
                 MEM_THRESHOLD, check_interval=MEM_CHECK_INTERVAL,
                 max_wait=MEM_MAX_WAIT, should_continue=should_continue):
+            # 闸返回 False 有两种:内存仍高 / 正在停机。仅"内存仍高"时记一条
+            # 并 sleep 一拍——让"无 job 活动"可区分于"被内存闸暂停",同时防
+            # MEM_MAX_WAIT=0 时空转。停机(内存已回落)则直接 continue,快速退出。
+            if memory_gate.used_percent() >= MEM_THRESHOLD:
+                logger.warning("内存闸暂停领新 job:已用 %.0f%% ≥ 阈值 %.0f%%",
+                               memory_gate.used_percent(), MEM_THRESHOLD)
+                time.sleep(POLL_INTERVAL)
             continue
         try:
             job_id = claim_job(WORKER_ID)
