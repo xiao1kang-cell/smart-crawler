@@ -44,3 +44,33 @@ def available_percent(meminfo_path: str = "/proc/meminfo") -> float:
 def used_percent(meminfo_path: str = "/proc/meminfo") -> float:
     """已用内存百分比 = 100 - available_percent()。"""
     return 100.0 - available_percent(meminfo_path)
+
+
+def wait_until_ok(threshold_pct: float, *,
+                  check_interval: float = 2.0,
+                  max_wait: float = 300.0,
+                  should_continue=None,
+                  meminfo_path: str = "/proc/meminfo") -> bool:
+    """阻塞直到 used_percent() < threshold_pct。
+
+    返回值:True = 可以继续领 job;False = 本轮别领,回上层循环重判。
+    - threshold_pct <= 0 或 >= 100:关闸,立即 True(连内存都不查)。
+    - 每 check_interval 秒查一次;累计等待达 max_wait 仍超阈 → False。
+    - should_continue() 变假 → 提前 False(worker 停机时不卡)。
+
+    安全优先:超时只返回 False(上层会回循环重判),**绝不**在内存高位放行。
+    """
+    if threshold_pct <= 0 or threshold_pct >= 100:
+        return True
+    check_interval = max(check_interval, 0.001)   # 防 0 间隔死循环空转
+    should_continue = should_continue or (lambda: True)
+    waited = 0.0
+    while True:
+        if used_percent(meminfo_path) < threshold_pct:
+            return True
+        if not should_continue():
+            return False
+        if waited >= max_wait:
+            return False
+        time.sleep(check_interval)
+        waited += check_interval
