@@ -198,28 +198,36 @@ class MercadoLibreOnDemand(BaseOnDemand):
         return m.group(1) if m else "MLB"
 
     def fetch_reviews(self, item_id: str, url: str, limit: int = 100,
-                      proxy=None) -> list[dict]:
-        """分星级桶翻页抓评论(数据源:noindex 评论分页 JSON 接口)。
+                      proxy=None, known_ids=None) -> list[dict]:
+        """抓评论(数据源:noindex 评论分页 JSON 接口,order=dateCreated 时间倒序)。
 
-        单页 15 条、单视角 offset ~300 封顶,故对 rating=5..1 逐桶翻 offset,
-        跨桶按真实 id 去重,累计达 limit 或所有桶抓尽即停。curl_cffi 直连
-        (反爬宽松),非 JSON / 被封 → BlockedError 交 runner 切代理重试。
+        · 首次全量(known_ids 空):单页 15 条、单视角 offset ~300 封顶,故对
+          rating=5..1 逐桶翻 offset,跨桶按真实 id 去重,累计达 limit 或抓尽即停。
+        · 增量(known_ids 非空):库里已有该商品评论,只翻默认视角(不分桶),
+          **碰到第一条已知 id 即停**——order=dateCreated 严格时间倒序保证后面全是旧的。
+
+        curl_cffi 直连(反爬宽松),非 JSON / 被封 → BlockedError 交 runner 切代理重试。
         """
         iid = item_id[0] if isinstance(item_id, tuple) else item_id
         host, site_id = self._review_host(url), self._site_id(item_id)
         base = (f"https://{host}/noindex/catalog/reviews/{iid}/search"
-                f"?objectId={iid}&siteId={site_id}&isItem=true")
+                f"?objectId={iid}&siteId={site_id}&isItem=true&order=dateCreated")
         s = creq.Session(impersonate="chrome")
         if proxy:
             s.proxies = {"http": proxy, "https": proxy}
         s.headers.update({"Referer": url, "Accept": "application/json"})
 
+        known = set(known_ids or ())
         seen: set[str] = set()
         out: list[dict] = []
-        for rating in _REVIEW_RATINGS:
+        # 增量:只翻默认视角(rating=None);首次全量:逐星级桶。
+        buckets = (None,) if known else _REVIEW_RATINGS
+        for rating in buckets:
             offset = 0
             while offset < _REVIEW_MAX_OFFSET and len(out) < limit:
-                api = f"{base}&offset={offset}&limit={_REVIEW_PAGE}&rating={rating}"
+                api = f"{base}&offset={offset}&limit={_REVIEW_PAGE}"
+                if rating is not None:
+                    api += f"&rating={rating}"
                 resp = s.get(api, timeout=40)
                 check_blocked(resp.status_code, "ml/reviews")
                 resp.raise_for_status()
@@ -229,12 +237,16 @@ class MercadoLibreOnDemand(BaseOnDemand):
                 # 翻页判据用**原始**条数:部分评论只有星级无正文,会被 parse 过滤,
                 # 不能拿过滤后的数量判断是否末页,否则富桶会早停。
                 raw_n = len(data.get("reviews") or [])
+                hit_known = False
                 for r in self.parse_reviews(data, item_id, url):
+                    if r["review_id"] in known:   # 增量:碰到已有 → 后面全是旧的
+                        hit_known = True
+                        break
                     if r["review_id"] in seen:
                         continue
                     seen.add(r["review_id"])
                     out.append(r)
-                if raw_n < _REVIEW_PAGE:          # 原始不足一页 → 该桶抓尽
+                if hit_known or raw_n < _REVIEW_PAGE:   # 撞到已知 / 原始不足一页 → 该桶抓尽
                     break
                 offset += _REVIEW_PAGE
             if len(out) >= limit:

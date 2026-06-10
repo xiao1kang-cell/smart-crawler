@@ -6,31 +6,29 @@ pytestmark = pytest.mark.unit
 
 
 def test_ondemand_fetch_endpoint(monkeypatch):
+    """单条 fetch 异步:返回 queued 计数,不再同步返回 listings/reviews。"""
     from fastapi.testclient import TestClient
 
     import app.api.routes as routes
+    import app.api.ondemand_jobs as oj
     from app.main import app
-    from app.ondemand.base import OnDemandResult
+    from app.db import init_db
 
-    def fake_fetch(url, *, max_items, review_limit):
-        r = OnDemandResult()
-        r.add_listing({"sku": "X", "title": "t", "site": "ondemand_lazada",
-                       "product_url": url, "sale_price": 9.9})
-        r.add_reviews([{"review_id": "rv", "rating": 4, "content": "ok"}])
-        r.note("done")
-        return r
+    init_db()
+    enqueued = []
+    monkeypatch.setattr(oj, "enqueue", lambda jid: enqueued.append(jid))
 
-    import app.ondemand as od
-    monkeypatch.setattr(od, "fetch", fake_fetch)
-    # 绕过登录依赖
     app.dependency_overrides[routes.require_user] = lambda: "tester"
+    monkeypatch.setattr(routes, "_current_workspace",
+                        lambda user, db, x=None: type("W", (), {"id": 1})())
+    monkeypatch.setattr(routes, "_current_user",
+                        lambda user, db: type("U", (), {"username": "tester"})())
 
     client = TestClient(app)
     resp = client.post("/api/ondemand/fetch",
                        json={"url": "https://www.lazada.com.my/products/x-i1-s2.html"})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["listings_count"] == 1
-    assert body["reviews_count"] == 1
-    assert body["listings"][0]["sku"] == "X"
+    assert body["queued"] == 1
+    assert len(enqueued) == 1
     app.dependency_overrides.clear()

@@ -78,20 +78,21 @@ def test_submit_batch_rejects_over_limit(monkeypatch):
     s.close()
 
 
-def test_submit_batch_rejects_when_pending_exists(monkeypatch):
+def test_submit_batch_allows_queue_when_pending_exists(monkeypatch):
+    """并发闸已放开:有未完成任务时,新提交应入队排队,而非拒绝。"""
     from app.api import ondemand_jobs as oj
     from app.models import OnDemandJob
 
     monkeypatch.setattr(oj, "enqueue", lambda jid: None)
     s = _session()
-    # 已有一条 running → 并发闸拦截
+    # 已有一条 running
     s.add(OnDemandJob(url="u", platform="lazada", status="running",
                       workspace_id=1))
     s.commit()
-    with pytest.raises(oj.PendingExistsError):
-        oj.submit_batch(s, ws_id=1, username="u",
-                        urls=["https://www.lazada.com.my/products/a-i1.html"],
-                        max_items=20, review_limit=50)
+    out = oj.submit_batch(s, ws_id=1, username="u",
+                          urls=["https://www.lazada.com.my/products/a-i1.html"],
+                          max_items=20, review_limit=50)
+    assert out["queued"] == 1          # 不再拒绝,直接入队
     s.close()
 
 
@@ -177,7 +178,7 @@ def _override_ws(routes, app, monkeypatch, ws_id):
                         lambda user, db: type("U", (), {"username": "tester"})())
 
 
-def test_batch_endpoint_queues_and_blocks_second(monkeypatch):
+def test_batch_endpoint_queues_and_allows_second(monkeypatch):
     from fastapi.testclient import TestClient
     import app.api.routes as routes
     from app.main import app
@@ -203,10 +204,11 @@ def test_batch_endpoint_queues_and_blocks_second(monkeypatch):
     assert body["queued"] == 1
     assert len(body["skipped"]) == 1
 
-    # 仍有 queued → 第二次提交 409
+    # 并发闸已放开:仍有 queued 时第二次提交照样入队(不再 409)
     r2 = client.post("/api/ondemand/batch", json={
         "urls": ["https://articulo.mercadolibre.com.ar/MLA-2"]})
-    assert r2.status_code == 409
+    assert r2.status_code == 200
+    assert r2.json()["queued"] == 1
     app.dependency_overrides.clear()
 
 

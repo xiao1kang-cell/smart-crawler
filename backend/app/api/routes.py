@@ -695,38 +695,29 @@ def list_products(
 def ondemand_fetch(payload: dict, user: str = Depends(require_user),
                    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
                    db: Session = Depends(get_db)):
-    """按需抓取:指定 URL → listing + VOC,并落一条历史记录。
+    """按需抓取(单条):建 queued job + 入队,立即返回(异步串行抓取)。
 
+    与 /ondemand/batch 同一套队列,仅 urls 为单元素。
     payload: {"url": "...", "max_items"?: int, "review_limit"?: int}
     """
-    from .. import ondemand
-    from .ondemand_jobs import record_job
+    from .ondemand_jobs import flush_enqueue, submit_batch
 
     url = (payload or {}).get("url", "").strip()
     if not url:
         raise HTTPException(status_code=400, detail="url 必填")
     max_items = int(payload.get("max_items", 100))
     review_limit = int(payload.get("review_limit", 100))
-    res = ondemand.fetch(url, max_items=max_items, review_limit=review_limit)
-
-    # 落历史记录(workspace/user 隔离)
+    ws = _current_workspace(user, db, x_workspace_id)
+    u = _current_user(user, db)
     try:
-        ws = _current_workspace(user, db, x_workspace_id)
-        u = _current_user(user, db)
-        record_job(db, ws_id=ws.id, username=(u.username if u else user),
-                   url=url, result=res)
+        out = submit_batch(db, ws_id=ws.id,
+                           username=(u.username if u else user), urls=[url],
+                           max_items=max_items, review_limit=review_limit)
         db.commit()
-    except Exception:
-        db.rollback()   # 记录失败不影响抓取结果返回
-
-    return {
-        "url": url,
-        "listings": res.listings,
-        "listings_count": len(res.listings),
-        "reviews": res.reviews,
-        "reviews_count": len(res.reviews),
-        "notes": res.notes,
-    }
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc))
+    return flush_enqueue(out)   # commit 之后才入队,避免竞态
 
 
 @router.post("/ondemand/batch")
@@ -737,7 +728,7 @@ def ondemand_batch(payload: dict, user: str = Depends(require_user),
 
     payload: {"urls": [...], "max_items"?: int, "review_limit"?: int}
     """
-    from .ondemand_jobs import PendingExistsError, flush_enqueue, submit_batch
+    from .ondemand_jobs import flush_enqueue, submit_batch
 
     urls = (payload or {}).get("urls") or []
     if not isinstance(urls, list):
@@ -751,9 +742,6 @@ def ondemand_batch(payload: dict, user: str = Depends(require_user),
                            username=(u.username if u else user), urls=urls,
                            max_items=max_items, review_limit=review_limit)
         db.commit()
-    except PendingExistsError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc))

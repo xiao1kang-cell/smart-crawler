@@ -105,8 +105,7 @@ def submit_batch(session: Session, *, ws_id: int | None, username: str | None,
 
     if len(cleaned) > MAX_BATCH:
         raise ValueError(f"单批最多 {MAX_BATCH} 条,当前 {len(cleaned)} 条")
-    if cleaned and has_pending(session, ws_id=ws_id):
-        raise PendingExistsError("有未完成任务,请等待完成后再提交")
+    # 允许排队:有未完成任务时不再拒绝,直接入队,worker 串行消费。
 
     batch_id = uuid.uuid4().hex
     skipped: list[dict] = []
@@ -218,9 +217,13 @@ def job_detail_logic(session: Session, *, ws_id: int | None,
                      "original_price": p.original_price, "currency": p.currency,
                      "image_urls": p.image_urls or [], "product_url": p.product_url}
                     for p in prods]
-        revs = (session.query(Review)
-                .filter(Review.platform.like("ondemand_%"),
-                        Review.sku.in_(skus)).all())
+        rev_q = (session.query(Review)
+                 .filter(Review.platform.like("ondemand_%"),
+                         Review.sku.in_(skus))
+                 .order_by(Review.collected_time.desc(), Review.id.desc()))
+        if job.review_count and job.review_count > 0:
+            rev_q = rev_q.limit(job.review_count)
+        revs = rev_q.all()
         reviews = [{"review_id": r.review_id, "rating": r.rating,
                     "content": r.content, "review_date":
                     r.review_date.isoformat() if r.review_date else None}

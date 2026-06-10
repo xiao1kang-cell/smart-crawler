@@ -200,26 +200,21 @@ def test_clear_jobs_logic():
     s.close()
 
 
-def test_fetch_endpoint_records_job(monkeypatch):
+def test_fetch_endpoint_enqueues_job(monkeypatch):
+    """单条 fetch 改异步:建一条 queued job 并入队,立即返回(不再同步抓取)。"""
     from fastapi.testclient import TestClient
     import app.api.routes as routes
     from app.main import app
-    from app.ondemand.base import OnDemandResult
     from app.db import SessionLocal, init_db
     from app.models import OnDemandJob
+    import app.api.ondemand_jobs as oj
 
     init_db()
 
-    def fake_fetch(url, *, max_items, review_limit):
-        r = OnDemandResult()
-        r.add_listing({"sku": "LZ1", "title": "t", "site": "ondemand_lazada",
-                       "product_url": url, "sale_price": 9.9})
-        r.add_reviews([{"review_id": "rv", "sku": "LZ1", "rating": 4, "content": "ok"}])
-        return r
+    # 拦截入队,避免真起 worker 抓网络
+    enqueued = []
+    monkeypatch.setattr(oj, "enqueue", lambda jid: enqueued.append(jid))
 
-    import app.ondemand as od
-    monkeypatch.setattr(od, "fetch", fake_fetch)
-    # 绕过登录 + 工作区(返回固定 ws_id=1)
     app.dependency_overrides[routes.require_user] = lambda: "tester"
     monkeypatch.setattr(routes, "_current_workspace",
                         lambda user, db, x=None: type("W", (), {"id": 1})())
@@ -231,12 +226,14 @@ def test_fetch_endpoint_records_job(monkeypatch):
     resp = client.post("/api/ondemand/fetch",
                        json={"url": "https://www.lazada.com.my/products/x-i1.html"})
     assert resp.status_code == 200
+    assert resp.json().get("queued") == 1
+
     after_sess = SessionLocal()
     jobs = after_sess.query(OnDemandJob).order_by(OnDemandJob.id.desc()).all()
     assert len(jobs) == before + 1
     assert jobs[0].platform == "lazada"
-    assert jobs[0].listing_count == 1
-    assert jobs[0].item_skus == ["LZ1"]
+    assert jobs[0].status == "queued"          # 异步:入队待跑,尚未抓取
+    assert jobs[0].id in enqueued              # 已入队
     after_sess.close()
     app.dependency_overrides.clear()
 

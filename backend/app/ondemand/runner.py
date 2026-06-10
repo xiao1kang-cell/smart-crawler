@@ -107,12 +107,39 @@ def _fetch_one(crawler, iid, url, review_limit, res: OnDemandResult) -> None:
 
 
 def _fetch_reviews_safe(crawler, iid, url, review_limit, res, proxy) -> None:
-    """抓评论并隔离其失败 —— 不让评论问题影响已拿到的 listing。"""
+    """抓评论并隔离其失败 —— 不让评论问题影响已拿到的 listing。
+
+    抓前查库该商品已有 review_id 传给 crawler:库里已有则走增量(只补最新),
+    无则首次全量。增量正确性依赖 crawler 用时间倒序翻页(美客多 order=dateCreated)。
+    """
     try:
-        res.add_reviews(crawler.fetch_reviews(iid, url, limit=review_limit,
-                                              proxy=proxy))
+        known = _known_review_ids(crawler, iid)
+        # 仅当 crawler 的 fetch_reviews 支持 known_ids 才传(lazada/shopee 暂不支持增量)
+        import inspect
+        if "known_ids" in inspect.signature(crawler.fetch_reviews).parameters:
+            reviews = crawler.fetch_reviews(iid, url, limit=review_limit,
+                                            proxy=proxy, known_ids=known)
+        else:
+            reviews = crawler.fetch_reviews(iid, url, limit=review_limit,
+                                            proxy=proxy)
+        res.add_reviews(reviews)
     except Exception as exc:
         res.note(f"{iid}: 评论抓取失败({exc})")
+
+
+def _known_review_ids(crawler, iid) -> set[str]:
+    """查库:该平台该 sku 已有的 review_id 集合(供增量抓取碰到即停)。"""
+    from ..models import Review
+    site = getattr(crawler, "SITE", None) or f"ondemand_{crawler.platform}"
+    sku = iid[0] if isinstance(iid, tuple) else iid
+    try:
+        with session_scope() as s:
+            rows = (s.query(Review.review_id)
+                    .filter(Review.platform == site, Review.sku == str(sku))
+                    .all())
+            return {r[0] for r in rows if r[0]}
+    except Exception:
+        return set()   # 查库失败不阻断抓取,退化为全量
 
 
 def persist(res: OnDemandResult, *, session) -> dict:
