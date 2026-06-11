@@ -56,6 +56,16 @@ def recompute(site_name: str) -> dict:
             sku_count = len({h.sku for h in day_snaps})
             new_count = sum(1 for p in products.values()
                             if p.created_time and p.created_time.date() == d)
+            # 当日评论总数 = 各 sku 当日快照 review_count 之和(每 sku 取最后一条)
+            day_reviews: dict[str, int] = {}
+            for h in day_snaps:
+                if h.review_count is not None:
+                    day_reviews[h.sku] = h.review_count
+            review_total = sum(day_reviews.values())
+            # 平均星级:rating 不入历史快照,用当前 Product.ratings 近似当日在售均值
+            day_ratings = [products[sku].ratings for sku in day_reviews
+                           if products.get(sku) and products[sku].ratings is not None]
+            avg_rating = round(sum(day_ratings) / len(day_ratings), 2) if day_ratings else None
             est_sales = 0
             est_revenue = 0.0
             for h in day_snaps:
@@ -71,6 +81,7 @@ def recompute(site_name: str) -> dict:
                 site=site_name, date=d, sku_count=sku_count,
                 new_product_count=new_count, estimated_sales=est_sales,
                 estimated_revenue=round(est_revenue, 2),
+                avg_rating=avg_rating, review_total=review_total,
             ))
         return {"site": site_name, "trend_days": len(dates),
                 "skus": len(by_sku)}

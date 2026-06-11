@@ -59,6 +59,20 @@ export function fmtNumber(value: unknown) {
   return Number.isFinite(n) ? n.toLocaleString() : '0'
 }
 
+// 货币符号:商品自带 currency 字段(按站点国家映射 USD/EUR/GBP/PLN…),
+// 不要硬编码 $——非美元站点(如 _de/_uk/_pl)会显示错误符号。
+const CURRENCY_SYMBOL: Record<string, string> = {
+  USD: '$', EUR: '€', GBP: '£', PLN: 'zł', MXN: '$', BRL: 'R$',
+  JPY: '¥', CNY: '¥', CAD: 'C$', AUD: 'A$', SEK: 'kr', CHF: 'CHF',
+}
+export function fmtPrice(amount: unknown, currency?: string | null) {
+  if (amount === null || amount === undefined || amount === '') return '--'
+  const n = Number(amount)
+  if (!Number.isFinite(n)) return '--'
+  const sym = currency ? (CURRENCY_SYMBOL[currency.toUpperCase()] || `${currency} `) : '$'
+  return `${sym}${n.toLocaleString()}`
+}
+
 // 代理池可用数:后端 /proxy/status 顶层只有 total,可用数在 by_tier.<tier>.available。
 // 兼容顶层 available(若后端将来补上)。
 export function proxyAvailable(status: any): number {

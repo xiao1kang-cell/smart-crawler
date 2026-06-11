@@ -223,10 +223,11 @@ onUnmounted(() => {
       <div v-if="loading" class="inf-empty-note">加载中…</div>
       <div v-else-if="!jobs.length" class="inf-empty-note">暂无抓取记录</div>
       <table v-else class="od-table">
-        <thead><tr><th>时间</th><th>平台</th><th>URL</th><th>listing</th><th>评论</th><th>状态</th><th>操作</th></tr></thead>
+        <thead><tr><th>创建时间</th><th>完成时间</th><th>平台</th><th>URL</th><th>listing</th><th>评论</th><th>状态</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="job in jobs" :key="job.id" @click="openJob(job)">
             <td>{{ (job.created_at || '').replace('T', ' ').slice(0, 16) }}</td>
+            <td>{{ job.finished_at ? job.finished_at.replace('T', ' ').slice(0, 16) : '—' }}</td>
             <td>{{ job.platform || job.marketplace }}</td>
             <td class="url-cell">{{ job.url }}</td>
             <td>{{ fmtNumber(job.listing_count || job.product_count || job.products_count || job.items_count) }}</td>

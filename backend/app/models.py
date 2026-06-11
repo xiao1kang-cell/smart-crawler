@@ -145,6 +145,8 @@ class Trend(Base):
     estimated_revenue = Column(Float)
     traffic = Column(Integer)                        # 第三方数据，MVP 留空
     conversion_rate = Column(Float)                  # 第三方数据，MVP 留空
+    avg_rating = Column(Float)                        # 当日在售 SKU 平均星级（趋势图用）
+    review_total = Column(Integer)                    # 当日在售 SKU 评论总数（趋势图用）
 
     # Daily delta 字段（2026-05-24 · 遨森每日增量需求）
     price_change_count = Column(Integer, default=0)  # 当日价格变化 SKU 数
@@ -433,6 +435,7 @@ class OnDemandJob(Base):
     workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)
     created_by = Column(String)                      # 发起用户 username
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    finished_at = Column(DateTime)                   # 进入终态(success/partial/failed)的时间
 
 
 class Usage(Base):

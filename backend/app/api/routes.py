@@ -29,6 +29,12 @@ from ..proxy import pool_status
 from ..runner import enqueue
 
 
+# 新品判定窗口：created_time 落在最近 N 天即视为新品。
+# 不要用 Product.is_new 列——它在 pipeline 首次插入时置 True 后从不复位，
+# 各站近期全量首采会让 96%+ 商品被误标为新品（2026-06 线上实测）。
+NEW_PRODUCT_DAYS = 30
+
+
 # ---------- 鉴权依赖：接受 Bearer Token 或 X-API-Key ----------
 def require_user(authorization: str = Header(default=""),
                  x_api_key: str = Header(default="", alias="X-API-Key"),
@@ -644,8 +650,9 @@ def site_overview(site: str, user: str = Depends(require_user),
     if not db.query(Site).filter(Site.site == site).first():
         raise HTTPException(404, "站点不存在")
     sku_count = db.query(Product).filter(Product.site == site).count()
+    _new_cutoff = datetime.utcnow() - timedelta(days=NEW_PRODUCT_DAYS)
     new_count = db.query(Product).filter(
-        Product.site == site, Product.is_new.is_(True)).count()
+        Product.site == site, Product.created_time >= _new_cutoff).count()
     bestseller_count = db.query(Product).filter(
         Product.site == site, Product.is_bestseller.is_(True)).count()
     category_count = (db.query(func.count(func.distinct(Product.category_path)))
@@ -658,7 +665,8 @@ def site_overview(site: str, user: str = Depends(require_user),
     trends = [{"date": t.date.isoformat(), "sku_count": t.sku_count,
                "new_product_count": t.new_product_count,
                "estimated_sales": t.estimated_sales,
-               "estimated_revenue": t.estimated_revenue}
+               "estimated_revenue": t.estimated_revenue,
+               "avg_rating": t.avg_rating, "review_total": t.review_total}
               for t in db.query(Trend).filter(Trend.site == site)
               .order_by(Trend.date).all()]
     return {
@@ -683,6 +691,19 @@ def list_products(
     status: str | None = None,
     min_price: float | None = None,
     max_price: float | None = None,
+    category: str | None = None,
+    min_rating: float | None = None,
+    max_rating: float | None = None,
+    min_reviews: int | None = None,
+    max_reviews: int | None = None,
+    min_sales: int | None = None,
+    max_sales: int | None = None,
+    min_revenue: float | None = None,
+    max_revenue: float | None = None,
+    has_video: bool | None = None,
+    free_shipping: bool | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
     page: int = 1,
     page_size: int = 20,
     user: str = Depends(require_user),
@@ -700,7 +721,8 @@ def list_products(
     if tab == "bestseller":
         q = q.filter(Product.is_bestseller.is_(True))
     elif tab == "new":
-        q = q.filter(Product.is_new.is_(True))
+        _new_cutoff = datetime.utcnow() - timedelta(days=NEW_PRODUCT_DAYS)
+        q = q.filter(Product.created_time >= _new_cutoff)
     if search:
         like = f"%{search}%"
         q = q.filter((Product.title.ilike(like)) | (Product.sku.ilike(like)))
@@ -710,6 +732,38 @@ def list_products(
         q = q.filter(Product.sale_price >= min_price)
     if max_price is not None:
         q = q.filter(Product.sale_price <= max_price)
+    if category:
+        q = q.filter(Product.category_path.ilike(f"%{category}%"))
+    if min_rating is not None:
+        q = q.filter(Product.ratings >= min_rating)
+    if max_rating is not None:
+        q = q.filter(Product.ratings <= max_rating)
+    if min_reviews is not None:
+        q = q.filter(Product.review_count >= min_reviews)
+    if max_reviews is not None:
+        q = q.filter(Product.review_count <= max_reviews)
+    if min_sales is not None:
+        q = q.filter(Product.thirty_day_sales >= min_sales)
+    if max_sales is not None:
+        q = q.filter(Product.thirty_day_sales <= max_sales)
+    if min_revenue is not None:
+        q = q.filter(Product.thirty_day_revenue >= min_revenue)
+    if max_revenue is not None:
+        q = q.filter(Product.thirty_day_revenue <= max_revenue)
+    if has_video is not None:
+        q = q.filter(Product.has_video.is_(has_video))
+    if free_shipping is not None:
+        q = q.filter(Product.has_free_shipping.is_(free_shipping))
+    if created_from:
+        try:
+            q = q.filter(Product.created_time >= datetime.fromisoformat(created_from))
+        except ValueError:
+            pass
+    if created_to:
+        try:
+            q = q.filter(Product.created_time <= datetime.fromisoformat(created_to))
+        except ValueError:
+            pass
     total = q.count()
     rows = (q.order_by(Product.id)
             .offset((page - 1) * page_size).limit(page_size).all())
@@ -914,6 +968,8 @@ def list_promotions(site: str | None = None, page: int = 1,
         "original_price": r.original_price, "promotion_price": r.promotion_price,
         "discount_percent": r.discount_percent, "threshold": r.threshold,
         "product_title": r.product_title, "product_image": r.product_image,
+        "start_time": r.start_time.isoformat() if r.start_time else None,
+        "end_time": r.end_time.isoformat() if r.end_time else None,
         "detected_time": r.detected_time.isoformat() if r.detected_time else None,
     } for r in rows]}
 

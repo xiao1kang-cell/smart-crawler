@@ -76,6 +76,7 @@ def _job_dict(job: OnDemandJob) -> dict:
         "max_items": job.max_items,
         "review_limit": job.review_limit,
         "created_at": job.created_at.isoformat() if job.created_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
     }
 
 
@@ -144,6 +145,7 @@ def retry_job(session: Session, *, ws_id: int | None, job_id: int) -> dict | Non
         raise NotRetryableError(f"任务状态 {job.status},不可重试")
     job.status = "queued"
     job.error = None
+    job.finished_at = None
     session.flush()
     # 入队延后到 commit 之后(见 submit_batch 说明)
     return {"id": job.id, "status": "queued", "_enqueue_ids": [job.id]}
@@ -163,6 +165,7 @@ def retry_failed_batch(session: Session, *, ws_id: int | None,
     for r in rows:
         r.status = "queued"
         r.error = None
+        r.finished_at = None
         ids.append(r.id)
     session.flush()
     return {"batch_id": batch_id, "requeued": len(ids), "_enqueue_ids": ids}

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { asList, fmtDate, qs } from '../api/client'
+import { asList, fmtDate, fmtPrice, qs } from '../api/client'
 import { getProduct, listProducts, listPromotions, listSites, productPriceHistory, siteOverview } from '../api/products'
 import { useAuthStore } from '../stores/auth'
 
@@ -16,6 +16,30 @@ const tab = ref<'shop' | 'product' | 'promo'>('shop')
 const subTab = ref('all')
 const search = ref('')
 const cfgOpen = ref(false)
+// 产品筛选(11 区,后端 /products 已支持)
+const filtersOpen = ref(false)
+function emptyFilters() {
+  return {
+    status: '', category: '',
+    min_rating: '', max_rating: '', min_reviews: '', max_reviews: '',
+    min_price: '', max_price: '', min_sales: '', max_sales: '',
+    min_revenue: '', max_revenue: '',
+    has_video: '', free_shipping: '',
+    created_from: '', created_to: '',
+  }
+}
+const filters = ref<Record<string, string>>(emptyFilters())
+const activeFilterCount = computed(() => Object.values(filters.value).filter((v) => v !== '' && v !== null).length)
+function applyFilters() {
+  page.value = 1
+  filtersOpen.value = false
+  loadReport()
+}
+function resetFilters() {
+  filters.value = emptyFilters()
+  page.value = 1
+  loadReport()
+}
 const sites = ref<Record<string, any>[]>([])
 const site = ref(String(route.query.site || localStorage.getItem('sc_report_site') || ''))
 const overview = ref<Record<string, any> | null>(null)
@@ -24,6 +48,10 @@ const promotions = ref<Record<string, any>[]>([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(10)
+const promoTotal = ref(0)
+const promoPage = ref(1)
+const promoPageSize = ref(20)
+const promoTotalPages = computed(() => Math.max(1, Math.ceil(promoTotal.value / Number(promoPageSize.value || 20))))
 const dateRange = ref({ from: '2025-10-01', to: '2026-04-16' })
 const lastUpdate = ref('2026.05.15')
 const DEFAULT_CFG = {
@@ -59,16 +87,42 @@ const cards = computed<Record<string, any>>(() => {
 })
 const trends = computed<Record<string, any>[]>(() => asList(overview.value?.trends || [], ['trends', 'items']))
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / Number(pageSize.value || 10))))
-const chartLines = computed(() => {
-  if (!trends.value.length) return null
-  const series = {
-    sku: trends.value.map((x) => Number(x.sku_count || 0)),
-    new: trends.value.map((x) => Number(x.new_product_count || 0)),
-    sales: trends.value.map((x) => Number(x.estimated_sales || 0)),
-    revenue: trends.value.map((x) => Math.round(Number(x.estimated_revenue || 0)))
+// 趋势粒度:day / week / month。日快照按 ISO 周或月分桶,桶内取最后一天
+// (sku_count/sales/revenue 都是时点/30天滚动值,不可累加,取桶末代表)。
+const granularity = ref<'day' | 'week' | 'month'>('month')
+function bucketKey(dateStr: string): string {
+  const d = new Date(dateStr)
+  if (Number.isNaN(d.getTime())) return dateStr
+  if (granularity.value === 'month') return dateStr.slice(0, 7)
+  if (granularity.value === 'week') {
+    const onejan = new Date(d.getFullYear(), 0, 1)
+    const week = Math.ceil(((d.getTime() - onejan.getTime()) / 86400000 + onejan.getDay() + 1) / 7)
+    return `${d.getFullYear()}-W${String(week).padStart(2, '0')}`
   }
-  const max = Math.max(1, ...series.sku, ...series.new, ...series.sales, ...series.revenue)
-  return { dates: trends.value.map((x) => String(x.date || '')), series, max }
+  return dateStr.slice(0, 10)
+}
+const aggregatedTrends = computed<Record<string, any>[]>(() => {
+  if (granularity.value === 'day') return trends.value
+  const buckets = new Map<string, Record<string, any>>()
+  for (const t of trends.value) {
+    const key = bucketKey(String(t.date || ''))
+    buckets.set(key, { ...t, date: key }) // 后写覆盖 → 桶内保留最后一天
+  }
+  return Array.from(buckets.values())
+})
+const chartLines = computed(() => {
+  const rows = aggregatedTrends.value
+  if (!rows.length) return null
+  const series = {
+    sku: rows.map((x) => Number(x.sku_count || 0)),
+    new: rows.map((x) => Number(x.new_product_count || 0)),
+    sales: rows.map((x) => Number(x.estimated_sales || 0)),
+    revenue: rows.map((x) => Math.round(Number(x.estimated_revenue || 0))),
+    reviews: rows.map((x) => Number(x.review_total || 0)),
+    rating: rows.map((x) => Number(x.avg_rating || 0))   // 0-5,单独按 max=5 缩放
+  }
+  const max = Math.max(1, ...series.sku, ...series.new, ...series.sales, ...series.revenue, ...series.reviews)
+  return { dates: rows.map((x) => String(x.date || '')), series, max }
 })
 
 async function loadSites() {
@@ -92,14 +146,19 @@ async function loadReport() {
     if (search.value) productParams.search = search.value
     // 子 tab → 后端唯一认的 tab 参数(all|bestseller|new)
     if (subTab.value === 'new' || subTab.value === 'bestseller') productParams.tab = subTab.value
+    // 11 区筛选:仅透传非空值(qs() 会丢弃 undefined/''，这里同样跳过空串)
+    for (const [k, v] of Object.entries(filters.value)) {
+      if (v !== '' && v !== null && v !== undefined) productParams[k] = v
+    }
     const [overviewData, productsData, promosData] = await Promise.all([
       siteOverview(site.value),
       listProducts(productParams),
-      listPromotions({ site: site.value, page_size: 20 })
+      listPromotions({ site: site.value, page: promoPage.value, page_size: promoPageSize.value })
     ])
     overview.value = overviewData
     products.value = asList(productsData, ['items', 'products'])
     promotions.value = asList(promosData, ['items', 'promotions'])
+    promoTotal.value = Number(promosData?.total || promotions.value.length || 0)
     const nextCards = overviewData?.cards && typeof overviewData.cards === 'object' ? overviewData.cards : overviewData
     total.value = Number(productsData?.total || nextCards?.sku_count || nextCards?.total_products || products.value.length || 0)
     const updateTime = overviewData?.last_run || overviewData?.updated_at
@@ -161,10 +220,21 @@ function makePath(values: number[], max: number, w: number, h: number, pad = 20)
 
 watch(site, () => {
   page.value = 1
+  promoPage.value = 1
   loadReport()
 })
 watch([page, pageSize, subTab], loadReport)
+watch([promoPage, promoPageSize], loadReport)
+// 权限:viewer 只读,可查看面板但编辑动作(导出/自定义报表)受限。
+// 规格"仅有权限人员可查看/编辑"——查看放开,编辑按角色门控。
+const canEdit = computed(() => {
+  const u = auth.user
+  if (!u) return false
+  if (u.global_role === 'super_admin' || u.role === 'admin' || u.role === 'owner') return true
+  return ['admin', 'owner', 'operator', 'member', 'user'].includes(u.workspace_role || u.role || '')
+})
 onMounted(async () => {
+  if (auth.token && !auth.user) await auth.loadMe().catch(() => null)
   await loadSites()
   await loadReport()
 })
@@ -188,7 +258,7 @@ onMounted(async () => {
             <select v-model="site">
               <option v-for="s in sites" :key="s.site || s.name" :value="s.site || s.name">{{ s.site || s.name }} ({{ s.brand || 'brand' }})</option>
             </select>
-            <button class="icon-btn" @click="cfgOpen = true">⚙ 自定义</button>
+            <button v-if="canEdit" class="icon-btn" @click="cfgOpen = true">⚙ 自定义</button>
             <button class="icon-btn" @click="loadReport">↻ 刷新</button>
           </div>
         </div>
@@ -220,6 +290,11 @@ onMounted(async () => {
           <div class="section-head">
             <h3>📈 销售趋势 <span class="desc">分析整体销售情况和品牌市场份额</span></h3>
             <div class="actions">
+              <select v-model="granularity" class="gran-select">
+                <option value="month">按月</option>
+                <option value="week">按周</option>
+                <option value="day">按天</option>
+              </select>
               <span style="font-size:12px;color:#6b7280">{{ dateRange.from }} → {{ dateRange.to }}</span>
             </div>
           </div>
@@ -229,6 +304,8 @@ onMounted(async () => {
               <span><span class="legend-dot" style="background:#10b981"></span>新SKU</span>
               <span><span class="legend-dot" style="background:#f59e0b"></span>销售</span>
               <span><span class="legend-dot" style="background:#ef4444"></span>收入</span>
+              <span><span class="legend-dot" style="background:#8b5cf6"></span>评论数</span>
+              <span><span class="legend-dot" style="background:#ec4899"></span>评分(0-5)</span>
             </div>
             <svg v-if="chartLines" class="chart-svg" viewBox="0 0 900 260" preserveAspectRatio="none">
               <g class="grid">
@@ -248,6 +325,8 @@ onMounted(async () => {
                 <path :d="makePath(chartLines.series.new, chartLines.max, 900, 240)" stroke="#10b981" fill="none" stroke-width="2" />
                 <path :d="makePath(chartLines.series.sales, chartLines.max, 900, 240)" stroke="#f59e0b" fill="none" stroke-width="2" />
                 <path :d="makePath(chartLines.series.revenue, chartLines.max, 900, 240)" stroke="#ef4444" fill="none" stroke-width="2" />
+                <path :d="makePath(chartLines.series.reviews, chartLines.max, 900, 240)" stroke="#8b5cf6" fill="none" stroke-width="2" />
+                <path :d="makePath(chartLines.series.rating, 5, 900, 240)" stroke="#ec4899" fill="none" stroke-width="2" stroke-dasharray="4,3" />
               </g>
               <g class="axis-label">
                 <text
@@ -270,7 +349,7 @@ onMounted(async () => {
             <h3>📦 产品分析 <span class="desc">查看产品的基本信息和详细属性</span></h3>
             <div class="actions">
               <button class="icon-btn" @click="loadReport">↻ 刷新</button>
-              <button class="icon-btn" @click="exportProducts">↓ 导出</button>
+              <button v-if="canEdit" class="icon-btn" @click="exportProducts">↓ 导出</button>
             </div>
           </div>
           <div class="sub-tabs">
@@ -278,7 +357,37 @@ onMounted(async () => {
             <button :class="{ active: subTab === 'bestseller' }" @click="subTab = 'bestseller'; page = 1">畅销产品({{ cards.bestseller_count || 0 }})</button>
             <button :class="{ active: subTab === 'new' }" @click="subTab = 'new'; page = 1">最新产品({{ cards.new_product_count || 0 }})</button>
             <div class="right">
+              <button class="icon-btn" :class="{ 'filter-on': activeFilterCount > 0 }" @click="filtersOpen = !filtersOpen">☷ 筛选<span v-if="activeFilterCount">({{ activeFilterCount }})</span></button>
               <input class="search-box" v-model="search" placeholder="🔍 搜索" @keyup.enter="loadReport" />
+            </div>
+          </div>
+          <div v-if="filtersOpen" class="filter-panel">
+            <div class="filter-grid">
+              <label>类目<input v-model="filters.category" placeholder="如 Outdoor" /></label>
+              <label>状态
+                <select v-model="filters.status">
+                  <option value="">全部</option>
+                  <option value="on_sale">在售</option>
+                  <option value="out_of_stock">缺货</option>
+                  <option value="discontinued">下架</option>
+                </select>
+              </label>
+              <label>评分<span class="rng"><input v-model="filters.min_rating" type="number" step="0.1" placeholder="min" /><input v-model="filters.max_rating" type="number" step="0.1" placeholder="max" /></span></label>
+              <label>评论数<span class="rng"><input v-model="filters.min_reviews" type="number" placeholder="min" /><input v-model="filters.max_reviews" type="number" placeholder="max" /></span></label>
+              <label>价格<span class="rng"><input v-model="filters.min_price" type="number" placeholder="min" /><input v-model="filters.max_price" type="number" placeholder="max" /></span></label>
+              <label>30天销量<span class="rng"><input v-model="filters.min_sales" type="number" placeholder="min" /><input v-model="filters.max_sales" type="number" placeholder="max" /></span></label>
+              <label>30天收入<span class="rng"><input v-model="filters.min_revenue" type="number" placeholder="min" /><input v-model="filters.max_revenue" type="number" placeholder="max" /></span></label>
+              <label>视频
+                <select v-model="filters.has_video"><option value="">不限</option><option value="true">有</option><option value="false">无</option></select>
+              </label>
+              <label>免运费
+                <select v-model="filters.free_shipping"><option value="">不限</option><option value="true">是</option><option value="false">否</option></select>
+              </label>
+              <label>创建时间<span class="rng"><input v-model="filters.created_from" type="date" /><input v-model="filters.created_to" type="date" /></span></label>
+            </div>
+            <div class="filter-actions">
+              <button @click="resetFilters">重置</button>
+              <button class="primary" @click="applyFilters">应用筛选</button>
             </div>
           </div>
           <table>
@@ -296,8 +405,8 @@ onMounted(async () => {
             <tbody>
               <tr v-for="(p, i) in products" :key="p.id || p.sku" style="cursor:pointer" @click="openDetail(p.id)">
                 <td>{{ (page - 1) * pageSize + i + 1 }}</td>
-                <td v-if="cfg.productCols.sku"><a class="sku-link">{{ p.sku || p.item_id }}</a></td>
-                <td v-if="cfg.productCols.title"><div class="title-cell"><div class="thumb">📦</div><div class="info">{{ (p.title || p.name || '').slice(0, 65) }}<span v-if="p.is_new" class="new-badge">NEW</span></div></div></td>
+                <td v-if="cfg.productCols.sku"><a class="sku-link" :href="p.product_url || undefined" :target="p.product_url ? '_blank' : undefined" rel="noopener" @click.stop>{{ p.sku || p.item_id }}</a></td>
+                <td v-if="cfg.productCols.title"><div class="title-cell"><div class="thumb">📦</div><div class="info"><span class="title-text" :title="p.title || p.name">{{ p.title || p.name || '' }}</span><span v-if="p.is_new" class="new-badge">NEW</span></div></div></td>
                 <td v-if="cfg.productCols.attrs">
                   <div class="attr-cell">
                     <div v-if="p.attributes?.color">Color: {{ p.attributes.color }}</div>
@@ -306,7 +415,7 @@ onMounted(async () => {
                     <div v-if="!p.attributes || Object.keys(p.attributes).length === 0" style="color:#9ca3af">--</div>
                   </div>
                 </td>
-                <td v-if="cfg.productCols.price">{{ p.sale_price || p.price || '--' }}</td>
+                <td v-if="cfg.productCols.price">{{ fmtPrice(p.sale_price ?? p.price, p.currency) }}</td>
                 <td v-if="cfg.productCols.rating">{{ p.ratings || p.rating ? (p.ratings || p.rating) + ' (' + (p.review_count || 0) + ')' : '--' }}</td>
                 <td v-if="cfg.productCols.status">{{ p.status || '--' }}</td>
               </tr>
@@ -339,18 +448,43 @@ onMounted(async () => {
             </div>
           </div>
           <table>
-            <thead><tr><th style="width:50px">NO.</th><th>库存单位</th><th>更新时间</th><th>产品详情</th><th>类型</th></tr></thead>
+            <thead><tr>
+              <th style="width:50px">NO.</th><th>库存单位</th><th>促销名称</th><th>类型</th>
+              <th style="width:80px">折扣</th><th style="width:90px">原价</th><th style="width:90px">促销价</th>
+              <th>门槛</th><th style="width:130px">开始时间</th><th style="width:130px">结束时间</th><th style="width:130px">更新时间</th>
+            </tr></thead>
             <tbody>
               <tr v-for="(p, i) in promotions" :key="p.id || p.sku">
-                <td>{{ i + 1 }}</td><td><a class="sku-link">{{ p.sku || p.item_id }}</a></td><td>{{ (p.detected_time || p.updated_at || '').slice(0, 16) }}</td>
-                <td><div class="title-cell"><div class="thumb">🏷️</div><div class="info">{{ (p.product_title || p.title || p.name || '').slice(0, 50) }}</div></div></td>
+                <td>{{ (promoPage - 1) * promoPageSize + i + 1 }}</td>
+                <td><a class="sku-link" :href="p.product_url || undefined" :target="p.product_url ? '_blank' : undefined" rel="noopener">{{ p.sku || p.item_id }}</a></td>
+                <td><span class="title-text" :title="p.promotion_name || p.product_title || p.title">{{ p.promotion_name || p.product_title || p.title || '--' }}</span></td>
                 <td>{{ p.promotion_type || p.type || '价格促销' }}</td>
+                <td>{{ p.discount_percent != null ? p.discount_percent + '%' : '--' }}</td>
+                <td>{{ fmtPrice(p.original_price, p.currency) }}</td>
+                <td>{{ fmtPrice(p.promotion_price, p.currency) }}</td>
+                <td>{{ p.threshold || '--' }}</td>
+                <td>{{ p.start_time ? p.start_time.slice(0, 16).replace('T', ' ') : '--' }}</td>
+                <td>{{ p.end_time ? p.end_time.slice(0, 16).replace('T', ' ') : '--' }}</td>
+                <td>{{ (p.detected_time || p.updated_at || '').slice(0, 16).replace('T', ' ') }}</td>
               </tr>
               <tr v-if="!promotions.length">
-                <td colspan="5" class="empty">暂无促销数据</td>
+                <td colspan="11" class="empty">暂无促销数据</td>
               </tr>
             </tbody>
           </table>
+          <div v-if="promoTotal" class="pagination">
+            <button @click="promoPage = Math.max(1, promoPage - 1)" :disabled="promoPage <= 1">‹</button>
+            <button v-for="p in Math.min(promoTotalPages, 5)" :key="p" @click="promoPage = p" :class="{ active: promoPage === p }">{{ p }}</button>
+            <span v-if="promoTotalPages > 5">…</span>
+            <button v-if="promoTotalPages > 5" @click="promoPage = promoTotalPages">{{ promoTotalPages }}</button>
+            <button @click="promoPage = Math.min(promoTotalPages, promoPage + 1)" :disabled="promoPage >= promoTotalPages">›</button>
+            <select v-model="promoPageSize" @change="promoPage = 1">
+              <option :value="20">20 条/页</option>
+              <option :value="50">50 条/页</option>
+              <option :value="100">100 条/页</option>
+            </select>
+            <span style="margin-left:8px;color:#9ca3af;font-size:12px">共 {{ promoTotal }} 条</span>
+          </div>
         </div>
       </template>
 
@@ -421,8 +555,8 @@ onMounted(async () => {
                 <div class="prod-detail-title">{{ detail.title }}</div>
                 <div class="sub">SKU: {{ detail.sku }} · {{ detail.site }}</div>
                 <div class="prod-detail-stats">
-                  <span>价格 <b>{{ detail.sale_price != null ? (detail.currency || '$') + detail.sale_price : '—' }}</b></span>
-                  <span v-if="detail.original_price">原价 <s>{{ detail.original_price }}</s></span>
+                  <span>价格 <b>{{ fmtPrice(detail.sale_price, detail.currency) }}</b></span>
+                  <span v-if="detail.original_price">原价 <s>{{ fmtPrice(detail.original_price, detail.currency) }}</s></span>
                   <span>评分 <b>{{ detail.ratings || '—' }}</b> ({{ detail.review_count || 0 }})</span>
                   <span>30天销量 <b>{{ detail.thirty_day_sales || 0 }}</b></span>
                 </div>
@@ -440,8 +574,8 @@ onMounted(async () => {
                 <tbody>
                   <tr v-for="(h, i) in priceHistory" :key="i">
                     <td>{{ (h.date || '').slice(0, 10) }}</td>
-                    <td>{{ h.sale_price != null ? h.sale_price : '—' }}</td>
-                    <td>{{ h.original_price != null ? h.original_price : '—' }}</td>
+                    <td>{{ fmtPrice(h.sale_price, detail?.currency) }}</td>
+                    <td>{{ fmtPrice(h.original_price, detail?.currency) }}</td>
                     <td>{{ h.review_count != null ? h.review_count : '—' }}</td>
                   </tr>
                 </tbody>
@@ -455,6 +589,18 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.title-text { display:inline-block; max-width:380px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:bottom; }
+.icon-btn.filter-on { border-color:#7c6ce0; color:#7c6ce0; }
+.gran-select { padding:5px 10px; border:1px solid #d1d5db; border-radius:6px; font-size:12.5px; font-family:inherit; background:#fff; cursor:pointer; }
+.filter-panel { border:1px solid #e5e7eb; border-radius:10px; padding:14px; margin-bottom:14px; background:#fafbfc; }
+.filter-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:12px; }
+.filter-grid label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:#6b7280; }
+.filter-grid input, .filter-grid select { padding:5px 8px; border:1px solid #d1d5db; border-radius:6px; font-size:12.5px; font-family:inherit; }
+.filter-grid .rng { display:flex; gap:6px; }
+.filter-grid .rng input { width:100%; min-width:0; }
+.filter-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
+.filter-actions button { padding:6px 16px; border-radius:7px; border:1px solid #d1d5db; background:#fff; cursor:pointer; font-size:12.5px; font-family:inherit; }
+.filter-actions button.primary { background:#7c6ce0; color:#fff; border-color:#7c6ce0; }
 .prod-detail-top { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap; }
 .prod-detail-img { width:120px; height:120px; object-fit:cover; border-radius:8px; }
 .prod-detail-img-empty { display:flex; align-items:center; justify-content:center; font-size:2rem; background:#f3f4f6; }

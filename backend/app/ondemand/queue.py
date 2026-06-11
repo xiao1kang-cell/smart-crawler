@@ -18,6 +18,7 @@ import logging
 import queue
 import threading
 import time
+from datetime import datetime
 
 from ..db import session_scope
 from ..models import OnDemandJob
@@ -96,6 +97,7 @@ def process_one(job_id: int) -> None:
         if job is None:
             return
         job.status = status
+        job.finished_at = datetime.utcnow()
         job.listing_count = len(listings)
         job.review_count = len(reviews)
         job.notes = notes
@@ -144,6 +146,7 @@ def requeue_pending() -> int:
                 .filter(OnDemandJob.status.in_(PENDING)).all())
         for r in rows:
             r.status = "queued"
+            r.finished_at = None
             ids.append(r.id)
     for jid in ids:
         enqueue(jid)

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { asList, fmtNumber, qs } from '../api/client'
+import { asList, fmtNumber, fmtPrice, qs } from '../api/client'
 import { getProduct, listProducts, listSites, productPriceHistory } from '../api/products'
 import { useAuthStore } from '../stores/auth'
 import StatusBadge from '../components/common/StatusBadge.vue'
@@ -129,9 +129,9 @@ onMounted(load)
         <tbody>
           <tr v-for="p in products" :key="p.id || `${p.site}-${p.sku}`" style="cursor:pointer" @click="openDetail(p.id)">
             <td><div class="thumb">📦</div></td>
-            <td><code>{{ p.sku || p.item_id || p.id }}</code></td>
-            <td>{{ (p.title || p.name || '').slice(0, 60) }}</td>
-            <td>{{ p.sale_price || p.price || '—' }}</td>
+            <td><code v-if="!p.product_url">{{ p.sku || p.item_id || p.id }}</code><a v-else :href="p.product_url" target="_blank" rel="noopener" class="sku-link" @click.stop><code>{{ p.sku || p.item_id || p.id }}</code></a></td>
+            <td><span class="title-text" :title="p.title || p.name">{{ p.title || p.name || '' }}</span></td>
+            <td>{{ fmtPrice(p.sale_price ?? p.price, p.currency) }}</td>
             <td>{{ p.ratings || p.rating || '—' }}</td>
             <td>{{ p.thirty_day_sales || 0 }}</td>
             <td><StatusBadge :status="p.status" /></td>
@@ -165,7 +165,7 @@ onMounted(load)
               <div class="prod-detail-title">{{ detail.title }}</div>
               <div class="sub">SKU: {{ detail.sku }} · {{ detail.site }}</div>
               <div class="prod-detail-stats">
-                <span>价格 <b>{{ detail.sale_price != null ? (detail.currency || '$') + detail.sale_price : '—' }}</b></span>
+                <span>价格 <b>{{ fmtPrice(detail.sale_price, detail.currency) }}</b></span>
                 <span v-if="detail.original_price">原价 <s>{{ detail.original_price }}</s></span>
                 <span>评分 <b>{{ detail.ratings || '—' }}</b> ({{ detail.review_count || 0 }})</span>
                 <span>30天销量 <b>{{ detail.thirty_day_sales || 0 }}</b></span>
@@ -198,6 +198,9 @@ onMounted(load)
 </template>
 
 <style scoped>
+.title-text { display:inline-block; max-width:360px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:bottom; }
+.sku-link { text-decoration:none; }
+.sku-link code { color:var(--ui-primary, #7c6ce0); }
 .cat-pager { display:flex; justify-content:center; align-items:center; gap:12px; margin-top:14px; }
 .cat-pager-info { color:var(--ui-muted, #9ca3af); font-size:0.82rem; }
 .prod-detail-top { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap; }
