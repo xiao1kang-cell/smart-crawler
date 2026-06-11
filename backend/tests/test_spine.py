@@ -169,3 +169,19 @@ def test_resolve_stale_refetches(monkeypatch):
     spine.resolve(s, "https://x.com/p/7", ds, workspace_id=None, max_age_sec=10)
     assert calls["n"] == 2
     s.close()
+
+
+def test_resolve_max_age_zero_always_refetches(monkeypatch):
+    import uuid as _uuid
+    init_db(); s = SessionLocal()
+    ds = get_or_create_dataset(s, "zero-" + _uuid.uuid4().hex[:8], workspace_id=None, entity_type="product")
+    import app.spine as spine
+    calls = {"n": 0}
+    def fake_scrape(db, url, **kw):
+        calls["n"] += 1
+        return _fake_scrape({"title": "Z"}) | {"url": url}
+    monkeypatch.setattr(spine, "_do_scrape", fake_scrape)
+    spine.resolve(s, "https://x.com/p/z", ds, workspace_id=None)
+    spine.resolve(s, "https://x.com/p/z", ds, workspace_id=None, max_age_sec=0)
+    assert calls["n"] == 2  # max_age_sec=0 强制重抓
+    s.close()

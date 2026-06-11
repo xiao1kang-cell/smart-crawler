@@ -185,7 +185,7 @@ def resolve(db: Session, url: str, dataset: Dataset, *, workspace_id: int | None
                .filter_by(dataset_id=dataset.id, record_key=canon,
                           quality_status="main").first())
         if rec and rec.fetched_at:
-            ttl = max_age_sec or dataset.freshness_ttl_sec or _GLOBAL_TTL
+            ttl = max_age_sec if max_age_sec is not None else (dataset.freshness_ttl_sec or _GLOBAL_TTL)
             age = (datetime.utcnow() - rec.fetched_at).total_seconds()
             if age <= ttl:
                 return {
@@ -194,6 +194,11 @@ def resolve(db: Session, url: str, dataset: Dataset, *, workspace_id: int | None
                     "data": rec.data, "confidence": rec.confidence,
                     "quality_status": rec.quality_status,
                     "age_sec": int(age),
+                    "fetch_mode": "warehouse",
+                    "save_policy": None,
+                    "missing_fields": [],
+                    "warnings": [],
+                    "unchanged": None,
                     "provenance": {
                         "source_url": rec.source_url,
                         "canonical_url": rec.canonical_url,
