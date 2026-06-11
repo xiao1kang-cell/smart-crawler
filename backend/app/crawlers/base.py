@@ -34,7 +34,7 @@ class BaseCrawler(ABC):
         # 每站限速档 —— 评论平台远慢于商品站（反封禁）
         self.delay = rate_delay(self.platform,
                                 float(self.settings.get("request_delay", 1.5)))
-        self.proxy = get_proxy(site.proxy_tier)
+        self.proxy = get_proxy(site.proxy_tier, site=site.site)
 
     def ua(self) -> str:
         import random

@@ -66,15 +66,17 @@ def get_proxy(tier: str, site: str | None = None) -> str | None:
     """按 tier 取一个代理 URL。委托给新版 proxy_pool（含失败追踪 + 粘性会话）。"""
     if tier in (None, "none", ""):
         return None
-    # 优先用新版 proxy_pool（带健康检查）；旧版作为 fallback
+    # 用新版 proxy_pool（带健康检查 + 平台排除）。
+    # 注意:proxy_pool 返回 None 是**有意义**的结果(无可用/被平台排除),
+    # 绝不能因此 fallback 到旧版轮换——旧版既不解析 `# no:xxx` 标注也不做排除,
+    # 会把被排除的代理(连注释)原样吐回来,等于绕过排除机制(踩过这坑)。
+    # 仅当 proxy_pool 本身抛异常(模块损坏)时才退回旧版。
     try:
         from . import proxy_pool
-        url = proxy_pool.get_proxy(tier, site=site)
-        if url is not None:
-            return url
+        return proxy_pool.get_proxy(tier, site=site)
     except Exception:
         pass
-    # Fallback: 旧版简单轮换
+    # Fallback: 仅在 proxy_pool 不可用时,旧版简单轮换(不支持平台排除)
     _ensure_loaded()
     pool = _pools.get(tier)
     if pool is None:

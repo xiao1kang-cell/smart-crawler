@@ -62,3 +62,28 @@ http://u:p@1.1.1.2:2333
     # 抓 amazon 多次 → 只会拿到未排除的 .2,绝不出现 .1
     seen = {pool.get("datacenter", site="amazon_us") for _ in range(20)}
     assert seen == {"http://u:p@1.1.1.2:2333"}
+
+
+def test_proxy_py_wrapper_does_not_bypass_exclusion(tmp_path, monkeypatch):
+    """回归:proxy.py::get_proxy 的 fallback 不能把被排除的代理吐回来。
+
+    proxy_pool 对 amazon 返回 None(有意排除),proxy.py 旧版 fallback 既不解析
+    `# no:amazon` 也不排除,曾把含注释的整行原样返回,绕过排除机制。
+    """
+    f = tmp_path / "proxies.txt"
+    f.write_text("[datacenter]\nhttp://u:p@9.9.9.9:2333   # no:amazon\n", encoding="utf-8")
+    import app.proxy as proxy
+    import app.proxy_pool as pp
+    # 两个模块都指向同一临时文件,并重置已加载状态
+    monkeypatch.setattr(pp, "_PROXY_FILE", f)
+    monkeypatch.setattr(proxy, "_PROXY_FILE", f)
+    pp._pool.reload()
+    proxy._loaded = False
+    proxy._pools.clear()
+    # amazon → 必须 None(被排除),绝不能 fallback 返回含 # 的脏 URL
+    for _ in range(10):
+        assert proxy.get_proxy("datacenter", site="amazon_us") is None
+    # 非 amazon → 拿到干净 URL(无注释)
+    url = proxy.get_proxy("datacenter", site="songmics_us")
+    assert url == "http://u:p@9.9.9.9:2333"
+
