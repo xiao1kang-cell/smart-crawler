@@ -29,6 +29,7 @@ const coverageSummary = ref<Record<string, any>>({})
 const nav = [
   { path: '/app/overview', label: '📊 总览', icon: BarChart3 },
   { path: '/app/reports', label: '📄 报告', icon: BriefcaseBusiness },
+  { path: '/app/tracking', label: '🎯 标杆维护', icon: BarChart3 },
   { path: '/app/ask', label: '💬 问答', icon: Sparkles },
   { path: '/app/catalog', label: '📦 商品库', icon: Boxes },
   { path: '/app/coverage', label: '🌐 覆盖率', icon: Database },

@@ -12,6 +12,7 @@ import OverviewPage from '../pages/OverviewPage.vue'
 import ReportsPage from '../pages/ReportsPage.vue'
 import SettingsPage from '../pages/SettingsPage.vue'
 import SiteReportPage from '../pages/SiteReportPage.vue'
+import TrackingPage from '../pages/TrackingPage.vue'
 import { useAuthStore } from '../stores/auth'
 
 const router = createRouter({
@@ -27,6 +28,7 @@ const router = createRouter({
         { path: '', redirect: '/app/overview' },
         { path: 'overview', component: OverviewPage },
         { path: 'reports', component: ReportsPage },
+        { path: 'tracking', component: TrackingPage },
         { path: 'ask', component: AskPage },
         { path: 'catalog', component: CatalogPage },
         { path: 'coverage', component: CoveragePage },
