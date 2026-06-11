@@ -15,6 +15,7 @@ from .api.output import router as v1_router
 from .api.v2 import router as v2_router
 from .api.discovery import router as discovery_router
 from .api.influencer_discover import router as influencer_discover_router
+from .api.tracking import router as tracking_router
 from .config import FRONTEND_DIR, PROJECT_DIR
 from .db import init_db
 from .mcp_server import mcp
@@ -125,6 +126,7 @@ app.include_router(discovery_router)     # Agent 发现层 (llms.txt / .well-kno
 app.include_router(influencer_discover_router)  # 红人发现 /discover/runs · /discover/datasets
 app.include_router(public_router)
 app.include_router(api_router)
+app.include_router(tracking_router)
 app.include_router(v1_router)
 app.include_router(v2_router)
 app.mount("/mcp", _mcp_app)              # AI Agent MCP 入口
