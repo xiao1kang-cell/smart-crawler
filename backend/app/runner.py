@@ -93,6 +93,9 @@ def execute_job(job_id: int) -> dict:
             job.finished_at = datetime.utcnow()
             job.duration_sec = (datetime.utcnow() - started).total_seconds()
             job.error = f"{exc}\n{traceback.format_exc()[-800:]}"
+            _fsite = s.query(Site).filter(Site.site == site_name).first()
+            if _fsite and _fsite.track_status != "paused":
+                _fsite.track_status = "error"
         return {"job_id": job_id, "site": site_name, "status": "failed",
                 "error": str(exc)}
 
@@ -117,6 +120,10 @@ def execute_job(job_id: int) -> dict:
 
         site = s.query(Site).filter(Site.site == site_name).first()
         site.last_crawled = datetime.utcnow()
+        site.updated_at = datetime.utcnow()
+        produced = stats["inserted"] + stats["updated"]
+        if site.track_status != "paused":
+            site.track_status = "error" if produced == 0 else "tracking"
 
     return {
         "job_id": job_id, "site": site_name, "status": "success",

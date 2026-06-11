@@ -121,3 +121,13 @@ def test_patch_invalid_review_rate_400():
     code = _make_user_site(client)
     r = client.patch(f"/api/tracking/{code}", headers=_admin_headers(), json={"review_rate": "abc"})
     assert r.status_code == 400
+
+
+def test_paused_site_skips_enqueue():
+    init_db(); client = TestClient(app)
+    code = _make_user_site(client)
+    client.post(f"/api/tracking/{code}/pause", headers=_admin_headers())
+    from app.scheduler import _product_job
+    with patch("app.runner.enqueue") as enq:
+        _product_job(code)
+        enq.assert_not_called()

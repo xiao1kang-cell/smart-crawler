@@ -28,8 +28,15 @@ def _cron(expr: str, fallback: str) -> CronTrigger:
 
 # ---------- 三类定时任务 ----------
 def _product_job(site_name: str) -> None:
-    """商品站定时采集 —— 入队，由 worker 执行。"""
+    """商品站定时采集 —— 入队，由 worker 执行。paused 站跳过。"""
     try:
+        from .db import session_scope
+        from .models import Site
+        with session_scope() as s:
+            site = s.query(Site).filter(Site.site == site_name).first()
+            if site and site.track_status == "paused":
+                logger.info("站点 %s 已暂停追踪,跳过定时采集", site_name)
+                return
         from .runner import enqueue
         job_id = enqueue(site_name, trigger="scheduled")
         logger.info("已入队商品采集: %s (job %s)", site_name, job_id)
