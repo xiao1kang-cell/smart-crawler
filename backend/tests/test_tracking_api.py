@@ -136,7 +136,9 @@ def test_paused_site_skips_enqueue():
 def test_export_returns_xlsx():
     init_db(); client = TestClient(app)
     _make_user_site(client)
-    r = client.get("/api/tracking/export", headers=_admin_headers())
+    from app.auth import make_token
+    r = client.get(f"/api/tracking/export?token={make_token('admin', '')}")
     assert r.status_code == 200
     assert "spreadsheet" in r.headers.get("content-type", "")
     assert r.content[:2] == b"PK"  # xlsx = zip
+    assert client.get("/api/tracking/export?token=bogus").status_code == 401

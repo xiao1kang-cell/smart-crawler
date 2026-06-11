@@ -19,7 +19,7 @@ from ..models import Product, Site, WorkspaceSite
 from ..crawlers.detect import detect_platform
 from ..runner import enqueue
 from .routes import (require_user, _current_workspace, _require_admin,
-                     _workspace_site_names)
+                     _workspace_site_names, public_router, _user_from_token)
 
 import logging
 logger = logging.getLogger(__name__)
@@ -87,19 +87,20 @@ def list_tracking(
             "items": [tracking_row(db, s) for s in rows]}
 
 
-@router.get("/tracking/export")
+@public_router.get("/tracking/export")
 def export_tracking(
+    token: str,
     search: str | None = None, market: str | None = None,
     brand: str | None = None, status: str | None = None,
-    user: str = Depends(require_user),
-    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
+    workspace_id: int | None = None,
     db: Session = Depends(get_db),
 ):
     import io
     from openpyxl import Workbook
     from fastapi.responses import StreamingResponse
 
-    ws = _current_workspace(user, db, x_workspace_id)
+    u = _user_from_token(db, token)
+    ws = _current_workspace(u.username, db, str(workspace_id) if workspace_id else None)
     allowed = _workspace_site_names(db, ws.id, include_hidden=True)
     q = db.query(Site).filter(Site.site.in_(allowed))
     if search:
