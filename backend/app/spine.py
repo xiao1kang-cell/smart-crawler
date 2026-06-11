@@ -151,7 +151,7 @@ def _ingest_response(scrape_result, snap, dataset, rec, status, missing,
     return {
         "scrape_id": scrape_result.get("scrape_id"),
         "snapshot_id": snap.id, "dataset_id": dataset.id, "record_id": rec.id,
-        "confidence": rec.confidence, "quality_status": status,
+        "confidence": rec.confidence if rec.confidence is not None else 0.0, "quality_status": status,
         "fetch_mode": snap.fetch_mode, "missing_fields": missing,
         "warnings": scrape_result.get("warnings") or [],
         "save_policy": save_policy, "unchanged": unchanged,
