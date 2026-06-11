@@ -87,6 +87,48 @@ def list_tracking(
             "items": [tracking_row(db, s) for s in rows]}
 
 
+@router.get("/tracking/export")
+def export_tracking(
+    search: str | None = None, market: str | None = None,
+    brand: str | None = None, status: str | None = None,
+    user: str = Depends(require_user),
+    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
+    db: Session = Depends(get_db),
+):
+    import io
+    from openpyxl import Workbook
+    from fastapi.responses import StreamingResponse
+
+    ws = _current_workspace(user, db, x_workspace_id)
+    allowed = _workspace_site_names(db, ws.id, include_hidden=True)
+    q = db.query(Site).filter(Site.site.in_(allowed))
+    if search:
+        like = f"%{search}%"
+        q = q.filter(or_(Site.url.ilike(like), Site.brand.ilike(like), Site.site.ilike(like)))
+    if market:
+        q = q.filter(Site.country == market)
+    if brand:
+        q = q.filter(Site.brand == brand)
+    if status:
+        q = q.filter(Site.track_status == status)
+    rows = q.order_by(Site.created_at.desc().nullslast(), Site.id.desc()).all()
+
+    wb = Workbook(); sh = wb.active; sh.title = "Tracking"
+    headers = ["Market", "Brand", "URL", "Status", "Products",
+               "30-Day Sales", "30-Day Revenue", "Updated", "Created", "Creator"]
+    sh.append(headers)
+    for s in rows:
+        m = _metrics(db, s.site)
+        sh.append([s.country, s.brand, s.url, s.track_status, m["products"],
+                   m["thirty_day_sales"], m["thirty_day_revenue"],
+                   s.updated_at.isoformat() if s.updated_at else "",
+                   s.created_at.isoformat() if s.created_at else "", s.creator])
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    return StreamingResponse(
+        buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=tracking.xlsx"})
+
+
 def _gen_site_code(db: Session, base: str, country: str | None) -> str:
     """从 host 主域 + country 后缀生成唯一 site 主键(如 newbrand_us)。"""
     host = urlparse(base).netloc.split(":")[0]

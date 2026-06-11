@@ -131,3 +131,12 @@ def test_paused_site_skips_enqueue():
     with patch("app.runner.enqueue") as enq:
         _product_job(code)
         enq.assert_not_called()
+
+
+def test_export_returns_xlsx():
+    init_db(); client = TestClient(app)
+    _make_user_site(client)
+    r = client.get("/api/tracking/export", headers=_admin_headers())
+    assert r.status_code == 200
+    assert "spreadsheet" in r.headers.get("content-type", "")
+    assert r.content[:2] == b"PK"  # xlsx = zip
