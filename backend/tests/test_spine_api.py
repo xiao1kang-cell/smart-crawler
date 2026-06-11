@@ -71,3 +71,14 @@ def test_v2_custom_scrape_and_query_end_to_end():
     assert q.status_code == 200, q.text
     assert q.json()["total"] >= 1
 
+
+def test_discovery_lists_new_tools():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    client = TestClient(app)
+    body = client.get("/.well-known/mcp.json").json()
+    names = {t.get("name") for t in body.get("tools", [])}
+    assert "crawl_custom_source" in names
+    assert "query_dataset" in names
+    assert "scrape_url" in names  # 之前漏掉的 agent-first 工具
+

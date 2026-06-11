@@ -48,6 +48,22 @@ _TOOLS = [
      "description": "按 Amazon ASIN 取评论 + AI 口碑分析（情感/痛点/卖点/Listing 建议）"},
     {"name": "fetch_amazon_reviews",
      "description": "按 Amazon ASIN 取原始评论数组（不分析）"},
+    {"name": "scrape_url",
+     "description": "Agent 推荐：抓单页 → markdown + 结构化，warehouse-first，未命中再 live"},
+    {"name": "map_site",
+     "description": "列出某已配置站点在仓库中的已知商品 URL"},
+    {"name": "crawl_site",
+     "description": "验证或触发一个已配置站点的异步整站采集（默认 dry_run）"},
+    {"name": "extract_structured_data",
+     "description": "把抓取结果按给定 JSON schema 投影为结构化数据"},
+    {"name": "query_warehouse",
+     "description": "实时抓取前先查仓库已有覆盖，避免重复消耗 credits"},
+    {"name": "fetch_listing_voc",
+     "description": "按 URL 抓 listing + VOC 原文（美客多 / Lazada / Shopee）"},
+    {"name": "crawl_custom_source",
+     "description": "通用数据采集：任意 URL → 带 provenance 入指定 dataset，warehouse-first 复用"},
+    {"name": "query_dataset",
+     "description": "查通用数据集（extracted_records），默认只返 main 质量层"},
 ]
 
 
