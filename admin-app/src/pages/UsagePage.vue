@@ -57,7 +57,7 @@ onMounted(load)
     <div class="stat-row">
       <StatCard label="总积分消耗" :value="fmtNumber(summary.total_credits)" />
       <StatCard label="总记录数" :value="fmtNumber(summary.total_records)" />
-      <StatCard label="明细行数" :value="fmtNumber((summary.rows || []).length)" />
+      <StatCard label="明细行数" :value="fmtNumber(summary.rows || 0)" />
     </div>
 
     <section class="block">
