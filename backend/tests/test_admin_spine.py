@@ -189,3 +189,13 @@ def test_existing_admin_write_audited():
     row = s.query(AdminAuditLog).order_by(AdminAuditLog.id.desc()).first()
     assert row.action == "workspace.create"
     s.close()
+
+
+def test_admin_spa_served():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    client = TestClient(app)
+    r = client.get("/admin/")
+    # admin-app/dist 已由 Task9 构建,应返 200 html
+    assert r.status_code == 200
+    assert "text/html" in r.headers.get("content-type", "")

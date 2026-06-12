@@ -5,7 +5,7 @@ import os
 import threading
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,6 +23,8 @@ from .mcp_server import mcp
 
 FRONTEND_APP_DIST = PROJECT_DIR / "frontend-app" / "dist"
 FRONTEND_APP_INDEX = FRONTEND_APP_DIST / "index.html"
+ADMIN_APP_DIST = PROJECT_DIR / "admin-app" / "dist"
+ADMIN_APP_INDEX = ADMIN_APP_DIST / "index.html"
 NO_CACHE_HEADERS = {
     "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
     "Pragma": "no-cache",
@@ -134,6 +136,19 @@ app.include_router(admin_spine_router)   # 超管后台 · spine 管理端点
 app.mount("/mcp", _mcp_app)              # AI Agent MCP 入口
 if (FRONTEND_APP_DIST / "assets").exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_APP_DIST / "assets"), name="frontend-assets")
+if (ADMIN_APP_DIST / "assets").exists():
+    app.mount("/admin/assets",
+              StaticFiles(directory=ADMIN_APP_DIST / "assets"),
+              name="admin-assets")
+
+
+@app.get("/admin")
+@app.get("/admin/{path:path}")
+def _admin_spa(path: str = ""):
+    """超管后台 SPA。No-cache 确保改 UI 后立即生效。"""
+    if ADMIN_APP_INDEX.exists():
+        return FileResponse(ADMIN_APP_INDEX, headers=NO_CACHE_HEADERS)
+    raise HTTPException(404, "admin-app not built")
 
 
 def _spa_or_legacy(legacy_file):
