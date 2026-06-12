@@ -620,9 +620,12 @@ def list_sites(
     hidden = _load_hidden_sites() if not include_hidden else set()
     sku_counts = dict(db.query(Product.site, func.count(Product.id))
                         .group_by(Product.site).all())
-    # spu_count: 之前 distinct group_by 在大表上跑 7-8s · 改成 sku_count 兜底
-    # (sku/spu 比 ~1:1 在 vidaxl 系列 · 客户看的是数量级 · 真要精确可单独查)
-    spu_counts = sku_counts
+    # spu_count: distinct(coalesce(spu, sku)) · 变体合并、无 spu 行按 sku 各算一款
+    # 大表 cache-miss 时约 7-8s · 由 30s _COVERAGE_CACHE 兜底
+    spu_counts = dict(
+        db.query(Product.site,
+                 func.count(func.distinct(func.coalesce(Product.spu, Product.sku))))
+          .group_by(Product.site).all())
     cat_counts = dict(db.query(Category.site, func.count(Category.id))
                         .group_by(Category.site).all())
     promo_counts = dict(db.query(Promotion.site, func.count(Promotion.id))
