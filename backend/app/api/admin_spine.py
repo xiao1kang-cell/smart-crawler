@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from .. import spine_queue
 from ..audit import record_audit
 from ..db import get_db
-from ..models import AdminAuditLog, SpineJob
+from ..models import SpineJob
 from .routes import require_user, _require_super_admin
 
 router = APIRouter(prefix="/api/admin/spine", tags=["admin · spine"])
