@@ -1,0 +1,16 @@
+[Unit]
+Description=smart-crawler spine async queue worker
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/smart-crawler/backend
+ExecStart=/opt/smart-crawler/.venv/bin/python -m app.spine_worker
+Environment=SPINE_WORKER_POLL=5
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
