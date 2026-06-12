@@ -245,3 +245,23 @@ def test_run_loop_empty_queue_no_crash():
         return calls["n"] <= 1
     # 空队列:领不到 job,sleep(poll_interval=0)一拍,should_continue 转 False 退出
     sw.run_loop(poll_interval=0, should_continue=once)  # 不抛异常即通过
+
+
+def test_reclaim_recovers_running_with_null_started_at():
+    init_db()
+    _clear_running()  # 清场全局 running
+    s = SessionLocal()
+    from app.spine_queue import enqueue, reclaim_stale_jobs
+    jid = enqueue(s, "https://x.com/p/nullstart", "null-set", workspace_id=None)
+    s.commit()
+    # 人为造一个 running 但 started_at=None 的脏状态
+    from app.models import SpineJob
+    job = s.get(SpineJob, jid)
+    job.status = "running"; job.started_at = None; job.worker = "ghost"
+    s.commit(); s.close()
+    n = reclaim_stale_jobs(running_timeout_sec=600)
+    assert n == 1
+    s2 = SessionLocal()
+    job = s2.get(SpineJob, jid)
+    assert job.status == "pending" and job.worker is None
+    s2.close()

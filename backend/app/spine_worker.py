@@ -53,6 +53,7 @@ def run_loop(poll_interval: int | None = None, should_continue=None) -> None:
         except Exception as exc:
             # execute_job 内部已兜失败;这里只防御未预期异常,worker 永不挂
             logger.error("执行 job %s 异常: %s", job_id, exc)
+    logger.info("spine-worker %s 退出", WORKER_ID)
 
 
 def _stop(*_):

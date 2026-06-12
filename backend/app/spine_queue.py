@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import update
+from sqlalchemy import or_, update
 from sqlalchemy.orm import Session
 
 from .db import session_scope
@@ -119,7 +119,8 @@ def reclaim_stale_jobs(running_timeout_sec: int = 600) -> int:
     with session_scope() as s:
         stale = (s.query(SpineJob)
                  .filter(SpineJob.status == "running",
-                         SpineJob.started_at < cutoff)
+                         or_(SpineJob.started_at < cutoff,
+                             SpineJob.started_at.is_(None)))
                  .all())
         for job in stale:
             job.status = "pending"
