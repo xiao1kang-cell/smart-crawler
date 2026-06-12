@@ -146,3 +146,28 @@ def test_health_config_audit():
                                page=1, size=20, user="admin", db=s)
     assert "items" in a and "total" in a
     s.close()
+
+
+def test_non_super_admin_blocked():
+    import uuid
+    import pytest
+    from fastapi import HTTPException
+    from app.api import admin_spine
+    from app.db import SessionLocal
+    from app.models import User, Workspace
+    from app.auth import hash_password
+    init_db(); s = SessionLocal()
+    sfx = uuid.uuid4().hex[:8]
+    uname = f"plainuser403_{sfx}"
+    ws = Workspace(name=f"t-ws-403-{sfx}", slug=f"t-ws-403-{sfx}"); s.add(ws); s.flush()
+    u = User(username=uname, email=f"p403_{sfx}@e.com",
+             password_hash=hash_password("Password1"), role="user",
+             global_role=None, status="active", default_workspace_id=ws.id)
+    s.add(u); s.commit()
+    for call in (lambda: admin_spine.jobs_stats(user=uname, db=s),
+                 lambda: admin_spine.datasets_list(user=uname, db=s),
+                 lambda: admin_spine.usage_by_key(user=uname, db=s)):
+        with pytest.raises(HTTPException) as exc:
+            call()
+        assert exc.value.status_code == 403
+    s.close()
