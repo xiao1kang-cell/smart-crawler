@@ -247,12 +247,12 @@ def test_run_loop_empty_queue_no_crash():
     sw.run_loop(poll_interval=0, should_continue=once)  # 不抛异常即通过
 
 
-def test_reclaim_recovers_running_with_null_started_at():
+def test_reclaim_recovers_running_with_null_heartbeat():
     init_db()
     _clear_running()  # 清场全局 running
     s = SessionLocal()
     from app.spine_queue import enqueue, reclaim_stale_jobs
-    jid = enqueue(s, "https://x.com/p/nullstart", "null-set", workspace_id=None)
+    jid = enqueue(s, "https://x.com/p/nullhb", "nullhb-set", workspace_id=None)
     s.commit()
     # 人为造一个 running 但 heartbeat_at=None 的脏状态
     from app.models import SpineJob
