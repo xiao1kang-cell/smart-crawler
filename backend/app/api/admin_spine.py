@@ -8,12 +8,13 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import spine_queue
 from ..audit import record_audit
 from ..db import get_db
-from ..models import SpineJob, Dataset, ExtractedRecord, RawSnapshot
+from ..models import SpineJob, Dataset, ExtractedRecord, RawSnapshot, Usage
 from .routes import require_user, _require_super_admin
 
 router = APIRouter(prefix="/api/admin/spine", tags=["admin · spine"])
@@ -200,3 +201,52 @@ def record_delete(record_id: int, user: str = Depends(require_user),
                  target_id=str(record_id), detail={}, ip=ip or None)
     db.commit()
     return {"record_id": record_id, "deleted": True}
+
+
+def _usage_filtered(db, start, end, endpoint):
+    q = db.query(Usage)
+    if endpoint:
+        q = q.filter(Usage.endpoint == endpoint)
+    if start:
+        q = q.filter(Usage.occurred_at >= datetime.fromisoformat(start))
+    if end:
+        q = q.filter(Usage.occurred_at <= datetime.fromisoformat(end))
+    return q
+
+
+@router.get("/usage")
+def usage_summary(start: str | None = None, end: str | None = None,
+                  endpoint: str | None = None,
+                  user: str = Depends(require_user),
+                  db: Session = Depends(get_db)) -> dict:
+    _require_super_admin(user, db)
+    q = _usage_filtered(db, start, end, endpoint)
+    total_credits = q.with_entities(func.coalesce(func.sum(Usage.credits_used), 0)).scalar()
+    total_records = q.with_entities(func.coalesce(func.sum(Usage.record_count), 0)).scalar()
+    return {"total_credits": int(total_credits or 0),
+            "total_records": int(total_records or 0),
+            "rows": q.count()}
+
+
+@router.get("/usage/by-key")
+def usage_by_key(user: str = Depends(require_user),
+                 db: Session = Depends(get_db)) -> dict:
+    _require_super_admin(user, db)
+    rows = (db.query(Usage.api_key_id,
+                     func.sum(Usage.credits_used),
+                     func.count(Usage.id))
+            .group_by(Usage.api_key_id).all())
+    return {"items": [{"api_key_id": k, "credits": int(c or 0), "calls": n}
+                      for k, c, n in rows]}
+
+
+@router.get("/usage/by-tenant")
+def usage_by_tenant(user: str = Depends(require_user),
+                    db: Session = Depends(get_db)) -> dict:
+    _require_super_admin(user, db)
+    rows = (db.query(Usage.workspace_id,
+                     func.sum(Usage.credits_used),
+                     func.count(Usage.id))
+            .group_by(Usage.workspace_id).all())
+    return {"items": [{"workspace_id": w, "credits": int(c or 0), "calls": n}
+                      for w, c, n in rows]}

@@ -106,3 +106,28 @@ def test_datasets_records_promote_delete():
     assert s.get(ExtractedRecord, rid) is None
     assert s.query(AdminAuditLog).count() == na2 + 1
     s.close()
+
+
+def test_usage_endpoints():
+    init_db()
+    from app.api import admin_spine
+    from app.db import SessionLocal
+    from app.models import Usage
+    s = SessionLocal()
+    s.add(Usage(api_key_id=5, workspace_id=1, endpoint="/spine/worker/execute",
+                record_count=1, credits_used=2))
+    s.add(Usage(api_key_id=5, workspace_id=1, endpoint="/api/v2/scrape",
+                record_count=1, credits_used=3))
+    s.commit()
+    agg = admin_spine.usage_summary(start=None, end=None, endpoint=None,
+                                    user="admin", db=s)
+    assert agg["total_credits"] >= 5
+    bykey = admin_spine.usage_by_key(user="admin", db=s)
+    assert any(r["api_key_id"] == 5 and r["credits"] >= 5 for r in bykey["items"])
+    bytenant = admin_spine.usage_by_tenant(user="admin", db=s)
+    assert any(r["workspace_id"] == 1 for r in bytenant["items"])
+    only = admin_spine.usage_summary(start=None, end=None,
+                                     endpoint="/spine/worker/execute",
+                                     user="admin", db=s)
+    assert only["total_credits"] >= 2
+    s.close()
