@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import AdminLayout from '../components/layout/AdminLayout.vue'
 import AuditPage from '../pages/AuditPage.vue'
+import DatasetDetailPage from '../pages/DatasetDetailPage.vue'
 import DatasetsPage from '../pages/DatasetsPage.vue'
 import HealthPage from '../pages/HealthPage.vue'
 import LoginPage from '../pages/LoginPage.vue'
@@ -21,6 +22,7 @@ const router = createRouter({
         { path: '', component: OverviewPage },
         { path: 'tenants', component: TenantsPage },
         { path: 'datasets', component: DatasetsPage },
+        { path: 'datasets/:id', component: DatasetDetailPage },
         { path: 'queue', component: QueuePage },
         { path: 'usage', component: UsagePage },
         { path: 'health', component: HealthPage },
