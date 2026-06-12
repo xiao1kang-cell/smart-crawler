@@ -494,3 +494,67 @@ class AgentCache(Base):
     response = Column(JSON)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     expires_at = Column(DateTime, index=True)
+
+
+class RawSnapshot(Base):
+    """Raw 层 —— 原始抓取的元数据;正文 gzip 在磁盘(snapshot.py)。"""
+
+    __tablename__ = "raw_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    url = Column(Text, index=True)
+    canonical_url = Column(Text, index=True)
+    content_hash = Column(String, index=True)        # sha256(正文)
+    fetched_at = Column(DateTime, index=True, default=datetime.utcnow)
+    status_code = Column(Integer)
+    etag = Column(String)
+    last_modified = Column(String)
+    content_type = Column(String)
+    body_path = Column(String)                        # data/snapshots/*.gz
+    fetch_mode = Column(String)                       # live / advanced
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Dataset(Base):
+    """View 层入口 —— 命名数据集。"""
+
+    __tablename__ = "datasets"
+    __table_args__ = (UniqueConstraint("workspace_id", "slug",
+                                       name="uq_dataset_ws_slug"),)
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, index=True)
+    slug = Column(String, index=True)
+    entity_type = Column(String)                      # 默认实体类型
+    description = Column(Text)
+    source_kind = Column(String)                      # custom_url / ecommerce_template
+    freshness_ttl_sec = Column(Integer, default=86400)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)
+    created_by = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ExtractedRecord(Base):
+    """Normalized 层 —— 任意 schema 的结构化结果 + 完整 provenance。"""
+
+    __tablename__ = "extracted_records"
+    __table_args__ = (UniqueConstraint("dataset_id", "record_key",
+                                       name="uq_record_dataset_key"),)
+
+    id = Column(Integer, primary_key=True)
+    dataset_id = Column(Integer, ForeignKey("datasets.id"), index=True)
+    snapshot_id = Column(Integer, ForeignKey("raw_snapshots.id"), nullable=True)
+    source_url = Column(Text, index=True)
+    canonical_url = Column(Text, index=True)
+    entity_type = Column(String, index=True)
+    data = Column(JSON)
+    record_key = Column(String, index=True)
+    content_hash = Column(String)                     # sha256(规整 data)
+    confidence = Column(Float)
+    extraction_method = Column(String)
+    recipe_id = Column(Integer, nullable=True)        # SP3 用
+    quality_status = Column(String, index=True)       # main / staging / quarantine
+    fetched_at = Column(DateTime, index=True)
+    extracted_at = Column(DateTime, default=datetime.utcnow)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)

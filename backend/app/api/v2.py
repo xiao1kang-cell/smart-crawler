@@ -41,6 +41,7 @@ from ..billing import record_usage
 from ..db import get_db
 from ..models import ApiKey, Product, RateLimitEvent, Site
 from .routes import require_user
+from .. import spine
 
 
 def _rate_limit_dependency(
@@ -177,6 +178,26 @@ class WarehouseQueryRequest(BaseModel):
     site: Optional[str] = None
     brand: Optional[str] = None
     limit: int = Field(default=20, le=200)
+
+
+class CustomScrapeRequest(BaseModel):
+    url: str
+    dataset: str
+    entity_type: str = "generic"
+    schema_: Optional[dict] = Field(default=None, alias="schema")
+    force_live: bool = False
+    save_policy: str = "promote_if_valid"
+    max_age_sec: Optional[int] = None
+
+    model_config = {"populate_by_name": True}
+
+
+class DatasetQueryRequest(BaseModel):
+    dataset: str
+    query: Optional[str] = None
+    entity_type: Optional[str] = None
+    include_staging: bool = False
+    limit: int = 20
 
 
 @router.post("/scrape")
@@ -447,6 +468,45 @@ def v2_root():
         },
         "docs": "https://smartcrawler.io/d/api_v2_spec.html",
     }
+
+
+def _v2_ws_id(db, authorization, x_api_key) -> int | None:
+    row = _api_key_row(db, authorization, x_api_key)
+    return row.workspace_id if row else None
+
+
+@router.post("/custom/scrape")
+def custom_scrape(req: CustomScrapeRequest,
+                  authorization: str = Header(default=""),
+                  x_api_key: str = Header(default="", alias="X-API-Key"),
+                  db: Session = Depends(get_db)):
+    """通用数据采集:任意 URL → warehouse-first 抓取 → 带 provenance 入指定 dataset。"""
+    _require_scope(db, authorization, x_api_key, "crawler:scrape")
+    ws = _v2_ws_id(db, authorization, x_api_key)
+    ds = spine.get_or_create_dataset(db, req.dataset, workspace_id=ws,
+                                     entity_type=req.entity_type)
+    out = spine.resolve(db, req.url, ds, workspace_id=ws, force_live=req.force_live,
+                        max_age_sec=req.max_age_sec, save_policy=req.save_policy)
+    if req.schema_ and out.get("data"):
+        from ..agent_crawler import _shape_to_schema
+        out["data"] = _shape_to_schema(out["data"], req.schema_)
+    _meter(db, authorization, x_api_key, "/api/v2/custom/scrape", out)
+    return out
+
+
+@router.post("/dataset/query")
+def dataset_query(req: DatasetQueryRequest,
+                  authorization: str = Header(default=""),
+                  x_api_key: str = Header(default="", alias="X-API-Key"),
+                  db: Session = Depends(get_db)):
+    """查通用数据集(extracted_records)。默认只返 main;include_staging=true 带 staging。"""
+    _require_scope(db, authorization, x_api_key, "crawler:read")
+    ws = _v2_ws_id(db, authorization, x_api_key)
+    ds = spine.get_or_create_dataset(db, req.dataset, workspace_id=ws)
+    out = spine.query_dataset(db, ds, query=req.query, entity_type=req.entity_type,
+                              include_staging=req.include_staging, limit=req.limit)
+    _meter(db, authorization, x_api_key, "/api/v2/dataset/query", out)
+    return out
 
 
 def _raw_auth_key(authorization: str, x_api_key: str) -> str:

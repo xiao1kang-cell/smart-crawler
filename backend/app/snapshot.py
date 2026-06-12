@@ -35,6 +35,23 @@ def save(site: str, name: str, content) -> None:
         pass
 
 
+def save_returning_path(site: str, name: str, content) -> str | None:
+    """同 save(),但返回写入的 .gz 路径(失败返 None)。spine 用于记录 body_path。"""
+    if not ENABLED or content is None:
+        return None
+    try:
+        day = date.today().isoformat()
+        folder = SNAPSHOT_DIR / site / day
+        folder.mkdir(parents=True, exist_ok=True)
+        data = content.encode("utf-8") if isinstance(content, str) else content
+        path = folder / f"{_safe(name)}.gz"
+        with gzip.open(path, "wb") as f:
+            f.write(data)
+        return str(path)
+    except Exception:
+        return None
+
+
 def stats() -> dict:
     """快照归档统计（用于运维 / 看板）。"""
     if not SNAPSHOT_DIR.exists():

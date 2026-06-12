@@ -659,6 +659,59 @@ def fetch_listing_voc(url: str, max_items: int = 100,
                                    review_limit=review_limit)
 
 
+def _ws_id_from_ctx(db) -> int | None:
+    ctx = get_current_api_key()
+    if not ctx:
+        return None
+    row = db.get(ApiKey, ctx.api_key_id)
+    return row.workspace_id if row else None
+
+
+@metered_tool(required_scope="crawler:scrape", cacheable=False)
+def crawl_custom_source(url: str, dataset: str, schema: dict | None = None,
+                        entity_type: str = "generic", force_live: bool = False,
+                        save_policy: str = "promote_if_valid",
+                        max_age_sec: int | None = None) -> dict:
+    """通用数据采集:任意 URL → 探测/抓取 → 带 provenance 入指定 dataset。
+
+    warehouse-first:dataset 内同 URL 在 TTL(max_age_sec 或 dataset 默认)内命中则
+    credits_used=0 直接返回。force_live=true 强制实时抓(默认进 staging 不污染主库)。
+    save_policy: promote_if_valid(默认)/staging/main/quarantine。
+    返回 record_id/quality_status/confidence/provenance/warnings。
+    """
+    from . import spine
+    s = SessionLocal()
+    try:
+        ws = _ws_id_from_ctx(s)
+        ds = spine.get_or_create_dataset(s, dataset, workspace_id=ws,
+                                         entity_type=entity_type)
+        out = spine.resolve(s, url, ds, workspace_id=ws, force_live=force_live,
+                            max_age_sec=max_age_sec, save_policy=save_policy)
+        # schema 投影(复用现有 _shape_to_schema)
+        if schema and out.get("data"):
+            from .agent_crawler import _shape_to_schema
+            out["data"] = _shape_to_schema(out["data"], schema)
+        return out
+    finally:
+        s.close()
+
+
+@metered_tool(required_scope="crawler:read", cacheable=True)
+def query_dataset(dataset: str, query: str | None = None,
+                  entity_type: str | None = None, include_staging: bool = False,
+                  limit: int = 20) -> dict:
+    """查通用数据集(extracted_records)。默认只返 main;include_staging=true 带 staging。"""
+    from . import spine
+    s = SessionLocal()
+    try:
+        ws = _ws_id_from_ctx(s)
+        ds = spine.get_or_create_dataset(s, dataset, workspace_id=ws)
+        return spine.query_dataset(s, ds, query=query, entity_type=entity_type,
+                                   include_staging=include_staging, limit=limit)
+    finally:
+        s.close()
+
+
 if __name__ == "__main__":
     import os
     mcp.run(transport="http", host="0.0.0.0",
