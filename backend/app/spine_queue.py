@@ -79,12 +79,14 @@ def execute_job(job_id: int) -> dict:
         save_policy = job.save_policy or "promote_if_valid"
         force_live = bool(job.force_live)
         workspace_id = job.workspace_id
+        api_key_id = job.api_key_id
         try:
             ds = spine.get_or_create_dataset(
                 s, dataset_name, workspace_id=workspace_id,
                 entity_type=entity_type)
             out = spine.resolve(s, url, ds, workspace_id=workspace_id,
                                 force_live=force_live, save_policy=save_policy)
+            _record_execute_usage(api_key_id, workspace_id, out)
             job.status = "success"
             job.result_record_id = out.get("record_id")
             job.finished_at = datetime.utcnow()
@@ -93,6 +95,19 @@ def execute_job(job_id: int) -> dict:
                     "record_id": out.get("record_id")}
         except Exception as exc:
             return _handle_failure(s, job, exc)
+
+
+def _record_execute_usage(api_key_id, workspace_id, out) -> None:
+    """成功落库后按 resolve 的 credits_used 记账(精确到 key)。失败路径不调本函数。"""
+    from .billing import record_usage
+    try:
+        record_usage(api_key_id=api_key_id, endpoint="/spine/worker/execute",
+                     record_count=1, bytes_returned=0, duration_ms=0,
+                     credits_used=int(out.get("credits_used") or 0),
+                     workspace_id=workspace_id)
+    except Exception:
+        # 计费绝不阻断 worker 落库(与同步 _meter 容错一致)
+        pass
 
 
 def _handle_failure(s: Session, job: SpineJob, exc: Exception) -> dict:

@@ -299,3 +299,59 @@ def test_claim_sets_heartbeat():
     job = s2.get(SpineJob, jid)
     assert job.heartbeat_at is not None  # 领取即设首次心跳
     s2.close()
+
+
+def test_execute_success_records_usage():
+    init_db(); s = SessionLocal()
+    from app.spine_queue import enqueue, claim_job, execute_job
+    from app.models import Usage
+    jid = enqueue(s, "https://x.com/p/billok", "billok-set", entity_type="product",
+                  save_policy="main", api_key_id=7, workspace_id=None)
+    s.commit(); s.close()
+    claim_job("w1")
+    before = SessionLocal()
+    n_before = before.query(Usage).filter(Usage.endpoint == "/spine/worker/execute").count()
+    before.close()
+    with patch("app.spine._do_scrape", side_effect=_scrape_stub):
+        execute_job(jid)
+    after = SessionLocal()
+    rows = (after.query(Usage)
+            .filter(Usage.endpoint == "/spine/worker/execute", Usage.api_key_id == 7)
+            .all())
+    after_count = after.query(Usage).filter(Usage.endpoint == "/spine/worker/execute").count()
+    after.close()
+    assert after_count == n_before + 1  # 成功记一行
+    assert any(r.api_key_id == 7 for r in rows)
+
+
+def test_execute_failure_records_no_usage():
+    init_db(); s = SessionLocal()
+    from app.spine_queue import enqueue, claim_job, execute_job
+    from app.models import Usage
+    jid = enqueue(s, "https://x.com/p/billfail", "billfail-set", api_key_id=8,
+                  workspace_id=None)
+    s.commit(); s.close()
+    claim_job("w1")
+    before = SessionLocal()
+    n_before = before.query(Usage).filter(Usage.endpoint == "/spine/worker/execute").count()
+    before.close()
+    def boom(db, url, **kw):
+        raise RuntimeError("fail no bill")
+    with patch("app.spine._do_scrape", side_effect=boom):
+        execute_job(jid)
+    after = SessionLocal()
+    n_after = after.query(Usage).filter(Usage.endpoint == "/spine/worker/execute").count()
+    after.close()
+    assert n_after == n_before  # 失败不记账
+
+
+def test_execute_records_usage_with_null_api_key():
+    init_db(); s = SessionLocal()
+    from app.spine_queue import enqueue, claim_job, execute_job
+    jid = enqueue(s, "https://x.com/p/nullkey", "nullkey-set", save_policy="main",
+                  api_key_id=None, workspace_id=None)
+    s.commit(); s.close()
+    claim_job("w1")
+    with patch("app.spine._do_scrape", side_effect=_scrape_stub):
+        out = execute_job(jid)
+    assert out["status"] == "success"  # api_key_id=None 记账不崩
