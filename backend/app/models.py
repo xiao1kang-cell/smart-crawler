@@ -588,3 +588,19 @@ class SpineJob(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime)
     finished_at = Column(DateTime)
+
+
+class AdminAuditLog(Base):
+    """超管后台写操作审计 —— 谁在何时对什么做了什么。"""
+
+    __tablename__ = "admin_audit_logs"
+
+    id = Column(Integer, primary_key=True)
+    actor_user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
+    actor_name = Column(String, index=True)
+    action = Column(String, index=True)
+    target_type = Column(String, index=True)
+    target_id = Column(String, index=True)
+    detail = Column(JSON)
+    ip = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
