@@ -14,6 +14,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from ..access import DEFAULT_API_KEY_SCOPES, api_key_scopes, normalize_scopes
+from ..audit import record_audit
 from ..apikey import generate as gen_key, hash_key, short as key_short
 from ..auth import (TOKEN_TTL, generate_session_id, hash_secret, hash_password,
                     make_token, normalize_email, parse_token, validate_email,
@@ -1418,7 +1419,7 @@ def _require_super_admin(user: str, db: Session) -> User:
 @router.post("/admin/workspaces")
 def admin_create_workspace(payload: dict, user: str = Depends(require_user),
                            db: Session = Depends(get_db)):
-    _require_super_admin(user, db)
+    actor = _require_super_admin(user, db)
     payload = payload or {}
     name = str(payload.get("name") or "").strip()
     slug = str(payload.get("slug") or "").strip().lower()
@@ -1431,6 +1432,12 @@ def admin_create_workspace(payload: dict, user: str = Depends(require_user),
                     type=payload.get("type") or "customer",
                     status=payload.get("status") or "active")
     db.add(row)
+    db.flush()
+    record_audit(db, actor_user_id=getattr(actor, "id", None),
+                 actor_name=getattr(actor, "username", user),
+                 action="workspace.create", target_type="workspace",
+                 target_id=str(row.id) if row.id is not None else None,
+                 detail={"name": name, "slug": slug})
     db.commit()
     db.refresh(row)
     return _workspace_response(row)

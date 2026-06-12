@@ -171,3 +171,21 @@ def test_non_super_admin_blocked():
             call()
         assert exc.value.status_code == 403
     s.close()
+
+
+def test_existing_admin_write_audited():
+    init_db()
+    from app.api import routes
+    from app.db import SessionLocal
+    from app.models import AdminAuditLog
+    import uuid
+    s = SessionLocal()
+    na = s.query(AdminAuditLog).count()
+    sfx = uuid.uuid4().hex[:8]
+    wsname = "audited-ws-" + sfx
+    routes.admin_create_workspace(
+        payload={"name": wsname, "slug": wsname}, user="admin", db=s)
+    assert s.query(AdminAuditLog).count() == na + 1
+    row = s.query(AdminAuditLog).order_by(AdminAuditLog.id.desc()).first()
+    assert row.action == "workspace.create"
+    s.close()
