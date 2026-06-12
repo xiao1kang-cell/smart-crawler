@@ -727,9 +727,12 @@ def enqueue_custom_scrape(url: str, dataset: str, entity_type: str = "generic",
     s = SessionLocal()
     try:
         ws = _ws_id_from_ctx(s)
+        ctx = get_current_api_key()
+        aki = ctx.api_key_id if ctx else None
         job_id = spine_queue.enqueue(s, url, dataset, entity_type=entity_type,
                                      save_policy=save_policy, force_live=force_live,
-                                     max_retries=max_retries, workspace_id=ws)
+                                     max_retries=max_retries, api_key_id=aki,
+                                     workspace_id=ws)
         s.commit()
         return {"job_id": job_id, "status": "pending"}
     finally:
