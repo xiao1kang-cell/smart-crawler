@@ -61,7 +61,12 @@ def _backoff(retries: int) -> timedelta:
 
 
 def execute_job(job_id: int) -> dict:
-    """执行一条已领取(running)的任务:spine.resolve 落库 → 成功/重试/失败。"""
+    """执行一条已领取(running)的任务:spine.resolve 落库 → 成功/重试/失败。
+
+    注意:spine.resolve 内部自行提交落库(dataset/snapshot/record);job 状态
+    另由本函数的 session_scope 提交,二者非原子。极窄崩溃窗口下可能留下卡在
+    running 的悬挂 job —— 由 spine_worker 的 running 超时回收兜底(Task 4)。
+    """
     from . import spine
     with session_scope() as s:
         job = s.get(SpineJob, job_id)
