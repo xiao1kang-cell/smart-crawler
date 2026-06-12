@@ -590,11 +590,14 @@ def custom_scrape_async(req: AsyncScrapeRequest,
     """异步入队一条通用抓取任务,返回 job_id。worker 消费走 warehouse-first 落库。"""
     _require_scope(db, authorization, x_api_key, "crawler:scrape")
     ws = _v2_ws_id(db, authorization, x_api_key)
+    key = _api_key_row(db, authorization, x_api_key)
     job_id = spine_queue.enqueue(db, req.url, req.dataset,
                                  entity_type=req.entity_type,
                                  save_policy=req.save_policy,
                                  force_live=req.force_live,
-                                 max_retries=req.max_retries, workspace_id=ws)
+                                 max_retries=req.max_retries,
+                                 api_key_id=key.id if key else None,
+                                 workspace_id=ws)
     db.commit()
     return {"job_id": job_id, "status": "pending"}
 
