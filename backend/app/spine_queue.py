@@ -163,18 +163,18 @@ def _handle_failure(s: Session, job: SpineJob, exc: Exception) -> dict:
 
 
 def reclaim_stale_jobs(running_timeout_sec: int = 600) -> int:
-    """把卡在 running 且超时的 job 重置为 pending,返回回收条数。
+    """把心跳停超 running_timeout_sec 的 running job 重置为 pending,返回回收条数。
 
-    兜底 execute_job 非原子提交的崩溃窗口:进程若在 resolve 落库后、写 job
-    状态前崩溃,会留下永久 running 的悬挂 job(claim 只领 pending,不会重领)。
-    worker loop 每轮先调本函数。
+    判据用 heartbeat_at(worker execute 期间每 HEARTBEAT_INTERVAL 续约):
+    只有真崩溃/卡死(心跳停了)才被回收;活着的长抓持续续约,不会被误回收。
+    heartbeat_at IS NULL(刚领还没续约的脏行)一并回收。worker loop 每轮先调。
     """
     cutoff = datetime.utcnow() - timedelta(seconds=running_timeout_sec)
     with session_scope() as s:
         stale = (s.query(SpineJob)
                  .filter(SpineJob.status == "running",
-                         or_(SpineJob.started_at < cutoff,
-                             SpineJob.started_at.is_(None)))
+                         or_(SpineJob.heartbeat_at < cutoff,
+                             SpineJob.heartbeat_at.is_(None)))
                  .all())
         for job in stale:
             job.status = "pending"

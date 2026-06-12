@@ -183,10 +183,10 @@ def test_reclaim_stale_running_job_to_pending():
     jid = enqueue(s, "https://x.com/p/stale", "stale-set", workspace_id=None)
     s.commit(); s.close()
     claim_job("dead-worker")  # → running
-    # 人为把 started_at 推老,模拟 worker 崩在 running 态
+    # 人为把 heartbeat_at 推老,模拟 worker 崩在 running 态(心跳停了)
     s2 = SessionLocal()
     job = s2.get(SpineJob, jid)
-    job.started_at = datetime.utcnow() - timedelta(seconds=99999)
+    job.heartbeat_at = datetime.utcnow() - timedelta(seconds=99999)
     s2.commit(); s2.close()
     # 回收:超 600s 的 running 重置为 pending
     n = reclaim_stale_jobs(running_timeout_sec=600)
@@ -254,10 +254,10 @@ def test_reclaim_recovers_running_with_null_started_at():
     from app.spine_queue import enqueue, reclaim_stale_jobs
     jid = enqueue(s, "https://x.com/p/nullstart", "null-set", workspace_id=None)
     s.commit()
-    # 人为造一个 running 但 started_at=None 的脏状态
+    # 人为造一个 running 但 heartbeat_at=None 的脏状态
     from app.models import SpineJob
     job = s.get(SpineJob, jid)
-    job.status = "running"; job.started_at = None; job.worker = "ghost"
+    job.status = "running"; job.heartbeat_at = None; job.worker = "ghost"
     s.commit(); s.close()
     n = reclaim_stale_jobs(running_timeout_sec=600)
     assert n == 1
@@ -411,3 +411,25 @@ def test_execute_with_heartbeat_no_state_corruption(monkeypatch):
     # (c) execute 返回后心跳线程已停(给 daemon 一点收尾时间)
     _t.sleep(0.1)
     assert threading.active_count() <= before_threads  # 无泄漏
+
+
+def test_reclaim_uses_heartbeat_not_started_at():
+    init_db()
+    _clear_pending()  # 清场,保证 claim("w1") 领到的是本测试入队的 job
+    _clear_running()
+    s = SessionLocal()
+    from app.spine_queue import enqueue, claim_job, reclaim_stale_jobs
+    jid = enqueue(s, "https://x.com/p/hbreclaim", "hbr-set", workspace_id=None)
+    s.commit(); s.close()
+    claim_job("w1")  # started_at=now, heartbeat_at=now
+    # 关键:started_at 推得很老,但 heartbeat_at 保持新鲜 → 不应回收(活着的长抓)
+    s2 = SessionLocal()
+    job = s2.get(SpineJob, jid)
+    job.started_at = datetime.utcnow() - timedelta(seconds=99999)
+    job.heartbeat_at = datetime.utcnow()  # 心跳新鲜
+    s2.commit(); s2.close()
+    n = reclaim_stale_jobs(running_timeout_sec=600)
+    s3 = SessionLocal()
+    job = s3.get(SpineJob, jid)
+    assert job.status == "running"  # 心跳新鲜,长抓不被误回收
+    s3.close()
