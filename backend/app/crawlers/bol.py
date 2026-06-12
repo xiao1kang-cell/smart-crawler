@@ -71,7 +71,7 @@ class BolCrawler(BaseCrawler):
     def __init__(self, site):
         super().__init__(site)
         self.base = site.url.rstrip("/")
-        self.limit = DEFAULT_LIMIT
+        self.limit = self._resolve_limit(DEFAULT_LIMIT)
         # 按站点 country 选 sitemap root：NL → nl-nl，BE → nl-be
         cc = (site.country or "NL").upper()
         self.sitemap_root = _SITEMAP_ROOT.get(cc, _SITEMAP_ROOT["NL"])

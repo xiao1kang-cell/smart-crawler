@@ -45,7 +45,7 @@ class VidaxlCrawler(BaseCrawler):
         self.currency = _CURRENCY.get(site.country, "EUR")
         self.api_email = os.environ.get("VIDAXL_API_EMAIL")
         self.api_token = os.environ.get("VIDAXL_API_TOKEN")
-        self.limit = STOREFRONT_LIMIT
+        self.limit = self._resolve_limit(STOREFRONT_LIMIT)
 
     def crawl(self) -> CrawlResult:
         if self.api_email and self.api_token:

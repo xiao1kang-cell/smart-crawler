@@ -48,7 +48,7 @@ class IdealoCrawler(BaseCrawler):
     def __init__(self, site):
         super().__init__(site)
         self.base = site.url.rstrip("/")
-        self.limit = DEFAULT_LIMIT
+        self.limit = self._resolve_limit(DEFAULT_LIMIT)
         self.scan_cap = SCAN_CAP
 
     # ---------- session ----------

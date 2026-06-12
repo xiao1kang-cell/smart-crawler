@@ -29,7 +29,7 @@ class FlexispotCrawler(BaseCrawler):
     def __init__(self, site):
         super().__init__(site)
         self.base = site.url.rstrip("/")
-        self.limit = DEFAULT_LIMIT
+        self.limit = self._resolve_limit(DEFAULT_LIMIT)
         self.currency = _CURRENCY.get(site.country, "USD")
 
     def _product_slugs(self) -> list[str]:

@@ -71,7 +71,7 @@ class AllegroCrawler(BaseCrawler):
     def __init__(self, site):
         super().__init__(site)
         self.base = site.url.rstrip("/") or "https://allegro.pl"
-        self.limit = DEFAULT_LIMIT
+        self.limit = self._resolve_limit(DEFAULT_LIMIT)
         self.scan_cap = SCAN_CAP
 
     # ---------- session（curl_cffi —— Allegro 几乎必败，仅作探针）----------

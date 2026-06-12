@@ -54,7 +54,7 @@ class ArticleCrawler(BaseCrawler):
     def __init__(self, site):
         super().__init__(site)
         self.base = site.url.rstrip("/")
-        self.limit = DEFAULT_LIMIT
+        self.limit = self._resolve_limit(DEFAULT_LIMIT)
         # US=1 / CA=2，默认 US
         self._cur_cookie = "2" if (site.country or "").upper() == "CA" else "1"
 
