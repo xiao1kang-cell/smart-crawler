@@ -604,3 +604,40 @@ class AdminAuditLog(Base):
     detail = Column(JSON)
     ip = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class WebhookConfig(Base):
+    """每个 workspace 一条 webhook 配置。任务终态时向 url POST 通知。"""
+
+    __tablename__ = "webhook_configs"
+
+    id = Column(Integer, primary_key=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"),
+                          unique=True, index=True)
+    url = Column(String, nullable=False)            # 目标地址(http/https)
+    secret = Column(String, nullable=False)         # HMAC-SHA256 密钥(明文存,签名需原文)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WebhookDelivery(Base):
+    """一次 webhook 投递记录。pending→success/failed,失败按退避重试。"""
+
+    __tablename__ = "webhook_deliveries"
+
+    id = Column(Integer, primary_key=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)
+    config_id = Column(Integer, ForeignKey("webhook_configs.id"), index=True)
+    event_type = Column(String)                     # job.success | job.failed
+    job_kind = Column(String)                       # spine | crawl | ondemand
+    job_id = Column(Integer)
+    payload = Column(JSON)                          # 冻结的瘦载荷快照
+    status = Column(String, index=True)             # pending | success | failed
+    retries = Column(Integer, default=0)
+    max_retries = Column(Integer, default=5)
+    next_retry_at = Column(DateTime, index=True)
+    http_status = Column(Integer)                   # 末次响应码
+    response_snippet = Column(Text)                 # 末次响应体前 500 字
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    finished_at = Column(DateTime)
