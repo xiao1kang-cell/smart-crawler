@@ -571,14 +571,14 @@ class SpineJob(Base):
 
     id = Column(Integer, primary_key=True)
     url = Column(Text)
-    dataset = Column(String, index=True)
+    dataset = Column(String, index=True)  # dataset 名(slug),worker 消费时 get_or_create,非外键
     entity_type = Column(String, default="generic")
-    save_policy = Column(String, default="promote_if_valid")
+    save_policy = Column(String, default="promote_if_valid")  # promote_if_valid / main / staging / quarantine
     force_live = Column(Boolean, default=False)
-    status = Column(String, default="pending", index=True)
+    status = Column(String, default="pending", index=True)  # pending / running / success / failed
     retries = Column(Integer, default=0)
     max_retries = Column(Integer, default=3)
-    next_attempt_at = Column(DateTime, index=True, default=datetime.utcnow)
+    next_attempt_at = Column(DateTime, index=True, default=datetime.utcnow)  # 重试退避到期时间,claim 只领 <= now 的
     worker = Column(String)
     result_record_id = Column(Integer, nullable=True)
     error = Column(Text)
