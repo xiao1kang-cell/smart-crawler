@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from ..config import get_settings, user_agents
+from ..config import get_settings, get_sites, user_agents
 from ..models import Site
 from ..proxy import get_proxy
 from .. import snapshot as _snapshot
@@ -35,6 +35,13 @@ class BaseCrawler(ABC):
         self.delay = rate_delay(self.platform,
                                 float(self.settings.get("request_delay", 1.5)))
         self.proxy = get_proxy(site.proxy_tier, site=site.site)
+
+    def _resolve_limit(self, default: int, explicit: int | None = None) -> int:
+        """limit 优先级：显式参数 > sites.yaml max_products > env 默认。"""
+        if explicit is not None:
+            return explicit
+        hints = next((c for c in get_sites() if c["site"] == self.site.site), {})
+        return int(hints.get("max_products", default))
 
     def ua(self) -> str:
         import random
