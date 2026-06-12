@@ -106,3 +106,23 @@ def _handle_failure(s: Session, job: SpineJob, exc: Exception) -> dict:
     job.status = "failed"
     job.finished_at = datetime.utcnow()
     return {"job_id": job.id, "status": "failed", "retries": job.retries}
+
+
+def reclaim_stale_jobs(running_timeout_sec: int = 600) -> int:
+    """把卡在 running 且超时的 job 重置为 pending,返回回收条数。
+
+    兜底 execute_job 非原子提交的崩溃窗口:进程若在 resolve 落库后、写 job
+    状态前崩溃,会留下永久 running 的悬挂 job(claim 只领 pending,不会重领)。
+    worker loop 每轮先调本函数。
+    """
+    cutoff = datetime.utcnow() - timedelta(seconds=running_timeout_sec)
+    with session_scope() as s:
+        stale = (s.query(SpineJob)
+                 .filter(SpineJob.status == "running",
+                         SpineJob.started_at < cutoff)
+                 .all())
+        for job in stale:
+            job.status = "pending"
+            job.worker = None
+            job.next_attempt_at = datetime.utcnow()
+        return len(stale)
