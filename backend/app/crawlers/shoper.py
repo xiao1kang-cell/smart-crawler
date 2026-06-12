@@ -49,7 +49,7 @@ class ShoperCrawler(BaseCrawler):
         super().__init__(site)
         hints = next((c for c in get_sites() if c["site"] == site.site), {})
         self.base = site.url.rstrip("/")
-        self.limit = int(hints.get("max_products", DEFAULT_LIMIT))
+        self.limit = self._resolve_limit(DEFAULT_LIMIT)
         # 用户可在 sites.yaml 显式指定类别 URL；否则自动从主页发现
         self.category_urls: list[str] = hints.get("category_urls") or []
 

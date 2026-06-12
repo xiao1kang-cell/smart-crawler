@@ -48,7 +48,7 @@ class MagentoCrawler(BaseCrawler):
         self.base = site.url.rstrip("/")
         self.sitemap_hint = hints.get("sitemap")
         self.product_match = hints.get("product_match", "")
-        self.limit = int(hints.get("max_products", DEFAULT_LIMIT))
+        self.limit = self._resolve_limit(DEFAULT_LIMIT)
         self.scan_cap = int(hints.get("scan_cap", DEFAULT_SCAN_CAP))
 
     def _session(self) -> creq.Session:

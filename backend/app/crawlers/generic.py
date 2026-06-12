@@ -42,7 +42,7 @@ class GenericCrawler(BaseCrawler):
             site.url.rstrip("/") + "/sitemap.xml")
         self.product_match = hints.get("product_match", "")
         self.exclude_match = hints.get("exclude_match", "")
-        self.limit = int(hints.get("max_products", DEFAULT_LIMIT))
+        self.limit = self._resolve_limit(DEFAULT_LIMIT)
 
     def _session(self) -> creq.Session:
         s = creq.Session(impersonate="chrome")

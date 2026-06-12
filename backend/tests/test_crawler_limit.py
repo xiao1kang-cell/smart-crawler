@@ -69,3 +69,13 @@ def test_cratebarrel_reads_hints_when_no_param(monkeypatch):
     c = CrateBarrelCrawler(Site(site="x", url="https://x.com", country="US",
                                 platform="cratebarrel", proxy_tier="dc"))
     assert c.limit == 5
+
+
+def test_generic_still_reads_max_products(monkeypatch):
+    monkeypatch.setattr("app.crawlers.base.get_sites",
+                        lambda: [{"site": "x", "max_products": 8,
+                                  "sitemap": "https://x.com/sitemap.xml"}])
+    from app.crawlers.generic import GenericCrawler
+    c = GenericCrawler(Site(site="x", url="https://x.com", country="US",
+                            platform="generic", proxy_tier="dc"))
+    assert c.limit == 8
