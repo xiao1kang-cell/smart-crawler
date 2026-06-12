@@ -583,6 +583,8 @@ class SpineJob(Base):
     result_record_id = Column(Integer, nullable=True)
     error = Column(Text)
     workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)
+    api_key_id = Column(Integer, ForeignKey("api_keys.id"), index=True, nullable=True)  # 计费归属,enqueue 持久化
+    heartbeat_at = Column(DateTime, index=True, nullable=True)  # worker 续约时间戳,reclaim 判据
     created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime)
     finished_at = Column(DateTime)

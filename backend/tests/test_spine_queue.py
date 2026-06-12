@@ -265,3 +265,12 @@ def test_reclaim_recovers_running_with_null_started_at():
     job = s2.get(SpineJob, jid)
     assert job.status == "pending" and job.worker is None
     s2.close()
+
+
+def test_spine_jobs_has_billing_and_heartbeat_cols():
+    from sqlalchemy import inspect
+    from app.db import engine
+    init_db()
+    cols = {c["name"] for c in inspect(engine).get_columns("spine_jobs")}
+    assert "api_key_id" in cols, "spine_jobs 缺列 api_key_id"
+    assert "heartbeat_at" in cols, "spine_jobs 缺列 heartbeat_at"
