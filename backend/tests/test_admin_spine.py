@@ -131,3 +131,18 @@ def test_usage_endpoints():
                                      user="admin", db=s)
     assert only["total_credits"] >= 2
     s.close()
+
+
+def test_health_config_audit():
+    init_db()
+    from app.api import admin_spine
+    from app.db import SessionLocal
+    s = SessionLocal()
+    h = admin_spine.health(user="admin", db=s)
+    assert "worker_status" in h and "reclaim_hint" in h
+    c = admin_spine.config(user="admin", db=s)
+    assert "heartbeat_interval" in c and "backoff" in c
+    a = admin_spine.audit_list(actor=None, action=None, start=None, end=None,
+                               page=1, size=20, user="admin", db=s)
+    assert "items" in a and "total" in a
+    s.close()

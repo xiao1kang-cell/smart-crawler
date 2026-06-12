@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 from .. import spine_queue
 from ..audit import record_audit
 from ..db import get_db
-from ..models import SpineJob, Dataset, ExtractedRecord, RawSnapshot, Usage
+from ..models import SpineJob, Dataset, ExtractedRecord, RawSnapshot, Usage, AdminAuditLog
+from ..spine_queue import HEARTBEAT_INTERVAL, _backoff
 from .routes import require_user, _require_super_admin
 
 router = APIRouter(prefix="/api/admin/spine", tags=["admin · spine"])
@@ -250,3 +251,66 @@ def usage_by_tenant(user: str = Depends(require_user),
             .group_by(Usage.workspace_id).all())
     return {"items": [{"workspace_id": w, "credits": int(c or 0), "calls": n}
                       for w, c, n in rows]}
+
+
+@router.get("/health")
+def health(user: str = Depends(require_user),
+           db: Session = Depends(get_db)) -> dict:
+    _require_super_admin(user, db)
+    last_hb = db.query(func.max(SpineJob.heartbeat_at)).scalar()
+    last_success = (db.query(func.max(SpineJob.finished_at))
+                    .filter(SpineJob.status == "success").scalar())
+    recent = None
+    for t in (last_hb, last_success):
+        if t and (recent is None or t > recent):
+            recent = t
+    if recent is None:
+        status = "unknown"
+    elif (datetime.utcnow() - recent).total_seconds() <= _STUCK_SEC:
+        status = "running"
+    else:
+        status = "idle"
+    stuck = (db.query(SpineJob)
+             .filter(SpineJob.status == "running",
+                     SpineJob.heartbeat_at < datetime.utcnow() - timedelta(seconds=_STUCK_SEC))
+             .count())
+    return {"worker_status": status,
+            "last_activity_at": recent.isoformat() if recent else None,
+            "reclaim_hint": {"stuck_running": stuck},
+            "pending": db.query(SpineJob).filter(SpineJob.status == "pending").count()}
+
+
+@router.get("/config")
+def config(user: str = Depends(require_user),
+           db: Session = Depends(get_db)) -> dict:
+    _require_super_admin(user, db)
+    return {"heartbeat_interval": HEARTBEAT_INTERVAL,
+            "stuck_timeout_sec": _STUCK_SEC,
+            "backoff": {str(i): int(_backoff(i).total_seconds()) for i in (1, 2, 3)}}
+
+
+@router.get("/audit")
+def audit_list(actor: str | None = None, action: str | None = None,
+               start: str | None = None, end: str | None = None,
+               page: int = 1, size: int = 20,
+               user: str = Depends(require_user),
+               db: Session = Depends(get_db)) -> dict:
+    _require_super_admin(user, db)
+    q = db.query(AdminAuditLog)
+    if actor:
+        q = q.filter(AdminAuditLog.actor_name == actor)
+    if action:
+        q = q.filter(AdminAuditLog.action == action)
+    if start:
+        q = q.filter(AdminAuditLog.created_at >= datetime.fromisoformat(start))
+    if end:
+        q = q.filter(AdminAuditLog.created_at <= datetime.fromisoformat(end))
+    total = q.count()
+    rows = (q.order_by(AdminAuditLog.id.desc())
+            .offset((page - 1) * size).limit(size).all())
+    return {"total": total, "items": [
+        {"id": r.id, "actor_name": r.actor_name, "action": r.action,
+         "target_type": r.target_type, "target_id": r.target_id,
+         "detail": r.detail, "ip": r.ip,
+         "created_at": r.created_at.isoformat() if r.created_at else None}
+        for r in rows]}
