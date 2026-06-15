@@ -89,6 +89,14 @@ class FetchResult:
     failure: FailureInfo | None = None
     attempt: int = 1
 
+    def json(self):
+        """把 text 解析为 JSON；失败返回 None（不抛错）。"""
+        import json as _json
+        try:
+            return _json.loads(self.text)
+        except Exception:
+            return None
+
 
 class FetchMiddleware(Protocol):
     def before_request(self, fetcher: "CrawlerFetcher", url: str,
@@ -116,7 +124,7 @@ class CrawlerFetcher:
             request_kwargs = dict(kwargs)
             for mw in self.middlewares:
                 mw.before_request(self, url, request_kwargs)
-            result = self._get_once(url, attempt=attempt, **request_kwargs)
+            result = self._request_once("GET", url, attempt=attempt, **request_kwargs)
             for mw in self.middlewares:
                 mw.after_response(self, result)
             last = result
@@ -139,7 +147,32 @@ class CrawlerFetcher:
             "unknown", STAGE_FETCH, "fetch produced no result", True,
             "检查 fetcher 配置"))
 
-    def _get_once(self, url: str, *, attempt: int = 1, **kwargs) -> FetchResult:
+    def request(self, method: str, url: str, **kwargs) -> FetchResult:
+        attempts = max(1, self.context.retries + 1)
+        last: FetchResult | None = None
+        for attempt in range(1, attempts + 1):
+            request_kwargs = dict(kwargs)
+            for mw in self.middlewares:
+                mw.before_request(self, url, request_kwargs)
+            result = self._request_once(method, url, attempt=attempt, **request_kwargs)
+            for mw in self.middlewares:
+                mw.after_response(self, result)
+            last = result
+            if result.ok:
+                self._count(result)
+                return result
+            if not _should_retry(self.context, result, attempt, attempts):
+                break
+            if self.context.rotate_proxy_on_retry:
+                time.sleep(min(2 * attempt, 5))
+        return last or FetchResult(ok=False, url=url, failure=FailureInfo(
+            "unknown", STAGE_FETCH, "fetch produced no result", True,
+            "检查 fetcher 配置"))
+
+    def post(self, url: str, **kwargs) -> FetchResult:
+        return self.request("POST", url, **kwargs)
+
+    def _request_once(self, method: str, url: str, *, attempt: int = 1, **kwargs) -> FetchResult:
         ctx = self.context
         timeout = int(kwargs.pop("timeout", ctx.timeout))
         source = kwargs.pop("source", ctx.source)
@@ -151,7 +184,7 @@ class CrawlerFetcher:
             sess.proxies = {"http": proxy, "https": proxy}
         started = time.time()
         try:
-            resp = sess.get(url, timeout=timeout, **kwargs)
+            resp = sess.request(method, url, timeout=timeout, **kwargs)
             duration_ms = int((time.time() - started) * 1000)
             text = resp.text or ""
             content = resp.content or b""
