@@ -45,7 +45,7 @@ VOLUME_DISCOUNT_THRESHOLD = 10_000_000
 PRICE_PER_1K_RECORDS_BULK = 0.8
 
 
-def record_usage(api_key_id: int, endpoint: str, record_count: int,
+def record_usage(api_key_id: int | None, endpoint: str, record_count: int,
                  bytes_returned: int, duration_ms: int,
                  credits_used: int | None = None,
                  workspace_id: int | None = None,

@@ -45,3 +45,12 @@ def test_record_crawl_usage_never_raises(monkeypatch):
     monkeypatch.setattr(runner, "record_usage", boom)
     runner._record_crawl_usage(workspace_id=1, products_count=1,
                                duration_sec=1.0, api_calls=1, browser_opens=0)
+    # 通过条件：record_usage 抛错时 _record_crawl_usage 不上浮异常
+
+
+def test_record_crawl_usage_credits_ceiling(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(runner, "record_usage", lambda **kw: captured.update(kw))
+    runner._record_crawl_usage(workspace_id=1, products_count=50_000,
+                               duration_sec=10.0, api_calls=0, browser_opens=0)
+    assert captured["credits_used"] == 10_000
