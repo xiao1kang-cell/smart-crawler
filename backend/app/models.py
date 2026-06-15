@@ -413,6 +413,84 @@ class CrawlJob(Base):
     success_rate = Column(Float)
     duration_sec = Column(Float)
     error = Column(Text)
+    failure_code = Column(String, index=True)
+    failure_stage = Column(String, index=True)
+    failure_detail = Column(Text)
+    retryable = Column(Boolean)
+    suggested_action = Column(Text)
+
+
+class CrawlUrl(Base):
+    """URL Frontier —— 记录发现、抓取、解析生命周期，支撑增量和失败诊断。"""
+
+    __tablename__ = "crawl_urls"
+    __table_args__ = (UniqueConstraint("site", "url_hash",
+                                       name="uq_crawl_url_site_hash"),)
+
+    id = Column(Integer, primary_key=True)
+    site = Column(String, index=True)
+    url_hash = Column(String, index=True)
+    url = Column(Text)
+    kind = Column(String, index=True)                # sitemap/category/product/search
+    source = Column(String, index=True)              # sitemap/robots/homepage/search/api
+    status = Column(String, default="pending", index=True)
+    http_status = Column(Integer)
+    failure_code = Column(String, index=True)
+    failure_stage = Column(String, index=True)
+    failure_detail = Column(Text)
+    retryable = Column(Boolean)
+    attempts = Column(Integer, default=0)
+    priority = Column(Integer, default=100, index=True)
+    first_seen_at = Column(DateTime, default=datetime.utcnow, index=True)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, index=True)
+    last_fetched_at = Column(DateTime)
+    next_retry_at = Column(DateTime, index=True)
+    final_url = Column(Text)
+    fetcher = Column(String)
+    content_hash = Column(String, index=True)
+
+
+class CrawlFailure(Base):
+    """结构化失败事件 —— 让页面能展示失败原因分布和下一步动作。"""
+
+    __tablename__ = "crawl_failures"
+
+    id = Column(Integer, primary_key=True)
+    site = Column(String, index=True)
+    job_id = Column(Integer, ForeignKey("crawl_jobs.id"), index=True)
+    url = Column(Text)
+    stage = Column(String, index=True)
+    code = Column(String, index=True)
+    detail = Column(Text)
+    retryable = Column(Boolean)
+    suggested_action = Column(Text)
+    http_status = Column(Integer)
+    fetcher = Column(String)
+    proxy_tier = Column(String)
+    occurred_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ProxyHealth(Base):
+    """代理健康状态 —— 持久化代理连通性和失败类型。"""
+
+    __tablename__ = "proxy_health"
+    __table_args__ = (UniqueConstraint("proxy_hash", name="uq_proxy_health_hash"),)
+
+    id = Column(Integer, primary_key=True)
+    proxy_hash = Column(String, index=True)
+    proxy_redacted = Column(String)
+    tier = Column(String, index=True)
+    status = Column(String, default="unknown", index=True)  # healthy/degraded/blocked/down
+    success_count = Column(Integer, default=0)
+    failure_count = Column(Integer, default=0)
+    consecutive_failures = Column(Integer, default=0)
+    last_success_at = Column(DateTime)
+    last_failure_at = Column(DateTime)
+    last_checked_at = Column(DateTime, index=True)
+    last_failure_code = Column(String, index=True)
+    last_failure_detail = Column(Text)
+    blocked_until = Column(DateTime, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow)
 
 
 class OnDemandJob(Base):
@@ -464,6 +542,9 @@ class Usage(Base):
     credits_used = Column(Integer, default=0)        # 该次调用消耗的 credits
     bytes_returned = Column(Integer, default=0)      # 返回字节数（用于带宽计费选项）
     duration_ms = Column(Integer)                    # 调用耗时（用于 SLA 监控）
+    api_calls = Column(Integer, nullable=False, default=0)        # 成功的 HTTP 请求次数
+    browser_opens = Column(Integer, nullable=False, default=0)    # 成功的浏览器渲染次数
+    pages_fetched = Column(Integer, nullable=False, default=0)    # 成功抓取页面数 = 前两者之和
     occurred_at = Column(DateTime, default=datetime.utcnow, index=True)
 
 
