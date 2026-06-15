@@ -21,7 +21,6 @@ import random
 import re
 from concurrent.futures import ThreadPoolExecutor
 
-from curl_cffi import requests as creq
 from selectolax.parser import HTMLParser
 
 from ..config import get_sites
@@ -51,19 +50,19 @@ class MagentoCrawler(BaseCrawler):
         self.limit = self._resolve_limit(DEFAULT_LIMIT)
         self.scan_cap = int(hints.get("scan_cap", DEFAULT_SCAN_CAP))
 
-    def _session(self) -> creq.Session:
-        s = creq.Session(impersonate="chrome")
-        s.headers.update({"User-Agent": self.ua(),
-                          "Accept-Language": "en-US,en;q=0.9"})
-        if self.proxy:
-            s.proxies = {"http": self.proxy, "https": self.proxy}
-        return s
+    def _headers(self) -> dict:
+        """构造定制请求头（每请求透传给 CrawlerFetcher.get）。"""
+        return {
+            "User-Agent": self.ua(),
+            "Accept-Language": "en-US,en;q=0.9",
+        }
 
-    def _discover_sitemap(self, sess: creq.Session) -> str | None:
+    def _discover_sitemap(self, fetcher) -> str | None:
         """从 robots.txt 找 Sitemap，再退化到 Magento 常见路径。"""
         try:
-            rb = sess.get(self.base + "/robots.txt", timeout=20).text
-            m = re.findall(r"(?im)^\s*Sitemap:\s*(\S+)", rb)
+            res = fetcher.get(self.base + "/robots.txt",
+                              headers=self._headers(), timeout=20)
+            m = re.findall(r"(?im)^\s*Sitemap:\s*(\S+)", res.text or "")
             if m:
                 return m[0].strip()
         except Exception:
@@ -71,19 +70,21 @@ class MagentoCrawler(BaseCrawler):
         for p in ("/media/sitemap/sitemap.xml", "/sitemap.xml",
                   "/pub/media/sitemap.xml", "/sitemap/sitemap.xml"):
             try:
-                r = sess.get(self.base + p, timeout=20)
-                if r.status_code == 200 and "<loc>" in r.text:
+                res = fetcher.get(self.base + p,
+                                  headers=self._headers(), timeout=20)
+                if (res.status or 0) == 200 and "<loc>" in (res.text or ""):
                     return self.base + p
             except Exception:
                 continue
         return None
 
-    def _sitemap_locs(self, sess: creq.Session, url: str, depth: int = 0) -> list[str]:
+    def _sitemap_locs(self, fetcher, url: str, depth: int = 0) -> list[str]:
         """递归展开 sitemap（索引 / .gz / 普通），返回全部 <loc>。"""
         if depth > 3:
             return []
         try:
-            raw = sess.get(url, timeout=30).content
+            res = fetcher.get(url, headers=self._headers(), timeout=30)
+            raw = res.content or b""
         except Exception:
             return []
         try:
@@ -96,21 +97,21 @@ class MagentoCrawler(BaseCrawler):
         if sub and len(sub) == len(locs):            # 纯 sitemap 索引，递归
             out: list[str] = []
             for s in sub[:12]:
-                out.extend(self._sitemap_locs(sess, s, depth + 1))
+                out.extend(self._sitemap_locs(fetcher, s, depth + 1))
             return out
         return locs
 
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        sess = self._session()
+        fetcher = self.make_fetcher(kind="product", source="magento")
 
-        sitemap = self.sitemap_hint or self._discover_sitemap(sess)
+        sitemap = self.sitemap_hint or self._discover_sitemap(fetcher)
         if not sitemap:
             result.notes.append("⚠ 未发现 sitemap —— 无法采集")
             return result
         result.notes.append(f"sitemap: {sitemap}")
 
-        locs = self._sitemap_locs(sess, sitemap)
+        locs = self._sitemap_locs(fetcher, sitemap)
         cands = [u for u in locs
                  if not u.endswith((".xml", ".xml.gz"))
                  and not _SKIP_RE.search(u)
@@ -133,6 +134,8 @@ class MagentoCrawler(BaseCrawler):
         hit = 0
         scanned = 0
         batch = WORKERS * 6
+        # 把 fetcher 存为实例变量，供线程池内 _fetch_one 使用
+        self._fetcher = fetcher
         with ThreadPoolExecutor(max_workers=WORKERS) as pool:
             for i in range(0, len(cands), batch):
                 for row in pool.map(self._fetch_one, cands[i:i + batch]):
@@ -148,14 +151,12 @@ class MagentoCrawler(BaseCrawler):
     def _fetch_one(self, url: str) -> dict | None:
         """抓单页并判别 —— 是商品返回 row，否则 None。"""
         try:
-            resp = creq.get(url, impersonate="chrome", timeout=25,
-                            proxies=({"http": self.proxy, "https": self.proxy}
-                                     if self.proxy else None))
+            res = self._fetcher.get(url, headers=self._headers(), timeout=25)
         except Exception:
             return None
-        if resp.status_code != 200:
+        if (res.status or 0) != 200:
             return None
-        html = resp.text
+        html = res.text or ""
         data = GenericCrawler._from_jsonld(html) or {}
         tree = HTMLParser(html)
 
