@@ -120,6 +120,9 @@ def get_usage_summary(api_key_id: int, days: int = 30) -> dict:
         total_credits = sum(getattr(r, "credits_used", 0) or 0 for r in rows)
         total_calls = len(rows)
         total_bytes = sum(r.bytes_returned or 0 for r in rows)
+        total_api_calls = sum(getattr(r, "api_calls", 0) or 0 for r in rows)
+        total_browser_opens = sum(getattr(r, "browser_opens", 0) or 0 for r in rows)
+        total_pages_fetched = sum(getattr(r, "pages_fetched", 0) or 0 for r in rows)
         record_cost_usd = _price_for(total_records)
         credit_cost_usd = _price_for(total_credits)
         quota = None
@@ -153,4 +156,7 @@ def get_usage_summary(api_key_id: int, days: int = 30) -> dict:
             "estimated_cost_usd_by_credits": round(credit_cost_usd, 2),
             "estimated_cost_usd_by_records": round(record_cost_usd, 2),
             "by_endpoint": by_endpoint,
+            "total_api_calls": total_api_calls,
+            "total_browser_opens": total_browser_opens,
+            "total_pages_fetched": total_pages_fetched,
         }
