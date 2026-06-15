@@ -159,6 +159,8 @@ def scrape_url(
             cache_hit=False,
             source="advanced" if advanced_mode else "live",
             duration_ms=_now_ms(started), records=1,
+            api_calls=0 if advanced_mode else 1,
+            browser_opens=1 if advanced_mode else 0,
         )
         return {
             "success": True,
@@ -440,14 +442,19 @@ def extract_structured_data(
     started = time.perf_counter()
     items = []
     credits = 0
+    api_calls = 0
+    browser_opens = 0
     for url in urls[:25]:
         scraped = scrape_url(db, url, formats=["structured", "markdown"])
-        credits += int((scraped.get("usage") or {}).get("credits_used") or 0)
+        u = scraped.get("usage") or {}
+        credits += int(u.get("credits_used") or 0)
+        api_calls += int(u.get("api_calls") or 0)
+        browser_opens += int(u.get("browser_opens") or 0)
         data = scraped.get("data") or {}
         items.append({
             "url": url,
             "success": bool(scraped.get("success")),
-            "source": (scraped.get("usage") or {}).get("source"),
+            "source": u.get("source"),
             "data": _shape_to_schema(data, schema or {}),
             "warnings": scraped.get("warnings", []),
         })
@@ -459,7 +466,9 @@ def extract_structured_data(
         "usage": UsageInfo(credits_used=credits,
                            source="mixed",
                            duration_ms=_now_ms(started),
-                           records=len(items)).to_dict(),
+                           records=len(items),
+                           api_calls=api_calls,
+                           browser_opens=browser_opens).to_dict(),
         "warnings": [],
     }
 
