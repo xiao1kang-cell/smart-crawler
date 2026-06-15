@@ -15,7 +15,6 @@ import gzip
 import os
 import re
 
-from curl_cffi import requests as creq
 from selectolax.parser import HTMLParser
 
 from .base import BaseCrawler, CrawlResult
@@ -35,19 +34,17 @@ class HomaryCrawler(BaseCrawler):
         self.limit = self._resolve_limit(DEFAULT_LIMIT, limit)
         self.cc = site.country.lower()
 
-    def _session(self) -> creq.Session:
-        s = creq.Session(impersonate="chrome")
-        s.headers.update({"User-Agent": self.ua()})
-        if self.proxy:
-            s.proxies = {"http": self.proxy, "https": self.proxy}
-        return s
+    def _headers(self) -> dict:
+        """构造定制请求头（每请求透传给 CrawlerFetcher.get）。"""
+        return {"User-Agent": self.ua()}
 
-    def _sitemap_urls(self, sess: creq.Session, kind: str) -> list[str]:
+    def _sitemap_urls(self, fetcher, kind: str) -> list[str]:
         """取某类 sitemap 的全部 <loc>。kind: item / best_sellers。"""
         base = self.site.url.rstrip("/")
         url = f"{base}/sitemaps/google_sitemap_{kind}_{self.cc}.xml.gz"
         try:
-            raw = sess.get(url, timeout=30).content
+            res = fetcher.get(url, headers=self._headers(), timeout=30)
+            raw = res.content
             try:
                 xml = gzip.decompress(raw).decode("utf-8", "ignore")
             except (OSError, gzip.BadGzipFile):
@@ -58,10 +55,10 @@ class HomaryCrawler(BaseCrawler):
 
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        sess = self._session()
+        fetcher = self.make_fetcher(kind="product", source="homary")
 
-        item_urls = [u for u in self._sitemap_urls(sess, "item") if "/item/" in u]
-        best_ids = {m.group(1) for u in self._sitemap_urls(sess, "best_sellers")
+        item_urls = [u for u in self._sitemap_urls(fetcher, "item") if "/item/" in u]
+        best_ids = {m.group(1) for u in self._sitemap_urls(fetcher, "best_sellers")
                     if (m := _ID_RE.search(u))}
         total = len(item_urls)
         targets = item_urls[: self.limit]
@@ -71,7 +68,7 @@ class HomaryCrawler(BaseCrawler):
 
         for url in targets:
             try:
-                row = self._parse_product(sess, url, best_ids)
+                row = self._parse_product(fetcher, url, best_ids)
                 if row:
                     result.products.append(row)
             except Exception as exc:                # 单页失败不影响整体
@@ -79,12 +76,13 @@ class HomaryCrawler(BaseCrawler):
             self.sleep()
         return result
 
-    def _parse_product(self, sess: creq.Session, url: str, best_ids: set) -> dict | None:
+    def _parse_product(self, fetcher, url: str, best_ids: set) -> dict | None:
         m = _ID_RE.search(url)
         if not m:
             return None
         pid = m.group(1)
-        html = sess.get(url, timeout=30).text
+        res = fetcher.get(url, headers=self._headers(), timeout=30)
+        html = res.text or ""
         self.snapshot(pid, html)                   # 原始商品页归档
         tree = HTMLParser(html)
 
