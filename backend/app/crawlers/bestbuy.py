@@ -23,8 +23,6 @@ import os
 import re
 import time
 
-from curl_cffi import requests as creq
-
 from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
 
@@ -61,28 +59,28 @@ class BestBuyCrawler(BaseCrawler):
         self.limit = self._resolve_limit(DEFAULT_LIMIT, limit)
         self.delay = max(self.delay, DELAY)
 
-    def _session(self) -> creq.Session:
-        s = creq.Session(impersonate="chrome131")
-        s.headers.update({
+    def _headers(self) -> dict:
+        """构造定制请求头（每请求透传给 CrawlerFetcher.get）。"""
+        return {
             "User-Agent": self.ua(),
             "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
             "Referer": self.base + "/",
             "Sec-Fetch-Mode": "navigate",
-        })
-        if self.proxy:
-            s.proxies = {"http": self.proxy, "https": self.proxy}
-        try:
-            s.get(self.base + "/", timeout=20)
-        except Exception:
-            pass
-        return s
+        }
 
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        sess = self._session()
+        fetcher = self.make_fetcher(kind="product", source="bestbuy")
         urls: list[str] = []
         seen: set[str] = set()
+
+        # Warmup：访问首页建立会话 / 预热 Akamai cookie（计入 api_calls）
+        try:
+            fetcher.get(self.base + "/", headers=self._headers(), timeout=20,
+                        impersonate="chrome131")
+        except Exception:
+            pass
 
         for kw in _HOME_KW:
             if len(urls) >= self.limit * 2:
@@ -91,17 +89,17 @@ class BestBuyCrawler(BaseCrawler):
                 u = (f"{self.base}/site/searchpage.jsp?"
                      f"st={kw.replace(' ', '+')}&cp={pg}&intl=nosplash")
                 try:
-                    r = sess.get(u, timeout=30)
+                    res = fetcher.get(u, headers=self._headers(), timeout=30,
+                                      impersonate="chrome131")
                 except Exception:
                     break
-                if r.status_code != 200 or self._blocked(r.text):
+                if (res.status or 0) != 200 or self._blocked(res.text):
                     time.sleep(40)
-                    sess = self._session()
                     break
                 new = 0
                 # 同时尝试新格式（JSON skuId）和旧格式（URL .p?skuId=）
-                skus_found = set(_JSON_SKU_RE.findall(r.text))
-                skus_found.update(_PDP_RE.findall(r.text))
+                skus_found = set(_JSON_SKU_RE.findall(res.text))
+                skus_found.update(_PDP_RE.findall(res.text))
                 for sku in skus_found:
                     pdp = f"{self.base}/site/sku/{sku}.p?skuId={sku}"
                     if pdp in seen:
@@ -122,21 +120,21 @@ class BestBuyCrawler(BaseCrawler):
         for i, url in enumerate(urls[: self.limit * 2]):
             if ok >= self.limit:
                 break
-            if i and i % 40 == 0:
-                sess = self._session()
+            # session rotate per 50 items：由 ProxyMiddleware 每请求轮换代理替代，
+            # CrawlerFetcher 每次 _request_once 已建立新 Session，无需手动 rotate。
             try:
-                r = sess.get(url, timeout=30)
-                html = r.text or ""
+                res = fetcher.get(url, headers=self._headers(), timeout=30,
+                                  impersonate="chrome131")
+                html = res.text or ""
             except Exception:
                 self.sleep()
                 continue
-            if r.status_code in (403, 429) or self._blocked(html):
+            if (res.status or 0) in (403, 429) or self._blocked(html):
                 denied += 1
                 streak += 1
                 if streak >= 6:
                     raise BlockedError(f"bestbuy 熔断 ok={ok}")
                 time.sleep(60 * streak)
-                sess = self._session()
                 continue
             streak = 0
             row = self._parse(html, url)
