@@ -122,6 +122,10 @@ def _record_mcp_usage(api_key_id: int, tool_name: str, result, duration_ms: int)
             credits_used=_infer_credits(result),
             bytes_returned=len(payload),
             duration_ms=duration_ms,
+            api_calls=int((result.get("usage") or {}).get("api_calls") or 0),
+            browser_opens=int((result.get("usage") or {}).get("browser_opens") or 0),
+            pages_fetched=int((result.get("usage") or {}).get("api_calls") or 0)
+            + int((result.get("usage") or {}).get("browser_opens") or 0),
         )
     except Exception as exc:
         logger.warning(
@@ -705,7 +709,9 @@ def query_dataset(dataset: str, query: str | None = None,
     s = SessionLocal()
     try:
         ws = _ws_id_from_ctx(s)
-        ds = spine.get_or_create_dataset(s, dataset, workspace_id=ws)
+        ds = spine.find_dataset(s, dataset, workspace_id=ws)
+        if ds is None:
+            return spine.empty_dataset_response(dataset)
         return spine.query_dataset(s, ds, query=query, entity_type=entity_type,
                                    include_staging=include_staging, limit=limit)
     finally:

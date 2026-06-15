@@ -35,6 +35,8 @@ class UsageInfo:
     source: str = "warehouse"  # warehouse / live / queued / unsupported
     duration_ms: int = 0
     records: int = 0
+    api_calls: int = 0
+    browser_opens: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -43,6 +45,8 @@ class UsageInfo:
             "source": self.source,
             "duration_ms": self.duration_ms,
             "records": self.records,
+            "api_calls": self.api_calls,
+            "browser_opens": self.browser_opens,
         }
 
 

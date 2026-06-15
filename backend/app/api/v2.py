@@ -502,7 +502,11 @@ def dataset_query(req: DatasetQueryRequest,
     """查通用数据集(extracted_records)。默认只返 main;include_staging=true 带 staging。"""
     _require_scope(db, authorization, x_api_key, "crawler:read")
     ws = _v2_ws_id(db, authorization, x_api_key)
-    ds = spine.get_or_create_dataset(db, req.dataset, workspace_id=ws)
+    ds = spine.find_dataset(db, req.dataset, workspace_id=ws)
+    if ds is None:
+        out = spine.empty_dataset_response(req.dataset)
+        _meter(db, authorization, x_api_key, "/api/v2/dataset/query", out)
+        return out
     out = spine.query_dataset(db, ds, query=req.query, entity_type=req.entity_type,
                               include_staging=req.include_staging, limit=req.limit)
     _meter(db, authorization, x_api_key, "/api/v2/dataset/query", out)
@@ -545,6 +549,10 @@ def _meter(db: Session, authorization: str, x_api_key: str,
             credits_used=int(usage.get("credits_used") or record_count),
             bytes_returned=bytes_returned,
             duration_ms=duration_ms,
+            api_calls=int(usage.get("api_calls") or 0),
+            browser_opens=int(usage.get("browser_opens") or 0),
+            pages_fetched=int(usage.get("api_calls") or 0)
+            + int(usage.get("browser_opens") or 0),
         )
     except Exception:
         # Metering must never break the data API.

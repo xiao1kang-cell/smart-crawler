@@ -142,7 +142,11 @@ def _record_execute_usage(api_key_id, workspace_id, out) -> None:
         record_usage(api_key_id=api_key_id, endpoint="/spine/worker/execute",
                      record_count=1, bytes_returned=0, duration_ms=0,
                      credits_used=int(out.get("credits_used") or 0),
-                     workspace_id=workspace_id)
+                     workspace_id=workspace_id,
+                     api_calls=int(out.get("api_calls") or 0),
+                     browser_opens=int(out.get("browser_opens") or 0),
+                     pages_fetched=int(out.get("api_calls") or 0)
+                     + int(out.get("browser_opens") or 0))
     except Exception:
         # 计费绝不阻断 worker 落库(与同步 _meter 容错一致)
         pass

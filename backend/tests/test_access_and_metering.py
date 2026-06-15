@@ -77,6 +77,9 @@ def test_mcp_usage_records_tool_endpoint(monkeypatch):
         "credits_used": 1,
         "bytes_returned": calls[0]["bytes_returned"],
         "duration_ms": 12,
+        "api_calls": 0,
+        "browser_opens": 0,
+        "pages_fetched": 0,
     }]
     assert calls[0]["bytes_returned"] > 0
 
