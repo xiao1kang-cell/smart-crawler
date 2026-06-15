@@ -5,6 +5,7 @@ import { asList, fmtDate, fmtNumber } from '../api/client'
 import { billingUsage, createApiKey, deleteApiKey, listApiKeys, updateApiKey } from '../api/settings'
 import { useAuthStore } from '../stores/auth'
 import { useWorkspaceStore } from '../stores/workspace'
+import PageLoading from '../components/common/PageLoading.vue'
 
 const auth = useAuthStore()
 const workspace = useWorkspaceStore()
@@ -15,6 +16,7 @@ const profileForm = ref({ display_name: '', email: '' })
 const passwordForm = ref({ old_password: '', new_password: '', confirm_password: '' })
 const keyForm = ref({ name: '', scopes: 'crawler:read,crawler:crawl' })
 const currentWorkspaceId = ref('')
+const loading = ref(false)
 const message = ref('')
 const error = ref('')
 
@@ -41,16 +43,24 @@ async function guarded(fn: () => Promise<void>) {
 }
 
 async function load() {
-  await Promise.all([auth.loadMe(), workspace.load()])
-  currentWorkspaceId.value = String(auth.workspaceId || workspace.currentWorkspace?.id || '')
-  profileForm.value.display_name = auth.user?.display_name || ''
-  profileForm.value.email = auth.user?.email || ''
-  const [keysData, usageData] = await Promise.all([
-    listApiKeys().catch(() => ({ keys: [] })),
-    billingUsage().catch(() => null)
-  ])
-  apiKeys.value = asList(keysData, ['keys', 'items'])
-  usage.value = usageData
+  loading.value = true
+  error.value = ''
+  try {
+    await Promise.all([auth.loadMe(), workspace.load()])
+    currentWorkspaceId.value = String(auth.workspaceId || workspace.currentWorkspace?.id || '')
+    profileForm.value.display_name = auth.user?.display_name || ''
+    profileForm.value.email = auth.user?.email || ''
+    const [keysData, usageData] = await Promise.all([
+      listApiKeys().catch(() => ({ keys: [] })),
+      billingUsage().catch(() => null)
+    ])
+    apiKeys.value = asList(keysData, ['keys', 'items'])
+    usage.value = usageData
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    loading.value = false
+  }
 }
 
 async function switchWorkspace() {
@@ -116,7 +126,9 @@ onMounted(load)
     <UAlert v-if="error" color="error" variant="soft" :title="error" class="mb-4" />
     <UAlert v-if="message" color="success" variant="soft" :title="message" class="mb-4" />
 
-    <div class="subnav-layout">
+    <PageLoading v-if="loading && !auth.user" title="加载账号信息..." note="正在同步个人资料、工作区和接口密钥" />
+
+    <div v-else class="subnav-layout">
       <nav class="subnav" aria-label="账号二级菜单">
         <button v-for="item in menu" :key="item.key" class="subnav-item" :class="{ active: section === item.key }" @click="section = item.key">
           <span>{{ item.label }}</span>
@@ -199,7 +211,7 @@ onMounted(load)
             <div class="info">
               <b>{{ key.name }}</b>
               <span class="key-prefix">{{ key.key_prefix }}</span>
-              <span class="meta">{{ fmtNumber(key.total_calls ?? key.request_count) }} 次调用 · {{ fmtNumber(key.total_bytes ?? key.bytes) }} bytes</span>
+              <span class="meta">{{ fmtNumber(key.total_calls ?? key.request_count) }} 次调用 · {{ fmtNumber(key.total_api_calls || 0) }} API · {{ fmtNumber(key.total_browser_opens || 0) }} 浏览器 · {{ fmtNumber(key.total_pages_fetched || 0) }} 页 · {{ fmtNumber(key.total_bytes ?? key.bytes) }} bytes</span>
             </div>
           </div>
           <div v-if="!(usage?.keys || []).length" class="empty-state">暂无用量记录</div>

@@ -15,15 +15,16 @@ const filters = ref({ endpoint: '', start: '', end: '' })
 async function load() {
   loading.value = true
   error.value = ''
+  const params = {
+    endpoint: filters.value.endpoint,
+    start: filters.value.start,
+    end: filters.value.end
+  }
   try {
     const [s, k, t] = await Promise.all([
-      usageSummary({
-        endpoint: filters.value.endpoint,
-        start: filters.value.start,
-        end: filters.value.end
-      }),
-      usageByKey(),
-      usageByTenant()
+      usageSummary(params),
+      usageByKey(params),
+      usageByTenant(params)
     ])
     summary.value = s || {}
     byKey.value = k?.items ?? []
@@ -58,6 +59,9 @@ onMounted(load)
       <StatCard label="总积分消耗" :value="fmtNumber(summary.total_credits)" />
       <StatCard label="总记录数" :value="fmtNumber(summary.total_records)" />
       <StatCard label="明细行数" :value="fmtNumber(summary.rows || 0)" />
+      <StatCard label="API 调用次数" :value="fmtNumber(summary.total_api_calls || 0)" />
+      <StatCard label="浏览器打开次数" :value="fmtNumber(summary.total_browser_opens || 0)" />
+      <StatCard label="抓取页面数" :value="fmtNumber(summary.total_pages_fetched || 0)" />
     </div>
 
     <section class="block">
@@ -68,17 +72,25 @@ onMounted(load)
             <tr>
               <th>API Key ID</th>
               <th>积分</th>
+              <th>记录数</th>
               <th>调用次数</th>
+              <th>API调用</th>
+              <th>浏览器</th>
+              <th>页面数</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="row in byKey" :key="row.api_key_id">
               <td>{{ row.api_key_id }}</td>
               <td>{{ fmtNumber(row.credits) }}</td>
+              <td>{{ fmtNumber(row.records) }}</td>
               <td>{{ fmtNumber(row.calls) }}</td>
+              <td>{{ fmtNumber(row.api_calls || 0) }}</td>
+              <td>{{ fmtNumber(row.browser_opens || 0) }}</td>
+              <td>{{ fmtNumber(row.pages_fetched || 0) }}</td>
             </tr>
             <tr v-if="!byKey.length">
-              <td colspan="3" class="empty">{{ loading ? '加载中…' : '暂无数据' }}</td>
+              <td colspan="7" class="empty">{{ loading ? '加载中…' : '暂无数据' }}</td>
             </tr>
           </tbody>
         </table>
@@ -93,17 +105,25 @@ onMounted(load)
             <tr>
               <th>租户 (workspace_id)</th>
               <th>积分</th>
+              <th>记录数</th>
               <th>调用次数</th>
+              <th>API调用</th>
+              <th>浏览器</th>
+              <th>页面数</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="row in byTenant" :key="row.workspace_id">
               <td>{{ row.workspace_id }}</td>
               <td>{{ fmtNumber(row.credits) }}</td>
+              <td>{{ fmtNumber(row.records) }}</td>
               <td>{{ fmtNumber(row.calls) }}</td>
+              <td>{{ fmtNumber(row.api_calls || 0) }}</td>
+              <td>{{ fmtNumber(row.browser_opens || 0) }}</td>
+              <td>{{ fmtNumber(row.pages_fetched || 0) }}</td>
             </tr>
             <tr v-if="!byTenant.length">
-              <td colspan="3" class="empty">{{ loading ? '加载中…' : '暂无数据' }}</td>
+              <td colspan="7" class="empty">{{ loading ? '加载中…' : '暂无数据' }}</td>
             </tr>
           </tbody>
         </table>
@@ -183,7 +203,7 @@ onMounted(load)
 
 .stat-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 240px));
+  grid-template-columns: repeat(6, minmax(0, 240px));
   gap: 12px;
 }
 
