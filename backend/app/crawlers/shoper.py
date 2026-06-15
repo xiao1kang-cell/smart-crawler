@@ -20,7 +20,6 @@ import json
 import os
 import re
 
-from curl_cffi import requests as creq
 from selectolax.parser import HTMLParser
 
 from ..config import get_sites
@@ -53,23 +52,20 @@ class ShoperCrawler(BaseCrawler):
         # 用户可在 sites.yaml 显式指定类别 URL；否则自动从主页发现
         self.category_urls: list[str] = hints.get("category_urls") or []
 
-    def _session(self) -> creq.Session:
-        s = creq.Session(impersonate="chrome")
-        s.headers.update({
+    def _headers(self) -> dict:
+        """构造定制请求头（每请求透传给 CrawlerFetcher.get）。"""
+        return {
             "User-Agent": self.ua(),
             "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
-        })
-        if self.proxy:
-            s.proxies = {"http": self.proxy, "https": self.proxy}
-        return s
+        }
 
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        sess = self._session()
+        fetcher = self.make_fetcher(kind="product", source="shoper")
 
         # 1. 拿类别列表
         if not self.category_urls:
-            self.category_urls = self._discover_categories(sess)
+            self.category_urls = self._discover_categories(fetcher)
             result.notes.append(
                 f"自动发现 {len(self.category_urls)} 个类别（主页 menu）")
         else:
@@ -82,7 +78,7 @@ class ShoperCrawler(BaseCrawler):
                 "配置 category_urls")
 
         # 2. 从类别页抓商品 slug
-        product_urls = self._collect_product_urls(sess, self.category_urls)
+        product_urls = self._collect_product_urls(fetcher, self.category_urls)
         result.notes.append(
             f"从类别页收集 {len(product_urls)} 个商品候选 URL")
 
@@ -95,7 +91,7 @@ class ShoperCrawler(BaseCrawler):
         ok = 0
         for url in targets:
             try:
-                row = self._parse_product(sess, url)
+                row = self._parse_product(fetcher, url)
                 if row:
                     result.products.append(row)
                     ok += 1
@@ -106,12 +102,12 @@ class ShoperCrawler(BaseCrawler):
         return result
 
     # ---------- 类别发现 ----------
-    def _discover_categories(self, sess: creq.Session) -> list[str]:
+    def _discover_categories(self, fetcher) -> list[str]:
         try:
-            r = sess.get(self.base + "/", timeout=20)
+            res = fetcher.get(self.base + "/", headers=self._headers(), timeout=20)
         except Exception:
             return []
-        if r.status_code != 200:
+        if (res.status or 0) != 200:
             return []
         # 找主菜单 ul 里的链接 —— Shoper 模板通常有 .menu / nav
         candidates: list[str] = []
@@ -119,7 +115,7 @@ class ShoperCrawler(BaseCrawler):
             r'<ul[^>]*class="[^"]*menu[^"]*"[^>]*>(.*?)</ul>',
             r'<nav[^>]*>(.*?)</nav>',
         ):
-            for m in re.finditer(menu_pat, r.text, re.S | re.I):
+            for m in re.finditer(menu_pat, res.text, re.S | re.I):
                 hrefs = re.findall(r'href=["\'](/[^"\']+)["\']', m.group(1))
                 candidates.extend(hrefs)
         # 过滤：顶层 slug、非 _NON_PRODUCT_SLUGS、非资源
@@ -139,19 +135,19 @@ class ShoperCrawler(BaseCrawler):
             out.append(self.base + path)
         return out
 
-    def _collect_product_urls(self, sess: creq.Session,
+    def _collect_product_urls(self, fetcher,
                                cat_urls: list[str]) -> list[str]:
         seen: set[str] = set()
         out: list[str] = []
         known_categories = {u.replace(self.base, "") for u in cat_urls}
         for cat_url in cat_urls:
             try:
-                r = sess.get(cat_url, timeout=30)
+                res = fetcher.get(cat_url, headers=self._headers(), timeout=30)
             except Exception:
                 continue
-            if r.status_code != 200:
+            if (res.status or 0) != 200:
                 continue
-            hrefs = re.findall(r'href=["\'](/[^"\']+)["\']', r.text)
+            hrefs = re.findall(r'href=["\'](/[^"\']+)["\']', res.text)
             for h in hrefs:
                 slug = h.lstrip("/").split("/")[0].split("?")[0]
                 if not slug or slug in _NON_PRODUCT_SLUGS:
@@ -175,11 +171,11 @@ class ShoperCrawler(BaseCrawler):
         return out
 
     # ---------- 商品解析 ----------
-    def _parse_product(self, sess: creq.Session, url: str) -> dict | None:
-        r = sess.get(url, timeout=30)
-        if r.status_code != 200:
+    def _parse_product(self, fetcher, url: str) -> dict | None:
+        res = fetcher.get(url, headers=self._headers(), timeout=30)
+        if not res.ok:
             return None
-        html = r.text
+        html = res.text
         self.snapshot(url.rstrip("/").split("/")[-1][:80], html)
         data = self._from_jsonld(html)
         if not data or not data.get("name"):
