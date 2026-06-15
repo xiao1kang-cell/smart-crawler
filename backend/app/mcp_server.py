@@ -114,6 +114,7 @@ def _record_mcp_usage(api_key_id: int, tool_name: str, result, duration_ms: int)
         payload = json.dumps(result, ensure_ascii=False, default=str).encode("utf-8")
     except Exception:
         payload = b""
+    usage = result.get("usage") or {} if isinstance(result, dict) else {}
     try:
         record_usage(
             api_key_id=api_key_id,
@@ -122,10 +123,10 @@ def _record_mcp_usage(api_key_id: int, tool_name: str, result, duration_ms: int)
             credits_used=_infer_credits(result),
             bytes_returned=len(payload),
             duration_ms=duration_ms,
-            api_calls=int((result.get("usage") or {}).get("api_calls") or 0),
-            browser_opens=int((result.get("usage") or {}).get("browser_opens") or 0),
-            pages_fetched=int((result.get("usage") or {}).get("api_calls") or 0)
-            + int((result.get("usage") or {}).get("browser_opens") or 0),
+            api_calls=int(usage.get("api_calls") or 0),
+            browser_opens=int(usage.get("browser_opens") or 0),
+            pages_fetched=int(usage.get("api_calls") or 0)
+            + int(usage.get("browser_opens") or 0),
         )
     except Exception as exc:
         logger.warning(
