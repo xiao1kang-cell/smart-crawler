@@ -14,47 +14,52 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from curl_cffi import requests as creq
 from selectolax.parser import HTMLParser
 
-from ..proxy import get_proxy
+from .base import BaseCrawler, CrawlResult
+from ..models import Site
 
 _DATE_RE = re.compile(r"(\d{2})/(\d{2})/(\d{4})")
 _RATING_RE = re.compile(r"([\d.]+)\s*/\s*5")
 
 
-class AvisVerifiesCrawler:
+class AvisVerifiesCrawler(BaseCrawler):
     """通用 Avis Vérifiés 评论抓取（按 merchant_slug 抓评论）。"""
 
     platform = "avis_verifies"
 
     def __init__(self, channel: dict, max_pages: int = 20):
         """channel: {site, merchant_slug, country=FR, host, max_pages}"""
+        # 从 channel 合成 Site，供 BaseCrawler 使用
+        site = Site(
+            site=channel.get("site") or f"avis_{channel.get('merchant_slug', 'unknown')}",
+            url="https://www.avis-verifies.com",
+            country=channel.get("country", "FR"),
+            platform="avis_verifies",
+            proxy_tier="residential",
+        )
+        super().__init__(site)
         self.channel = channel
-        self.site = channel.get("site")
         self.merchant_slug = channel.get("merchant_slug") or channel.get("slug")
         self.host = channel.get("host", "www.avis-verifies.com")
         self.country = channel.get("country", "FR")
         self.max_pages = channel.get("max_pages", max_pages)
-        self.proxy = get_proxy("residential")
         self.notes: list[str] = []
 
-    def _session(self) -> creq.Session:
-        s = creq.Session(impersonate="chrome", timeout=30)
-        s.headers.update({
+    def _headers(self) -> dict:
+        return {
             "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.5",
-        })
-        if self.proxy:
-            s.proxies = {"http": self.proxy, "https": self.proxy}
-        return s
+            "User-Agent": self.ua(),
+        }
 
-    def crawl(self) -> list[dict]:
+    def crawl(self) -> list[dict]:                   # type: ignore[override]
+        """返回标准化的评论 dict 列表（review_runner 直接调用此接口）。"""
         if not self.merchant_slug:
             self.notes.append(f"⚠ 缺 merchant_slug（{self.channel}）")
             return []
 
         reviews: list[dict] = []
-        sess = self._session()
+        fetcher = self.make_fetcher(kind="product", source="avis_verifies")
 
         for page in range(1, self.max_pages + 1):
             url = (
@@ -62,14 +67,14 @@ class AvisVerifiesCrawler:
                 f"?page={page}"
             )
             try:
-                resp = sess.get(url, timeout=30)
+                res = fetcher.get(url, headers=self._headers(), timeout=30)
             except Exception as exc:
                 self.notes.append(f"page{page} 异常: {exc}")
                 break
 
-            if resp.status_code != 200:
-                self.notes.append(f"page{page} HTTP {resp.status_code}")
-                if resp.status_code in (403, 451):
+            if (res.status or 0) != 200:
+                self.notes.append(f"page{page} HTTP {res.status or 0}")
+                if (res.status or 0) in (403, 451):
                     # 尝试 stealth fallback
                     stealth_html = self._fetch_via_stealth(url)
                     if stealth_html:
@@ -79,7 +84,7 @@ class AvisVerifiesCrawler:
                             continue
                 break
 
-            page_reviews = self._parse_page(resp.text)
+            page_reviews = self._parse_page(res.text)
             if not page_reviews:
                 self.notes.append(f"page{page} 无评论 → 抓取结束")
                 break
@@ -174,7 +179,7 @@ class AvisVerifiesCrawler:
         return {
             "review_id": str(rid or f"{self.merchant_slug}_{hash(content)}"),
             "platform": "avis_verifies",
-            "site": self.site or f"avis_{self.merchant_slug}",
+            "site": self.channel.get("site") or f"avis_{self.merchant_slug}",
             "reviewer_name": author,
             "reviewer_country": self.country,
             "rating": rating,
@@ -200,8 +205,11 @@ class AvisVerifiesCrawler:
                 persist_profile_key=f"avis_{self.merchant_slug}",
                 timeout_ms=45000,
             )
-            page = StealthyFetcher.fetch(url, **kw)
-            if getattr(page, "status", None) == 200:
+            page = self.count_browser_fetch(
+                lambda: StealthyFetcher.fetch(url, **kw),
+                success=lambda p: getattr(p, "status", None) == 200,
+            )
+            if page is not None and getattr(page, "status", None) == 200:
                 return page.html_content or page.body or ""
         except Exception:
             pass
