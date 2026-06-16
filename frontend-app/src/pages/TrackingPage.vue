@@ -1,11 +1,27 @@
 <script setup lang="ts">
+import {
+  Download,
+  ExternalLink,
+  FileText,
+  Pause,
+  Pencil,
+  Play,
+  Plus,
+  RefreshCw,
+  Search,
+  SlidersHorizontal,
+  Trash2,
+} from 'lucide-vue-next'
 import { computed, onMounted, ref } from 'vue'
-import { asList, fmtNumber, fmtPrice } from '../api/client'
+import DataLoadingPanel from '../components/common/DataLoadingPanel.vue'
+import { asList, fmtDate, fmtNumber, fmtPrice, shortUrl } from '../api/client'
 import { addTracking, deleteTracking, editTracking, listTracking, pauseTracking, resumeTracking } from '../api/tracking'
+import { useJobTrigger } from '../composables/useJobTrigger'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
 const rows = ref<Record<string, any>[]>([])
+const facets = ref<{ markets: string[]; brands: string[]; statuses: string[] }>({ markets: [], brands: [], statuses: [] })
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(10)
@@ -19,72 +35,222 @@ const showAdd = ref(false)
 const addForm = ref({ url: '', brand: '', country: '' })
 const addBusy = ref(false)
 const editing = ref<Record<string, any> | null>(null)
+const jobTrigger = useJobTrigger({ onDone: () => load() })
+const ALL_VALUE = '__all'
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / Number(pageSize.value || 10))))
+const pageFrom = computed(() => total.value ? (page.value - 1) * Number(pageSize.value || 10) + 1 : 0)
+const pageTo = computed(() => Math.min(total.value, page.value * Number(pageSize.value || 10)))
+const hasFilters = computed(() => Boolean(search.value || fMarket.value || fBrand.value || fStatus.value))
+const currentProducts = computed(() => rows.value.reduce((sum, row) => sum + Number(row.products || 0), 0))
+const currentSkuRows = computed(() => rows.value.reduce((sum, row) => sum + Number(row.sku_count || 0), 0))
+const salesReadyRows = computed(() => rows.value.filter((row) => row.sales_available).length)
+const marketOptions = computed(() => facets.value.markets || [])
+const brandOptions = computed(() => facets.value.brands || [])
+const marketItems = computed(() => [
+  { label: '全部', value: ALL_VALUE },
+  ...marketOptions.value.map((market) => ({ label: market, value: market })),
+])
+const brandItems = computed(() => [
+  { label: '全部', value: ALL_VALUE },
+  ...brandOptions.value.map((brand) => ({ label: brand, value: brand })),
+])
+const statusItems = [
+  { label: '全部', value: ALL_VALUE },
+  { label: '追踪中', value: 'tracking' },
+  { label: '已暂停', value: 'paused' },
+  { label: '异常', value: 'error' },
+]
+const pageSizeItems = [10, 20, 50, 100, 200].map((value) => ({ label: `${value} / 页`, value }))
+const marketSelect = computed({
+  get: () => fMarket.value || ALL_VALUE,
+  set: (value: string) => {
+    fMarket.value = value === ALL_VALUE ? '' : value
+    applySearch()
+  },
+})
+const brandSelect = computed({
+  get: () => fBrand.value || ALL_VALUE,
+  set: (value: string) => {
+    fBrand.value = value === ALL_VALUE ? '' : value
+    applySearch()
+  },
+})
+const statusSelect = computed({
+  get: () => fStatus.value || ALL_VALUE,
+  set: (value: string) => {
+    fStatus.value = value === ALL_VALUE ? '' : value
+    applySearch()
+  },
+})
+const trackingColumns = [
+  { accessorKey: 'country', header: '市场' },
+  { accessorKey: 'brand', header: '品牌' },
+  { accessorKey: 'site', header: '站点' },
+  { accessorKey: 'track_status', header: '状态' },
+  { accessorKey: 'products', header: '商品', meta: { class: { th: 'num', td: 'num' } } },
+  { accessorKey: 'sku_count', header: 'SKU 行', meta: { class: { th: 'num', td: 'num muted' } } },
+  { accessorKey: 'thirty_day_sales', header: '30天销量', meta: { class: { th: 'num', td: 'num' } } },
+  { accessorKey: 'thirty_day_revenue', header: '30天收入', meta: { class: { th: 'num', td: 'num' } } },
+  { accessorKey: 'display_updated_at', header: '最后采集' },
+  { accessorKey: 'created_at', header: '创建时间' },
+  { accessorKey: 'creator', header: '创建人' },
+  { accessorKey: 'last_product_updated', header: '商品更新' },
+  { accessorKey: 'source', header: '来源' },
+  { id: 'actions', header: '操作', meta: { class: { th: 'actions-head', td: 'actions-cell' } } },
+]
+
 const canEdit = computed(() => {
   const u = auth.user
   if (!u) return false
-  return u.global_role === 'super_admin' || ['admin', 'owner'].includes(u.role || '')
+  return u.global_role === 'super_admin' || ['admin', 'owner'].includes(u.workspace_role || '')
 })
+
 function flag(cc?: string) {
   if (!cc || cc.length !== 2) return '🌐'
   return String.fromCodePoint(...[...cc.toUpperCase()].map((c) => 127397 + c.charCodeAt(0)))
 }
-function statusLabel(s?: string) {
-  return ({ tracking: 'Tracking', paused: 'Paused', error: '⚠️ 异常' } as Record<string, string>)[s || ''] || s || '—'
+
+function statusMeta(s?: string) {
+  const key = (s || 'tracking').toLowerCase()
+  return ({
+    tracking: { label: '追踪中', tone: 'ok' },
+    paused: { label: '已暂停', tone: 'idle' },
+    error: { label: '异常', tone: 'bad' },
+  } as Record<string, { label: string; tone: string }>)[key] || { label: s || '未知', tone: 'idle' }
+}
+
+function fmtTime(value?: string | null) {
+  const out = fmtDate(value)
+  return out === '-' ? '—' : out
+}
+
+function fmtMetric(value: unknown) {
+  return fmtNumber(value)
+}
+
+function fmtSales(row: Record<string, any>) {
+  return row.sales_available ? fmtNumber(row.thirty_day_sales) : '暂无'
+}
+
+function fmtRevenue(row: Record<string, any>) {
+  if (!row.sales_available) return '暂无'
+  return fmtPrice(row.thirty_day_revenue || 0, row.currency)
 }
 
 async function load() {
-  loading.value = true; error.value = ''
+  loading.value = true
+  error.value = ''
   try {
     const d = await listTracking({
-      search: search.value, market: fMarket.value, brand: fBrand.value,
-      status: fStatus.value, page: page.value, page_size: pageSize.value,
+      search: search.value.trim(),
+      market: fMarket.value.trim(),
+      brand: fBrand.value.trim(),
+      status: fStatus.value,
+      page: page.value,
+      page_size: pageSize.value,
     })
     rows.value = asList(d, ['items'])
+    facets.value = {
+      markets: Array.isArray(d?.facets?.markets) ? d.facets.markets : [],
+      brands: Array.isArray(d?.facets?.brands) ? d.facets.brands : [],
+      statuses: Array.isArray(d?.facets?.statuses) ? d.facets.statuses : [],
+    }
     total.value = Number(d?.total || rows.value.length || 0)
-  } catch (e) { error.value = e instanceof Error ? e.message : String(e) }
-  finally { loading.value = false }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    loading.value = false
+  }
 }
-function applySearch() { page.value = 1; load() }
+
+function applySearch() {
+  page.value = 1
+  load()
+}
+
+function resetFilters() {
+  search.value = ''
+  fMarket.value = ''
+  fBrand.value = ''
+  fStatus.value = ''
+  applySearch()
+}
 
 async function submitAdd() {
   if (!addForm.value.url.trim()) return
-  addBusy.value = true; error.value = ''
+  addBusy.value = true
+  error.value = ''
   try {
-    await addTracking({ url: addForm.value.url.trim(), brand: addForm.value.brand.trim() || undefined, country: addForm.value.country.trim() || undefined })
+    await addTracking({
+      url: addForm.value.url.trim(),
+      brand: addForm.value.brand.trim() || undefined,
+      country: addForm.value.country.trim().toUpperCase() || undefined,
+    })
     showAdd.value = false
     addForm.value = { url: '', brand: '', country: '' }
-    page.value = 1; await load()
-  } catch (e) { error.value = e instanceof Error ? e.message : String(e) }
-  finally { addBusy.value = false }
+    page.value = 1
+    await load()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    addBusy.value = false
+  }
 }
+
 async function saveEdit() {
   if (!editing.value) return
   try {
-    await editTracking(editing.value.site, { brand: editing.value.brand, country: editing.value.country, review_rate: editing.value.review_rate === '' ? null : Number(editing.value.review_rate) })
-    editing.value = null; await load()
-  } catch (e) { error.value = e instanceof Error ? e.message : String(e) }
+    await editTracking(editing.value.site, {
+      brand: editing.value.brand,
+      country: String(editing.value.country || '').toUpperCase(),
+      review_rate: editing.value.review_rate === '' ? null : Number(editing.value.review_rate),
+    })
+    editing.value = null
+    await load()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  }
 }
+
 async function togglePause(row: Record<string, any>) {
   try {
     if (row.track_status === 'paused') await resumeTracking(row.site)
     else await pauseTracking(row.site)
     await load()
-  } catch (e) { error.value = e instanceof Error ? e.message : String(e) }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  }
 }
+
 async function remove(row: Record<string, any>) {
-  if (!window.confirm(`确认删除追踪「${row.brand || row.site}」？此操作不可撤销。`)) return
-  try { await deleteTracking(row.site); await load() }
-  catch (e) { error.value = e instanceof Error ? e.message : String(e) }
+  if (!window.confirm(`确认从当前工作区移除「${row.brand || row.site}」？`)) return
+  try {
+    await deleteTracking(row.site)
+    await load()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  }
 }
+
+async function triggerCrawl(row: Record<string, any>) {
+  error.value = ''
+  await jobTrigger.trigger(row.site)
+}
+
 function reportHref(row: Record<string, any>) {
   const p = new URLSearchParams({ site: row.site })
   if (auth.workspaceId) p.set('workspace_id', auth.workspaceId)
   return `/report?${p.toString()}`
 }
+
 function exportUrl() {
-  const p = new URLSearchParams({ search: search.value, market: fMarket.value, brand: fBrand.value, status: fStatus.value, token: auth.token })
+  const p = new URLSearchParams()
+  if (search.value.trim()) p.set('search', search.value.trim())
+  if (fMarket.value.trim()) p.set('market', fMarket.value.trim())
+  if (fBrand.value.trim()) p.set('brand', fBrand.value.trim())
+  if (fStatus.value) p.set('status', fStatus.value)
+  if (auth.token) p.set('token', auth.token)
   if (auth.workspaceId) p.set('workspace_id', auth.workspaceId)
   return `/api/tracking/export?${p.toString()}`
 }
@@ -96,110 +262,322 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section>
-    <div class="lead">标杆网站维护</div>
-    <div class="sub">{{ loading ? '加载中' : total + ' 个追踪站点' }}</div>
+  <section class="tracking-page">
+    <div class="tracking-head">
+      <div>
+        <div class="lead">标杆网站维护</div>
+        <div class="sub">{{ loading ? '同步中' : `${fmtNumber(total)} 个追踪站点` }}</div>
+      </div>
+      <UButton v-if="canEdit" class="btn-prim tracking-add" @click="showAdd = true">
+        <Plus class="size-4" />
+        <span>新增站点</span>
+      </UButton>
+    </div>
+
     <UAlert v-if="error" color="error" variant="soft" :title="error" class="mb-4" />
 
-    <div class="tk-toolbar">
-      <button v-if="canEdit" class="btn-prim" @click="showAdd = true">+ Add Tracking</button>
-      <input class="tk-in" v-model="search" placeholder="🔍 URL / Brand" @keyup.enter="applySearch" />
-      <input class="tk-in" v-model="fMarket" placeholder="Market (US/DE…)" @keyup.enter="applySearch" />
-      <input class="tk-in" v-model="fBrand" placeholder="Brand" @keyup.enter="applySearch" />
-      <select class="tk-in" v-model="fStatus" @change="applySearch">
-        <option value="">全部状态</option><option value="tracking">Tracking</option>
-        <option value="paused">Paused</option><option value="error">异常</option>
-      </select>
-      <button class="btn-muted" @click="applySearch">筛选</button>
-      <a class="btn-muted" :href="exportUrl()" target="_blank">📥 导出</a>
+    <div class="tracking-stats">
+      <div class="tracking-stat">
+        <span>筛选结果</span>
+        <b>{{ fmtNumber(total) }}</b>
+      </div>
+      <div class="tracking-stat">
+        <span>本页商品</span>
+        <b>{{ fmtNumber(currentProducts) }}</b>
+      </div>
+      <div class="tracking-stat">
+        <span>本页 SKU 行</span>
+        <b>{{ fmtNumber(currentSkuRows) }}</b>
+      </div>
+      <div class="tracking-stat" :class="{ warn: salesReadyRows < rows.length }">
+        <span>销量估算</span>
+        <b>{{ salesReadyRows }}/{{ rows.length }}</b>
+      </div>
     </div>
 
-    <table class="tk-table">
-      <thead><tr>
-        <th>Market</th><th>Brand</th><th>URL</th><th>Status</th><th>Products</th>
-        <th>30-Day Sales</th><th>30-Day Revenue</th><th>Updated</th><th>Created</th><th>Creator</th><th>操作</th>
-      </tr></thead>
-      <tbody>
-        <tr v-for="r in rows" :key="r.site">
-          <td>{{ flag(r.country) }} {{ r.country || '—' }}</td>
-          <td>{{ r.brand || '—' }}</td>
-          <td><a class="title-text" :href="r.url" target="_blank" rel="noopener" :title="r.url">{{ r.url }}</a></td>
-          <td><span class="tk-badge" :class="r.track_status">{{ statusLabel(r.track_status) }}</span></td>
-          <td>{{ fmtNumber(r.products) }}</td>
-          <td>{{ fmtNumber(r.thirty_day_sales) }}</td>
-          <td>{{ fmtPrice(r.thirty_day_revenue, undefined) }}</td>
-          <td>{{ (r.updated_at || '').replace('T', ' ').slice(0, 16) || '—' }}</td>
-          <td>{{ (r.created_at || '').replace('T', ' ').slice(0, 16) || '—' }}</td>
-          <td>{{ r.creator || '—' }}</td>
-          <td class="tk-actions">
-            <a :href="reportHref(r)" target="_blank" rel="noopener" class="btn-mini">报告</a>
+    <div class="tracking-toolbar">
+      <label class="tracking-field search-field">
+        <Search class="size-4 field-icon" />
+        <UInput v-model="search" variant="none" placeholder="URL / 品牌 / 站点代码" @keyup.enter="applySearch" />
+      </label>
+      <label class="tracking-field small">
+        <span>市场</span>
+        <USelect v-model="marketSelect" variant="none" :items="marketItems" value-key="value" />
+      </label>
+      <label class="tracking-field brand-filter">
+        <span>品牌</span>
+        <USelect v-model="brandSelect" variant="none" :items="brandItems" value-key="value" />
+      </label>
+      <label class="tracking-field select-field">
+        <span>状态</span>
+        <USelect v-model="statusSelect" variant="none" :items="statusItems" value-key="value" />
+      </label>
+      <UButton class="tool-btn primary" :loading="loading" :disabled="loading" @click="applySearch">
+        <SlidersHorizontal v-if="!loading" class="size-4" />
+        <span>筛选</span>
+      </UButton>
+      <UButton v-if="hasFilters" class="tool-btn ghost" :disabled="loading" @click="resetFilters">
+        <span>清空</span>
+      </UButton>
+      <a class="tool-btn ghost" :href="exportUrl()" target="_blank" rel="noopener">
+        <Download class="size-4" />
+        <span>导出</span>
+      </a>
+    </div>
+
+    <DataLoadingPanel class="tracking-table-wrap" :loading="loading" :has-data="rows.length > 0" label="正在更新站点列表">
+      <UTable
+        class="tracking-table"
+        :data="rows"
+        :columns="trackingColumns"
+        :loading="loading"
+        sticky="header"
+        empty="暂无追踪站点"
+        loading-color="primary"
+        loading-animation="carousel"
+      >
+        <template #country-cell="{ row }">
+          <div class="market-cell"><span class="flag">{{ flag(row.original.country) }}</span><span>{{ row.original.country || '—' }}</span></div>
+        </template>
+        <template #brand-cell="{ row }">
+          <span class="brand-cell">{{ row.original.brand || '—' }}</span>
+        </template>
+        <template #site-cell="{ row }">
+          <div>
+            <a class="site-link" :href="row.original.url" target="_blank" rel="noopener" :title="row.original.url">
+              <span>{{ shortUrl(row.original.url) || row.original.site }}</span>
+              <ExternalLink class="size-3" />
+            </a>
+            <div class="site-code">{{ row.original.site }}</div>
+          </div>
+        </template>
+        <template #track_status-cell="{ row }">
+          <span class="status-pill" :class="statusMeta(row.original.track_status).tone">{{ statusMeta(row.original.track_status).label }}</span>
+        </template>
+        <template #products-cell="{ row }">
+          {{ fmtMetric(row.original.products) }}
+        </template>
+        <template #sku_count-cell="{ row }">
+          {{ fmtMetric(row.original.sku_count) }}
+        </template>
+        <template #thirty_day_sales-cell="{ row }">
+          <span :class="{ muted: !row.original.sales_available }">{{ fmtSales(row.original) }}</span>
+        </template>
+        <template #thirty_day_revenue-cell="{ row }">
+          <span :class="{ muted: !row.original.sales_available }">{{ fmtRevenue(row.original) }}</span>
+        </template>
+        <template #display_updated_at-cell="{ row }">
+          <span class="time-cell">{{ fmtTime(row.original.display_updated_at || row.original.last_crawled || row.original.updated_at) }}</span>
+        </template>
+        <template #created_at-cell="{ row }">
+          <span class="time-cell">{{ fmtTime(row.original.created_at) }}</span>
+        </template>
+        <template #creator-cell="{ row }">
+          <span class="creator-cell">{{ row.original.creator || '系统' }}</span>
+        </template>
+        <template #last_product_updated-cell="{ row }">
+          <span class="time-cell">{{ fmtTime(row.original.last_product_updated) }}</span>
+        </template>
+        <template #source-cell="{ row }">
+          <span class="source-cell">
+            <span>{{ row.original.source === 'user' ? '手动' : '种子' }}</span>
+            <small>{{ row.original.creator || '系统' }}</small>
+          </span>
+        </template>
+        <template #actions-cell="{ row }">
+          <div class="actions-cell">
+            <a :href="reportHref(row.original)" target="_blank" rel="noopener" class="action-btn" title="打开报告" aria-label="打开报告">
+              <FileText class="size-4" />
+              <span class="sr-only">报告</span>
+            </a>
             <template v-if="canEdit">
-              <button class="btn-mini" @click="editing = { ...r }">编辑</button>
-              <button class="btn-mini" @click="togglePause(r)">{{ r.track_status === 'paused' ? '恢复' : '暂停' }}</button>
-              <button v-if="r.source === 'user'" class="btn-mini btn-danger" @click="remove(r)">删除</button>
+              <UButton class="action-btn" variant="ghost" color="neutral" title="编辑" aria-label="编辑" @click="editing = { ...row.original }">
+                <Pencil class="size-4" />
+                <span class="sr-only">编辑</span>
+              </UButton>
+              <UButton class="action-btn" variant="ghost" color="neutral" :title="row.original.track_status === 'paused' ? '恢复追踪' : '暂停追踪'" :aria-label="row.original.track_status === 'paused' ? '恢复追踪' : '暂停追踪'" @click="togglePause(row.original)">
+                <Play v-if="row.original.track_status === 'paused'" class="size-4" />
+                <Pause v-else class="size-4" />
+                <span class="sr-only">{{ row.original.track_status === 'paused' ? '恢复' : '暂停' }}</span>
+              </UButton>
+              <UButton class="action-btn" variant="ghost" color="neutral" :class="jobTrigger.classFor(row.original.site)" :loading="jobTrigger.isBusy(row.original.site)" :disabled="jobTrigger.isBusy(row.original.site)" :title="jobTrigger.labelFor(row.original.site, '重跑抓取')" :aria-label="jobTrigger.labelFor(row.original.site, '重跑抓取')" @click="triggerCrawl(row.original)">
+                <RefreshCw v-if="!jobTrigger.isBusy(row.original.site)" class="size-4" />
+                <span class="sr-only">{{ jobTrigger.labelFor(row.original.site, '重跑') }}</span>
+              </UButton>
+              <UButton class="action-btn danger" variant="ghost" color="neutral" title="移出追踪" aria-label="移出追踪" @click="remove(row.original)">
+                <Trash2 class="size-4" />
+                <span class="sr-only">删除</span>
+              </UButton>
+              <div v-if="jobTrigger.detailFor(row.original.site)" class="row-trigger-status" :class="jobTrigger.classFor(row.original.site)">
+                {{ jobTrigger.labelFor(row.original.site, '重跑') }} · {{ jobTrigger.detailFor(row.original.site) }}
+              </div>
             </template>
-          </td>
-        </tr>
-        <tr v-if="!rows.length"><td colspan="11" class="tk-empty">暂无追踪站点</td></tr>
-      </tbody>
-    </table>
+          </div>
+        </template>
+        <template #loading>
+          <span class="tracking-empty">加载中...</span>
+        </template>
+        <template #empty>
+          <span class="tracking-empty">暂无追踪站点</span>
+        </template>
+      </UTable>
+    </DataLoadingPanel>
 
-    <div class="pagination">
-      <button @click="page = Math.max(1, page - 1); load()" :disabled="page <= 1">‹</button>
-      <span>{{ page }} / {{ totalPages }}</span>
-      <button @click="page = Math.min(totalPages, page + 1); load()" :disabled="page >= totalPages">›</button>
-      <select v-model="pageSize" @change="page = 1; load()">
-        <option :value="10">10</option><option :value="20">20</option><option :value="50">50</option>
-        <option :value="100">100</option><option :value="200">200</option>
-      </select>
+    <div class="tracking-pager">
+      <span>{{ pageFrom }}-{{ pageTo }} / {{ fmtNumber(total) }}</span>
+      <UButton class="pager-btn" variant="ghost" color="neutral" @click="page = Math.max(1, page - 1); load()" :disabled="page <= 1 || loading">‹</UButton>
+      <b>{{ page }} / {{ totalPages }}</b>
+      <UButton class="pager-btn" variant="ghost" color="neutral" @click="page = Math.min(totalPages, page + 1); load()" :disabled="page >= totalPages || loading">›</UButton>
+      <USelect v-model="pageSize" class="pager-select" variant="outline" :items="pageSizeItems" value-key="value" @update:model-value="page = 1; load()" />
     </div>
 
-    <div v-if="showAdd" class="tk-modal" @click.self="showAdd = false">
-      <div class="tk-card">
-        <h3>+ Add Tracking</h3>
-        <label>URL<input v-model="addForm.url" placeholder="https://brand.example.com" /></label>
-        <label>Brand（选填）<input v-model="addForm.brand" maxlength="50" /></label>
-        <label>Market（选填，如 US）<input v-model="addForm.country" maxlength="8" /></label>
-        <div class="tk-card-foot">
-          <button class="btn-muted" @click="showAdd = false">取消</button>
-          <button class="btn-prim" :disabled="addBusy" @click="submitAdd">{{ addBusy ? '探测中…' : '添加并抓取' }}</button>
-        </div>
-      </div>
-    </div>
+    <UModal v-model:open="showAdd" title="新增追踪站点" :ui="{ content: 'tracking-dialog', header: 'dialog-head', body: 'dialog-body', footer: 'dialog-foot', title: 'dialog-title' }">
+      <template #body>
+        <UFormField label="URL" class="dialog-field">
+          <UInput v-model="addForm.url" placeholder="https://brand.example.com" />
+        </UFormField>
+        <UFormField label="品牌" class="dialog-field">
+          <UInput v-model="addForm.brand" maxlength="50" />
+        </UFormField>
+        <UFormField label="市场" class="dialog-field">
+          <UInput v-model="addForm.country" maxlength="8" placeholder="US" />
+        </UFormField>
+      </template>
+      <template #footer>
+        <UButton class="dialog-btn ghost" variant="ghost" color="neutral" @click="showAdd = false">取消</UButton>
+        <UButton class="dialog-btn primary" :loading="addBusy" :disabled="addBusy" @click="submitAdd">
+          <Plus v-if="!addBusy" class="size-4" />
+          <span>{{ addBusy ? '探测中' : '添加并抓取' }}</span>
+        </UButton>
+      </template>
+    </UModal>
 
-    <div v-if="editing" class="tk-modal" @click.self="editing = null">
-      <div class="tk-card">
-        <h3>编辑追踪</h3>
-        <label>Brand<input v-model="editing.brand" maxlength="50" /></label>
-        <label>Market<input v-model="editing.country" maxlength="8" /></label>
-        <label>留评率 review_rate<input v-model="editing.review_rate" type="number" step="0.001" /></label>
-        <div class="tk-card-foot">
-          <button class="btn-muted" @click="editing = null">取消</button>
-          <button class="btn-prim" @click="saveEdit">保存</button>
-        </div>
-      </div>
-    </div>
+    <UModal :open="Boolean(editing)" title="编辑追踪" :ui="{ content: 'tracking-dialog', header: 'dialog-head', body: 'dialog-body', footer: 'dialog-foot', title: 'dialog-title' }" @update:open="(open: boolean) => { if (!open) editing = null }">
+      <template #body>
+        <UFormField v-if="editing" label="品牌" class="dialog-field">
+          <UInput v-model="editing.brand" maxlength="50" />
+        </UFormField>
+        <UFormField v-if="editing" label="市场" class="dialog-field">
+          <UInput v-model="editing.country" maxlength="8" />
+        </UFormField>
+        <UFormField v-if="editing" label="留评率" class="dialog-field">
+          <UInput v-model="editing.review_rate" type="number" step="0.001" />
+        </UFormField>
+      </template>
+      <template #footer>
+        <UButton class="dialog-btn ghost" variant="ghost" color="neutral" @click="editing = null">取消</UButton>
+        <UButton class="dialog-btn primary" @click="saveEdit">
+          <Pencil class="size-4" />
+          <span>保存</span>
+        </UButton>
+      </template>
+    </UModal>
   </section>
 </template>
 
 <style scoped>
-.tk-toolbar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; align-items:center; }
-.tk-in { padding:6px 10px; border:1px solid #d1d5db; border-radius:7px; font-size:13px; font-family:inherit; }
-.tk-table { width:100%; border-collapse:collapse; font-size:13px; }
-.tk-table th, .tk-table td { text-align:left; padding:10px 12px; border-bottom:1px solid #f0f1f3; }
-.title-text { display:inline-block; max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:bottom; }
-.tk-badge { padding:2px 8px; border-radius:9px; font-size:11px; font-weight:700; }
-.tk-badge.tracking { background:#dcfce7; color:#166534; }
-.tk-badge.paused { background:#f3f4f6; color:#6b7280; }
-.tk-badge.error { background:#fee2e2; color:#991b1b; }
-.tk-actions { display:flex; gap:6px; flex-wrap:wrap; }
-.btn-mini { padding:3px 8px; border:1px solid #d1d5db; border-radius:6px; background:#fff; cursor:pointer; font-size:12px; }
-.btn-mini.btn-danger { color:#b91c1c; border-color:#fecaca; }
-.tk-empty { text-align:center; color:#9ca3af; padding:28px; }
-.tk-modal { position:fixed; inset:0; background:rgba(0,0,0,.4); display:flex; align-items:center; justify-content:center; z-index:100; }
-.tk-card { background:#fff; border-radius:12px; padding:22px; width:420px; max-width:92vw; display:flex; flex-direction:column; gap:12px; }
-.tk-card label { display:flex; flex-direction:column; gap:4px; font-size:12.5px; color:#6b7280; }
-.tk-card input, .tk-card select { padding:7px 10px; border:1px solid #d1d5db; border-radius:7px; font-size:13px; font-family:inherit; }
-.tk-card-foot { display:flex; justify-content:flex-end; gap:8px; margin-top:6px; }
-.pagination { display:flex; align-items:center; gap:8px; justify-content:center; margin-top:14px; }
+.tracking-page { display:flex; flex-direction:column; gap:14px; }
+.tracking-head { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; }
+.tracking-add { min-width:120px; }
+
+.tracking-stats { display:grid; grid-template-columns:repeat(4,minmax(140px,1fr)); gap:10px; }
+.tracking-stat { border:1px solid var(--ui-border); background:linear-gradient(180deg,var(--ui-card),var(--ui-card-soft)); border-radius:8px; padding:10px 12px; min-height:70px; }
+.tracking-stat span { display:block; color:var(--ui-muted); font-size:.72rem; margin-bottom:4px; }
+.tracking-stat b { display:block; color:var(--ui-heading); font-size:1.28rem; line-height:1.25; }
+.tracking-stat.warn b { color:var(--ui-amber,#b45309); }
+
+.tracking-toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; border:1px solid var(--ui-border); background:var(--ui-card); border-radius:8px; padding:9px; box-shadow:0 10px 24px rgba(37,29,61,.06); }
+.tracking-field { height:38px; display:inline-flex; align-items:center; gap:8px; background:var(--ui-card-soft); border:1px solid var(--ui-border); border-radius:7px; padding:0 10px; color:var(--ui-muted); transition:border-color .15s, background .15s; }
+.tracking-field:focus-within { border-color:var(--ui-purple-line); background:var(--ui-card); }
+.tracking-field :deep(input) { width:150px; height:100%; border:0; outline:0; background:transparent; color:var(--ui-heading); font-size:.82rem; }
+.tracking-field :deep(button) { width:86px; min-height:36px; border:0; background:transparent; color:var(--ui-heading); box-shadow:none; padding-inline:0; font-size:.82rem; cursor:pointer; }
+.tracking-field :deep(button:hover) { background:transparent; }
+.tracking-field.search-field :deep(input) { width:230px; }
+.tracking-field.small :deep(button) { width:64px; text-transform:uppercase; }
+.tracking-field.brand-filter :deep(button) { width:136px; }
+.tracking-field span { color:var(--ui-muted); font-size:.72rem; font-weight:800; white-space:nowrap; }
+.field-icon { color:var(--ui-dim); flex-shrink:0; }
+
+.tool-btn, .dialog-btn { border:1px solid var(--ui-border); border-radius:7px; min-height:38px; padding:0 12px; display:inline-flex; align-items:center; justify-content:center; gap:6px; cursor:pointer; font-size:.8rem; font-weight:800; text-decoration:none; white-space:nowrap; transition:background .15s,border-color .15s,color .15s,transform .15s; }
+.tool-btn.primary, .dialog-btn.primary { border-color:transparent; color:#fff; background:linear-gradient(135deg,#a78bfa,#7c3aed); box-shadow:0 8px 18px rgba(124,58,237,.18); }
+.tool-btn.ghost, .dialog-btn.ghost { color:var(--ui-purple-strong); background:var(--ui-purple-soft); border-color:rgba(167,139,250,.28); }
+.tool-btn:hover, .dialog-btn:hover { transform:translateY(-1px); }
+.tool-btn.ghost:hover, .dialog-btn.ghost:hover { background:rgba(167,139,250,.20); }
+.tool-btn:disabled, .dialog-btn:disabled { opacity:.58; cursor:not-allowed; transform:none; }
+
+.action-btn { width:30px; height:30px; border:1px solid transparent; border-radius:7px; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; color:var(--ui-muted); background:transparent; text-decoration:none; transition:background .15s,border-color .15s,color .15s; }
+.action-btn:hover { color:var(--ui-purple-strong); background:var(--ui-purple-soft); border-color:rgba(167,139,250,.28); }
+.action-btn.danger:hover { color:var(--ui-red,#be123c); background:rgba(248,113,113,.12); border-color:rgba(248,113,113,.28); }
+.action-btn:disabled { cursor:not-allowed; opacity:.75; }
+.action-btn.trigger-queued, .action-btn.trigger-running, .action-btn.trigger-submitting, .action-btn.trigger-unknown { color:var(--ui-purple-strong); background:var(--ui-purple-soft); border-color:rgba(167,139,250,.34); }
+.action-btn.trigger-success { color:#047857; background:rgba(16,185,129,.14); border-color:rgba(16,185,129,.30); }
+.action-btn.trigger-failed, .action-btn.trigger-blocked { color:var(--ui-red,#be123c); background:rgba(248,113,113,.12); border-color:rgba(248,113,113,.30); }
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+
+.tracking-table-wrap { width:100%; overflow:auto; border:1px solid var(--ui-border); border-radius:8px; background:var(--ui-card); box-shadow:0 14px 32px rgba(37,29,61,.08); }
+.tracking-table :deep(table) { width:100%; min-width:1280px; border-collapse:separate; border-spacing:0; font-size:.84rem; }
+.tracking-table :deep(thead) { position:sticky; top:0; z-index:2; }
+.tracking-table :deep(th) { text-align:left; padding:10px 12px; background:var(--ui-card-soft); color:var(--ui-muted); border-bottom:1px solid var(--ui-border); font-size:.72rem; font-weight:800; white-space:nowrap; }
+.tracking-table :deep(td) { padding:10px 12px; border-bottom:1px solid var(--ui-border); color:var(--ui-text); vertical-align:middle; }
+.tracking-table :deep(tbody tr:hover td) { background:rgba(20,184,166,.06); }
+.tracking-table :deep(tbody tr:last-child td) { border-bottom:0; }
+.tracking-table :deep(.num) { text-align:right; font-variant-numeric:tabular-nums; }
+.tracking-table :deep(.muted) { color:var(--ui-muted); }
+
+.market-cell { display:flex; align-items:center; gap:7px; white-space:nowrap; }
+.flag { width:20px; display:inline-flex; justify-content:center; font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif; }
+.brand-cell { color:var(--ui-heading); font-weight:750; }
+.site-link { max-width:270px; display:inline-flex; align-items:center; gap:5px; color:var(--ui-purple-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:middle; }
+.site-link span { overflow:hidden; text-overflow:ellipsis; }
+.site-code { margin-top:2px; color:var(--ui-muted); font-size:.7rem; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+.status-pill { display:inline-flex; align-items:center; justify-content:center; min-width:58px; padding:3px 9px; border-radius:999px; font-size:.72rem; font-weight:800; }
+.status-pill.ok { color:#047857; background:rgba(16,185,129,.16); border:1px solid rgba(16,185,129,.3); }
+.status-pill.idle { color:var(--ui-muted); background:rgba(148,163,184,.12); border:1px solid rgba(148,163,184,.24); }
+.status-pill.bad { color:var(--ui-red,#be123c); background:rgba(248,113,113,.14); border:1px solid rgba(248,113,113,.34); }
+.time-cell { min-width:142px; color:var(--ui-muted); font-size:.78rem; white-space:nowrap; }
+.creator-cell { color:var(--ui-text); font-size:.78rem; white-space:nowrap; }
+.source-cell { min-width:74px; }
+.source-cell span { display:block; color:var(--ui-text); }
+.source-cell small { display:block; color:var(--ui-muted); font-size:.7rem; margin-top:1px; }
+.actions-head { text-align:left; }
+.actions-cell { display:flex; gap:4px; flex-wrap:wrap; min-width:164px; align-items:center; }
+.row-trigger-status { flex:0 0 100%; max-width:180px; margin-top:2px; padding:3px 7px; border-radius:7px; background:var(--ui-card-soft); border:1px solid var(--ui-border); color:var(--ui-muted); font-size:.68rem; line-height:1.35; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.row-trigger-status.trigger-queued, .row-trigger-status.trigger-running, .row-trigger-status.trigger-submitting, .row-trigger-status.trigger-unknown { color:var(--ui-purple-strong); background:var(--ui-purple-soft); border-color:rgba(167,139,250,.28); }
+.row-trigger-status.trigger-success { color:#047857; background:rgba(16,185,129,.14); border-color:rgba(16,185,129,.30); }
+.row-trigger-status.trigger-failed, .row-trigger-status.trigger-blocked { color:var(--ui-red,#be123c); background:rgba(248,113,113,.12); border-color:rgba(248,113,113,.30); }
+.tracking-empty { text-align:center; color:var(--ui-muted); padding:34px 12px!important; }
+
+.tracking-pager { display:flex; align-items:center; justify-content:flex-end; gap:8px; color:var(--ui-muted); font-size:.82rem; }
+.tracking-pager :deep(button) { height:34px; min-width:38px; border:1px solid var(--ui-border); border-radius:7px; background:var(--ui-card-soft); color:var(--ui-heading); padding:0 10px; box-shadow:none; }
+.tracking-pager :deep(button:disabled) { opacity:.45; cursor:not-allowed; }
+.tracking-pager b { color:var(--ui-heading); min-width:62px; text-align:center; }
+
+:global(.tracking-dialog) { width:430px; max-width:calc(100vw - 32px); display:flex; flex-direction:column; background:var(--ui-card); color:var(--ui-text); border:1px solid var(--ui-border); border-radius:8px; box-shadow:0 26px 70px rgba(0,0,0,.36); overflow:hidden; }
+:global(.dialog-head) { min-height:54px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 16px; border-bottom:1px solid var(--ui-border); background:linear-gradient(180deg,var(--ui-card-soft),var(--ui-card)); }
+:global(.dialog-title) { color:var(--ui-heading); font-size:1rem; font-weight:900; }
+:global(.dialog-body) { display:flex; flex-direction:column; gap:12px; padding:16px; }
+:global(.dialog-foot) { display:flex; align-items:center; justify-content:flex-end; gap:8px; padding:12px 16px; border-top:1px solid var(--ui-border); background:var(--ui-card-soft); }
+:global(.dialog-field) { display:flex; flex-direction:column; gap:6px; color:var(--ui-muted); font-size:.76rem; font-weight:800; }
+:global(.dialog-field input) { width:100%; height:38px; border:1px solid var(--ui-border); border-radius:7px; background:var(--ui-card-soft); color:var(--ui-heading); padding:0 11px; outline:0; font-size:.84rem; box-shadow:none; }
+:global(.dialog-field input:focus) { border-color:var(--ui-purple-line); background:var(--ui-card); }
+
+.spin { animation:spin .8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+
+:global(html[data-theme="dark"]) .tracking-table-wrap { box-shadow:0 16px 38px rgba(0,0,0,.46); }
+:global(html[data-theme="dark"]) .tracking-table :deep(tbody tr:hover td) { background:rgba(20,184,166,.08); }
+:global(html[data-theme="dark"]) .status-pill.ok { color:#6ee7b7; }
+:global(html[data-theme="dark"]) .tracking-toolbar { box-shadow:0 16px 38px rgba(0,0,0,.34); }
+:global(html[data-theme="dark"]) .tool-btn.primary,
+:global(html[data-theme="dark"]) .dialog-btn.primary { background:linear-gradient(135deg,#a78bfa,#7c3aed); color:#fff; }
+
+@media (max-width: 760px) {
+  .tracking-head { flex-direction:column; }
+  .tracking-add { width:100%; }
+  .tracking-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .tracking-field, .tracking-field.search-field, .tool-btn { width:100%; }
+  .tracking-field :deep(input), .tracking-field.search-field :deep(input) { width:100%; }
+  .tracking-field :deep(button) { width:100%; }
+  .tracking-pager { justify-content:center; flex-wrap:wrap; }
+}
 </style>

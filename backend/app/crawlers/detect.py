@@ -33,6 +33,10 @@ def normalize_base(url: str) -> str:
 def detect_platform(url: str) -> tuple[str | None, str]:
     """返回 (platform, normalized_base)。platform 为 None 表示无法识别。"""
     base = normalize_base(url)
+    host = urlparse(base).netloc.lower()
+
+    if host.endswith("sephora.com") or host.endswith("sephora.fr"):
+        return "sephora", base
 
     # 1) Shopify: /products.json?limit=1 返回含 products 键的 JSON
     r = _safe_get(f"{base}/products.json?limit=1")

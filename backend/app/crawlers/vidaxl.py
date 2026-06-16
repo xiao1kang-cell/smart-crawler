@@ -262,7 +262,8 @@ class VidaxlCrawler(BaseCrawler):
 
         def _try_fetch(url: str) -> tuple[int, str]:
             """返回 (status_code, html)；status -1 表示 timeout/连接错误。"""
-            cur_proxy = proxy_pool.get_proxy("residential")
+            cur_proxy = proxy_pool.get_proxy(self.site.proxy_tier or "residential",
+                                             site=self.site.site)
             local_sess = creq.Session(impersonate="chrome")
             if cur_proxy:
                 local_sess.proxies = {"http": cur_proxy, "https": cur_proxy}

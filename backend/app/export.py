@@ -91,12 +91,9 @@ def _apply_site_filter(q, model_class, site):
 
 
 # ---------- 对标样本：商品分析报表 ----------
-def products_sample_df(session: Session, site=None,
-                       categories: list[str] | None = None) -> pd.DataFrame:
-    q = _apply_site_filter(session.query(Product), Product, site)
-    q = _apply_cat_filter(q, Product, categories)
+def products_sample_df_from_rows(products) -> pd.DataFrame:
     rows = []
-    for i, p in enumerate(q.order_by(Product.id).all(), start=1):
+    for i, p in enumerate(products, start=1):
         rows.append({
             "NO.": i, "Sku": p.sku, "Image": (p.image_urls or [""])[0],
             "Title": p.title, "label": p.label or "", "VariantId": p.variant_id,
@@ -112,7 +109,28 @@ def products_sample_df(session: Session, site=None,
     return pd.DataFrame(rows, columns=PRODUCT_SAMPLE_COLS)
 
 
+def products_sample_df(session: Session, site=None,
+                       categories: list[str] | None = None) -> pd.DataFrame:
+    q = _apply_site_filter(session.query(Product), Product, site)
+    q = _apply_cat_filter(q, Product, categories)
+    return products_sample_df_from_rows(q.order_by(Product.id).all())
+
+
 # ---------- 对标样本：销售促销报表 ----------
+def promotions_sample_df_from_rows(promotions) -> pd.DataFrame:
+    rows = []
+    for i, p in enumerate(promotions, start=1):
+        rows.append({
+            "NO.": i, "SKU": p.sku, "Update Time": _dt(p.detected_time),
+            "Product Title": p.product_title, "Product Image": p.product_image,
+            "Type": p.promotion_type, "Name": p.promotion_name or p.promotion_type,
+            "Discount": p.discount_percent, "Orignal-Price": p.original_price,
+            "Post-Price": p.promotion_price, "Threshold": p.threshold or "/",
+            "Start Time": _dt(p.start_time), "End Time": _dt(p.end_time),
+        })
+    return pd.DataFrame(rows, columns=PROMO_SAMPLE_COLS)
+
+
 def promotions_sample_df(session: Session, site=None,
                          categories: list[str] | None = None) -> pd.DataFrame:
     q = _apply_site_filter(session.query(Promotion), Promotion, site)
@@ -126,17 +144,7 @@ def promotions_sample_df(session: Session, site=None,
             q = q.filter(Promotion.sku.in_(skus))
         else:
             q = q.filter(Promotion.id == -1)  # empty result
-    rows = []
-    for i, p in enumerate(q.all(), start=1):
-        rows.append({
-            "NO.": i, "SKU": p.sku, "Update Time": _dt(p.detected_time),
-            "Product Title": p.product_title, "Product Image": p.product_image,
-            "Type": p.promotion_type, "Name": p.promotion_name or p.promotion_type,
-            "Discount": p.discount_percent, "Orignal-Price": p.original_price,
-            "Post-Price": p.promotion_price, "Threshold": p.threshold or "/",
-            "Start Time": _dt(p.start_time), "End Time": _dt(p.end_time),
-        })
-    return pd.DataFrame(rows, columns=PROMO_SAMPLE_COLS)
+    return promotions_sample_df_from_rows(q.all())
 
 
 # ---------- 对标样本：趋势报表 ----------

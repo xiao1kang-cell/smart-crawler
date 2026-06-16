@@ -11,15 +11,16 @@ import re
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from sqlalchemy import func, or_
+from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import Product, Site, WorkspaceSite
+from ..models import Product, Site, Workspace, WorkspaceMember, WorkspaceSite
 from ..crawlers.detect import detect_platform
 from ..runner import enqueue
-from .routes import (require_user, _current_workspace, _require_admin,
-                     _workspace_site_names, public_router, _user_from_token)
+from .routes import (require_user, _current_workspace, _require_dashboard_user,
+                     _is_super_admin, _workspace_site_names, public_router,
+                     _user_from_token, _currency_for_site)
 
 import logging
 logger = logging.getLogger(__name__)
@@ -27,32 +28,118 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", dependencies=[Depends(require_user)])
 
 
-def _metrics(db: Session, site: str) -> dict:
-    """实时算 products(distinct spu)/30天销量/收入,不冗余存储。"""
-    products = (db.query(func.count(func.distinct(Product.spu)))
-                .filter(Product.site == site).scalar() or 0)
-    sales, revenue = db.query(
+def _empty_metrics() -> dict:
+    return {
+        "products": 0,
+        "sku_count": 0,
+        "thirty_day_sales": 0,
+        "thirty_day_revenue": 0,
+        "sales_signal_count": 0,
+        "sales_available": False,
+        "last_product_updated": None,
+    }
+
+
+def _metrics_for_sites(db: Session, sites: list[str]) -> dict[str, dict]:
+    """批量算站点指标,避免列表页 N+1 查询。
+
+    products 使用和站点/覆盖页一致的 distinct coalesce(spu, sku) 口径;
+    sku_count 保留原始行数,便于排查站点内 SKU 展开情况。
+    """
+    site_codes = sorted(set(sites))
+    if not site_codes:
+        return {}
+    rows = db.query(
+        Product.site,
+        func.count(Product.id),
+        func.count(func.distinct(func.coalesce(Product.spu, Product.sku))),
         func.coalesce(func.sum(Product.thirty_day_sales), 0),
         func.coalesce(func.sum(Product.thirty_day_revenue), 0.0),
-    ).filter(Product.site == site).first()
-    return {"products": int(products),
+        func.count(Product.id).filter(func.coalesce(Product.thirty_day_sales, 0) > 0),
+        func.max(Product.updated_time),
+    ).filter(Product.site.in_(site_codes)).group_by(Product.site).all()
+    out = {site: _empty_metrics() for site in site_codes}
+    for site, sku_count, products, sales, revenue, sales_signal_count, last_updated in rows:
+        out[site] = {
+            "products": int(products or 0),
+            "sku_count": int(sku_count or 0),
             "thirty_day_sales": int(sales or 0),
-            "thirty_day_revenue": round(revenue or 0, 2)}
+            "thirty_day_revenue": round(revenue or 0, 2),
+            "sales_signal_count": int(sales_signal_count or 0),
+            "sales_available": bool(sales_signal_count),
+            "last_product_updated": last_updated.isoformat() if last_updated else None,
+        }
+    return out
 
 
-def tracking_row(db: Session, s: Site) -> dict:
-    m = _metrics(db, s.site)
+def _metrics(db: Session, site: str) -> dict:
+    return _metrics_for_sites(db, [site]).get(site, _empty_metrics())
+
+
+def _apply_tracking_filters(q, search: str | None, market: str | None,
+                            brand: str | None, status: str | None):
+    if search:
+        like = f"%{search.strip()}%"
+        q = q.filter(or_(Site.url.ilike(like), Site.brand.ilike(like),
+                         Site.site.ilike(like)))
+    if market:
+        q = q.filter(func.upper(Site.country) == market.strip().upper())
+    if brand:
+        q = q.filter(Site.brand.ilike(f"%{brand.strip()}%"))
+    if status:
+        q = q.filter(Site.track_status == status.strip().lower())
+    return q
+
+
+def _tracking_order(q):
+    return q.order_by(desc(func.coalesce(Site.last_crawled, Site.updated_at, Site.created_at)).nullslast(),
+                      Site.brand.asc().nullslast(),
+                      Site.country.asc().nullslast(),
+                      Site.site.asc())
+
+
+def _tracking_facets(db: Session, allowed: list[str]) -> dict:
+    rows = db.query(Site.country, Site.brand, Site.track_status).filter(Site.site.in_(allowed)).all()
+    markets = sorted({(country or "").upper() for country, _, _ in rows if country})
+    brands = sorted({brand for _, brand, _ in rows if brand}, key=lambda x: x.lower())
+    statuses = sorted({(status or "tracking").lower() for _, _, status in rows})
+    return {"markets": markets, "brands": brands, "statuses": statuses}
+
+
+def tracking_row(db: Session, s: Site, metrics: dict | None = None) -> dict:
+    m = metrics if metrics is not None else _metrics(db, s.site)
+    display_updated = (
+        s.last_crawled.isoformat() if s.last_crawled else
+        m.get("last_product_updated") or
+        (s.updated_at.isoformat() if s.updated_at else None)
+    )
     return {
         "site": s.site, "brand": s.brand, "country": s.country,
         "url": s.url, "platform": s.platform,
+        "currency": _currency_for_site(s.site),
         "track_status": s.track_status or "tracking",
         "source": s.source or "yaml", "creator": s.creator,
         "review_rate": s.review_rate,
         "created_at": s.created_at.isoformat() if s.created_at else None,
         "updated_at": s.updated_at.isoformat() if s.updated_at else None,
         "last_crawled": s.last_crawled.isoformat() if s.last_crawled else None,
+        "display_updated_at": display_updated,
         **m,
     }
+
+
+def _require_workspace_admin(user: str, db: Session, ws: Workspace):
+    u = _require_dashboard_user(user, db)
+    if _is_super_admin(u):
+        return u
+    member = (db.query(WorkspaceMember)
+              .filter(WorkspaceMember.workspace_id == ws.id,
+                      WorkspaceMember.user_id == u.id,
+                      WorkspaceMember.status == "active")
+              .first())
+    if not member or (member.role or "") not in {"owner", "admin"}:
+        raise HTTPException(403, "需要当前 workspace 管理员权限")
+    return u
 
 
 @router.get("/tracking")
@@ -70,21 +157,14 @@ def list_tracking(
     ws = _current_workspace(user, db, x_workspace_id)
     allowed = _workspace_site_names(db, ws.id, include_hidden=True)
     q = db.query(Site).filter(Site.site.in_(allowed))
-    if search:
-        like = f"%{search}%"
-        q = q.filter(or_(Site.url.ilike(like), Site.brand.ilike(like),
-                         Site.site.ilike(like)))
-    if market:
-        q = q.filter(Site.country == market)
-    if brand:
-        q = q.filter(Site.brand == brand)
-    if status:
-        q = q.filter(Site.track_status == status)
+    q = _apply_tracking_filters(q, search, market, brand, status)
     total = q.count()
-    rows = (q.order_by(Site.created_at.desc().nullslast(), Site.id.desc())
+    rows = (_tracking_order(q)
             .offset((page - 1) * page_size).limit(page_size).all())
+    metrics = _metrics_for_sites(db, [s.site for s in rows])
     return {"total": total, "page": page, "page_size": page_size,
-            "items": [tracking_row(db, s) for s in rows]}
+            "facets": _tracking_facets(db, allowed),
+            "items": [tracking_row(db, s, metrics.get(s.site)) for s in rows]}
 
 
 @public_router.get("/tracking/export")
@@ -103,27 +183,35 @@ def export_tracking(
     ws = _current_workspace(u.username, db, str(workspace_id) if workspace_id else None)
     allowed = _workspace_site_names(db, ws.id, include_hidden=True)
     q = db.query(Site).filter(Site.site.in_(allowed))
-    if search:
-        like = f"%{search}%"
-        q = q.filter(or_(Site.url.ilike(like), Site.brand.ilike(like), Site.site.ilike(like)))
-    if market:
-        q = q.filter(Site.country == market)
-    if brand:
-        q = q.filter(Site.brand == brand)
-    if status:
-        q = q.filter(Site.track_status == status)
-    rows = q.order_by(Site.created_at.desc().nullslast(), Site.id.desc()).all()
+    q = _apply_tracking_filters(q, search, market, brand, status)
+    rows = _tracking_order(q).all()
+    metrics = _metrics_for_sites(db, [s.site for s in rows])
 
     wb = Workbook(); sh = wb.active; sh.title = "Tracking"
-    headers = ["Market", "Brand", "URL", "Status", "Products",
-               "30-Day Sales", "30-Day Revenue", "Updated", "Created", "Creator"]
+    headers = ["Market", "Brand", "URL", "Status", "Products", "SKU Rows",
+               "30-Day Sales", "30-Day Revenue", "Updated Time",
+               "Created Time", "Creator", "Source"]
     sh.append(headers)
     for s in rows:
-        m = _metrics(db, s.site)
-        sh.append([s.country, s.brand, s.url, s.track_status, m["products"],
-                   m["thirty_day_sales"], m["thirty_day_revenue"],
-                   s.updated_at.isoformat() if s.updated_at else "",
-                   s.created_at.isoformat() if s.created_at else "", s.creator])
+        m = metrics.get(s.site, _empty_metrics())
+        display_updated = (
+            s.last_crawled.isoformat() if s.last_crawled else
+            m.get("last_product_updated") or
+            (s.updated_at.isoformat() if s.updated_at else "")
+        )
+        source = "手动" if (s.source or "yaml") == "user" else "种子"
+        currency = _currency_for_site(s.site) or ""
+        revenue = ""
+        if m["sales_available"]:
+            revenue = f"{currency} {m['thirty_day_revenue']}".strip()
+        sh.append([s.country, s.brand, s.url, s.track_status or "tracking", m["products"],
+                   m["sku_count"],
+                   m["thirty_day_sales"] if m["sales_available"] else "",
+                   revenue,
+                   display_updated,
+                   s.created_at.isoformat() if s.created_at else "",
+                   s.creator or "系统",
+                   source])
     buf = io.BytesIO(); wb.save(buf); buf.seek(0)
     return StreamingResponse(
         buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -151,8 +239,8 @@ def add_tracking(
     x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
     db: Session = Depends(get_db),
 ):
-    _require_admin(user, db)
     ws = _current_workspace(user, db, x_workspace_id)
+    _require_workspace_admin(user, db, ws)
     raw_url = (payload.get("url") or "").strip()
     if not raw_url:
         raise HTTPException(400, "url 不能为空")
@@ -163,7 +251,7 @@ def add_tracking(
 
     platform, base = detect_platform(raw_url)
     if platform is None:
-        raise HTTPException(400, "无法识别平台，请联系技术人员手工配置")
+        platform = "generic"
 
     code = _gen_site_code(db, base, country)
     now = datetime.utcnow()
@@ -201,8 +289,8 @@ def edit_tracking(code: str, payload: dict,
                   user: str = Depends(require_user),
                   x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
                   db: Session = Depends(get_db)):
-    _require_admin(user, db)
     ws = _current_workspace(user, db, x_workspace_id)
+    _require_workspace_admin(user, db, ws)
     site = _user_site_or_404(db, ws.id, code)
     if "brand" in payload:
         site.brand = (payload.get("brand") or "").strip()[:50] or None
@@ -234,8 +322,8 @@ def _set_status(db: Session, ws_id: int, code: str, status: str):
 def pause_tracking(code: str, user: str = Depends(require_user),
                    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
                    db: Session = Depends(get_db)):
-    _require_admin(user, db)
     ws = _current_workspace(user, db, x_workspace_id)
+    _require_workspace_admin(user, db, ws)
     return _set_status(db, ws.id, code, "paused")
 
 
@@ -243,8 +331,8 @@ def pause_tracking(code: str, user: str = Depends(require_user),
 def resume_tracking(code: str, user: str = Depends(require_user),
                     x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
                     db: Session = Depends(get_db)):
-    _require_admin(user, db)
     ws = _current_workspace(user, db, x_workspace_id)
+    _require_workspace_admin(user, db, ws)
     return _set_status(db, ws.id, code, "tracking")
 
 
@@ -252,13 +340,28 @@ def resume_tracking(code: str, user: str = Depends(require_user),
 def delete_tracking(code: str, user: str = Depends(require_user),
                     x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
                     db: Session = Depends(get_db)):
-    _require_admin(user, db)
     ws = _current_workspace(user, db, x_workspace_id)
+    _require_workspace_admin(user, db, ws)
     site = _user_site_or_404(db, ws.id, code)
-    if (site.source or "yaml") != "user":
-        raise HTTPException(400, "种子站点不可删除")
+    link = (db.query(WorkspaceSite)
+            .filter(WorkspaceSite.workspace_id == ws.id,
+                    WorkspaceSite.site == code)
+            .first())
+    if not link:
+        raise HTTPException(404, "站点不存在或不在当前工作区")
     orphaned = db.query(Product).filter(Product.site == code).count()
-    db.query(WorkspaceSite).filter(WorkspaceSite.site == code).delete()
-    db.delete(site)
+    db.delete(link)
+    remaining_refs = (db.query(WorkspaceSite)
+                      .filter(WorkspaceSite.site == code,
+                              WorkspaceSite.id != link.id)
+                      .count())
+    deleted_site = False
+    if (site.source or "yaml") == "user" and remaining_refs == 0:
+        db.delete(site)
+        deleted_site = True
     db.commit()
-    return {"deleted": code, "orphaned_products": orphaned}
+    return {
+        "removed": code,
+        "deleted_site": deleted_site,
+        "orphaned_products": orphaned if deleted_site else 0,
+    }

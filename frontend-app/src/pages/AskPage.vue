@@ -2,18 +2,22 @@
 import { computed, onMounted, ref } from 'vue'
 import { listCoverage } from '../api/coverage'
 import { asList, fmtNumber, proxyAvailable } from '../api/client'
-import { latestDailyDelta, listJobs, triggerJob } from '../api/jobs'
+import { latestDailyDelta, listJobs } from '../api/jobs'
 import { listSites } from '../api/products'
 import { proxyStatus } from '../api/settings'
+import PageLoading from '../components/common/PageLoading.vue'
+import { useJobTrigger } from '../composables/useJobTrigger'
 
 const askInput = ref('')
 const askResult = ref<Record<string, any> | null>(null)
 const askRunning = ref(false)
+const loading = ref(false)
 const coverage = ref<Record<string, any>>({ summary: {}, sites: [] })
 const jobs = ref<Record<string, any>[]>([])
 const proxy = ref<Record<string, any>>({})
 const delta = ref<Record<string, any> | null>(null)
 const siteRows = ref<Record<string, any>[]>([])
+const jobTrigger = useJobTrigger({ onDone: () => load() })
 
 const starters = [
   { icon: '📊', title: '总览快照', desc: '当前工作区覆盖率和商品总数', key: 'overview' },
@@ -30,24 +34,30 @@ const runningJobs = computed(() => jobs.value.filter((j) => j.status === 'runnin
 const successJobs = computed(() => jobs.value.filter((j) => ['success', 'completed'].includes(j.status)).length)
 const proxyOk = computed(() => proxyAvailable(proxy.value))
 const proxyTotal = computed(() => Number(proxy.value.total || 0))
+const triggerSite = computed(() => String((askResult.value?.data as Record<string, any> | null)?.site || ''))
 
 function askTypeLabel(type?: string) {
   return ({ overview: '总览快照', new: '今日变化', failed: '失败任务', proxy: '代理池', trigger: '触发抓取' } as Record<string, string>)[type || ''] || '查询结果'
 }
 
 async function load() {
-  const [coverageData, jobsData, proxyData, deltaData, siteData] = await Promise.all([
-    listCoverage().catch(() => ({ summary: {}, sites: [] })),
-    listJobs({ limit: 30 }).catch(() => ({ jobs: [] })),
-    proxyStatus().catch(() => ({})),
-    latestDailyDelta().catch(() => null),
-    listSites().catch(() => [])
-  ])
-  coverage.value = coverageData
-  jobs.value = asList(jobsData, ['jobs', 'items'])
-  proxy.value = proxyData || {}
-  delta.value = deltaData
-  siteRows.value = asList(siteData, ['sites', 'items'])
+  loading.value = true
+  try {
+    const [coverageData, jobsData, proxyData, deltaData, siteData] = await Promise.all([
+      listCoverage().catch(() => ({ summary: {}, sites: [] })),
+      listJobs({ limit: 30 }).catch(() => ({ jobs: [] })),
+      proxyStatus().catch(() => ({})),
+      latestDailyDelta().catch(() => null),
+      listSites().catch(() => [])
+    ])
+    coverage.value = coverageData
+    jobs.value = asList(jobsData, ['jobs', 'items'])
+    proxy.value = proxyData || {}
+    delta.value = deltaData
+    siteRows.value = asList(siteData, ['sites', 'items'])
+  } finally {
+    loading.value = false
+  }
 }
 
 async function runStarter(key: string) {
@@ -62,8 +72,8 @@ async function runStarter(key: string) {
       const site = siteRows.value[0]?.site || siteRows.value[0]?.name
       if (!site) data = { msg: '当前工作区还没有可触发的站点' }
       else {
-        await triggerJob({ site })
-        data = { msg: `已触发 ${site}`, site }
+        const state = await jobTrigger.trigger(site)
+        data = { msg: `已触发 ${site}`, site, job_id: state?.jobId }
       }
     }
     askResult.value = { type: key, data }
@@ -113,13 +123,17 @@ onMounted(load)
             <span>{{ askTypeLabel(askResult.type) }}</span>
             <button @click="askResult = null">清除</button>
           </div>
+          <div v-if="askResult.type === 'trigger' && triggerSite" class="trigger-note answer-trigger" :class="jobTrigger.classFor(triggerSite)">
+            {{ jobTrigger.labelFor(triggerSite, '触发抓取') }} · {{ jobTrigger.detailFor(triggerSite) }}
+          </div>
           <pre>{{ JSON.stringify(askResult.data, null, 2) }}</pre>
         </div>
       </div>
 
       <div class="trace">
         <h4>实时数据</h4>
-        <div class="trace-lines">
+        <PageLoading v-if="loading && !sites.length && !jobs.length" compact title="同步实时数据..." />
+        <div v-else class="trace-lines">
           <div>📦 商品: <b>{{ fmtNumber(totalSku) }}</b></div>
           <div>🌐 覆盖: <b>{{ coveragePct }}%</b></div>
           <div>⚙️ 跑中: <b>{{ runningJobs }}</b></div>

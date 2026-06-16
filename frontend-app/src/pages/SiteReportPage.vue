@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { asList, fmtDate, fmtPrice, qs } from '../api/client'
-import { getProduct, listProducts, listPromotions, listSites, productPriceHistory, siteOverview } from '../api/products'
+import { listProducts, listPromotions, listSites, productTrend, siteOverview } from '../api/products'
 import { useAuthStore } from '../stores/auth'
+import DataLoadingPanel from '../components/common/DataLoadingPanel.vue'
+import PageLoading from '../components/common/PageLoading.vue'
+
+const TrendLineChart = defineAsyncComponent(() => import('../components/charts/TrendLineChart.vue'))
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -24,6 +28,7 @@ function emptyFilters() {
     min_rating: '', max_rating: '', min_reviews: '', max_reviews: '',
     min_price: '', max_price: '', min_sales: '', max_sales: '',
     min_revenue: '', max_revenue: '',
+    min_variants: '', max_variants: '',
     has_video: '', free_shipping: '',
     created_from: '', created_to: '',
   }
@@ -52,12 +57,22 @@ const promoTotal = ref(0)
 const promoPage = ref(1)
 const promoPageSize = ref(20)
 const promoTotalPages = computed(() => Math.max(1, Math.ceil(promoTotal.value / Number(promoPageSize.value || 20))))
-const dateRange = ref({ from: '2025-10-01', to: '2026-04-16' })
-const lastUpdate = ref('2026.05.15')
+const promoSearch = ref('')
+const promoType = ref('')
+const promoDateFrom = ref('')
+const promoDateTo = ref('')
+const dateRange = ref({ from: '', to: '' })
+const lastUpdate = ref('—')
 const DEFAULT_CFG = {
   sections: { kpi: true, trend: true, products: true, promos: true },
   kpiCards: { sku: true, new: true, sales: true, revenue: true, traffic: true, conversion: true },
-  productCols: { sku: true, title: true, attrs: true, price: false, rating: false, status: false },
+  productCols: {
+    sku: true, title: true, label: true, variantId: true, variantCount: true, attrs: true,
+    salePrice: true, price: true, sales: true, revenue: true,
+    rating: true, reviews: true, status: true, category: true,
+    inventory: true, video: true, freeShipping: true,
+    createdTime: true, updatedTime: true, action: true,
+  },
   timeRange: '30d'
 }
 function cloneCfg() {
@@ -85,45 +100,15 @@ const cards = computed<Record<string, any>>(() => {
   const data = overview.value || {}
   return data.cards && typeof data.cards === 'object' ? data.cards : data
 })
+const reportCurrency = computed(() => cards.value.currency || overview.value?.currency || activeSite.value.currency || null)
 const trends = computed<Record<string, any>[]>(() => asList(overview.value?.trends || [], ['trends', 'items']))
+const trendSummary = computed<Record<string, any>>(() => overview.value?.trend_summary || {})
+const storeCurrentPeriod = computed(() => trendSummary.value?.current_period || null)
+const storePreviousPeriod = computed(() => trendSummary.value?.previous_period || null)
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / Number(pageSize.value || 10))))
-// 趋势粒度:day / week / month。日快照按 ISO 周或月分桶,桶内取最后一天
-// (sku_count/sales/revenue 都是时点/30天滚动值,不可累加,取桶末代表)。
+const initialReportLoading = computed(() => loading.value && !overview.value && !products.value.length && !promotions.value.length)
 const granularity = ref<'day' | 'week' | 'month'>('month')
-function bucketKey(dateStr: string): string {
-  const d = new Date(dateStr)
-  if (Number.isNaN(d.getTime())) return dateStr
-  if (granularity.value === 'month') return dateStr.slice(0, 7)
-  if (granularity.value === 'week') {
-    const onejan = new Date(d.getFullYear(), 0, 1)
-    const week = Math.ceil(((d.getTime() - onejan.getTime()) / 86400000 + onejan.getDay() + 1) / 7)
-    return `${d.getFullYear()}-W${String(week).padStart(2, '0')}`
-  }
-  return dateStr.slice(0, 10)
-}
-const aggregatedTrends = computed<Record<string, any>[]>(() => {
-  if (granularity.value === 'day') return trends.value
-  const buckets = new Map<string, Record<string, any>>()
-  for (const t of trends.value) {
-    const key = bucketKey(String(t.date || ''))
-    buckets.set(key, { ...t, date: key }) // 后写覆盖 → 桶内保留最后一天
-  }
-  return Array.from(buckets.values())
-})
-const chartLines = computed(() => {
-  const rows = aggregatedTrends.value
-  if (!rows.length) return null
-  const series = {
-    sku: rows.map((x) => Number(x.sku_count || 0)),
-    new: rows.map((x) => Number(x.new_product_count || 0)),
-    sales: rows.map((x) => Number(x.estimated_sales || 0)),
-    revenue: rows.map((x) => Math.round(Number(x.estimated_revenue || 0))),
-    reviews: rows.map((x) => Number(x.review_total || 0)),
-    rating: rows.map((x) => Number(x.avg_rating || 0))   // 0-5,单独按 max=5 缩放
-  }
-  const max = Math.max(1, ...series.sku, ...series.new, ...series.sales, ...series.revenue, ...series.reviews)
-  return { dates: rows.map((x) => String(x.date || '')), series, max }
-})
+const aggregatedTrends = computed<Record<string, any>[]>(() => trends.value)
 
 async function loadSites() {
   sites.value = asList(await listSites(), ['sites', 'items'])
@@ -142,6 +127,11 @@ async function loadReport() {
     localStorage.setItem('sc_report_site', site.value)
     const workspaceId = String(route.query.workspace_id || auth.workspaceId || '')
     router.replace({ path: '/report', query: { site: site.value, ...(workspaceId ? { workspace_id: workspaceId } : {}) } })
+    const overviewParams = {
+      granularity: granularity.value,
+      date_from: dateRange.value.from,
+      date_to: dateRange.value.to,
+    }
     const productParams: Record<string, unknown> = { site: site.value, page: page.value, page_size: pageSize.value }
     if (search.value) productParams.search = search.value
     // 子 tab → 后端唯一认的 tab 参数(all|bestseller|new)
@@ -151,9 +141,17 @@ async function loadReport() {
       if (v !== '' && v !== null && v !== undefined) productParams[k] = v
     }
     const [overviewData, productsData, promosData] = await Promise.all([
-      siteOverview(site.value),
+      siteOverview(site.value, overviewParams),
       listProducts(productParams),
-      listPromotions({ site: site.value, page: promoPage.value, page_size: promoPageSize.value })
+      listPromotions({
+        site: site.value,
+        page: promoPage.value,
+        page_size: promoPageSize.value,
+        search: promoSearch.value.trim(),
+        type: promoType.value,
+        date_from: promoDateFrom.value,
+        date_to: promoDateTo.value,
+      })
     ])
     overview.value = overviewData
     products.value = asList(productsData, ['items', 'products'])
@@ -162,7 +160,7 @@ async function loadReport() {
     const nextCards = overviewData?.cards && typeof overviewData.cards === 'object' ? overviewData.cards : overviewData
     total.value = Number(productsData?.total || nextCards?.sku_count || nextCards?.total_products || products.value.length || 0)
     const updateTime = overviewData?.last_run || overviewData?.updated_at
-    lastUpdate.value = updateTime ? fmtDate(updateTime) : '2026.05.15'
+    lastUpdate.value = updateTime ? fmtDate(updateTime) : '—'
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -170,32 +168,173 @@ async function loadReport() {
   }
 }
 
+function productQueryParams() {
+  const params: Record<string, unknown> = { site: site.value, token: auth.token, workspace_id: auth.workspaceId }
+  if (search.value.trim()) params.search = search.value.trim()
+  if (subTab.value === 'new' || subTab.value === 'bestseller') params.tab = subTab.value
+  for (const [k, v] of Object.entries(filters.value)) {
+    if (v !== '' && v !== null && v !== undefined) params[k] = v
+  }
+  return params
+}
+
 function exportProducts() {
-  window.open(`/api/export/products${qs({ site: site.value, token: auth.token, workspace_id: auth.workspaceId })}`, '_blank')
+  window.open(`/api/export/products${qs(productQueryParams())}`, '_blank')
+}
+
+function exportPromotions() {
+  window.open(`/api/export/promotions${qs({
+    site: site.value,
+    token: auth.token,
+    workspace_id: auth.workspaceId,
+    search: promoSearch.value.trim(),
+    type: promoType.value,
+    date_from: promoDateFrom.value,
+    date_to: promoDateTo.value,
+  })}`, '_blank')
+}
+
+function applyPromoFilters() {
+  promoPage.value = 1
+  loadReport()
+}
+
+function resetPromoFilters() {
+  promoSearch.value = ''
+  promoType.value = ''
+  promoDateFrom.value = ''
+  promoDateTo.value = ''
+  applyPromoFilters()
+}
+
+function productTitle(p: Record<string, any>) {
+  return p.title || p.name || p.product_title || p.spu || p.sku || p.item_id || `商品 #${p.id}`
+}
+
+function yesNo(value: unknown) {
+  if (value === true) return 'YES'
+  if (value === false) return 'NO'
+  return '--'
+}
+
+function shortDate(value: unknown) {
+  if (!value) return '--'
+  return String(value).slice(0, 16).replace('T', ' ')
+}
+
+function attrEntries(p: Record<string, any>) {
+  const attrs = p.attributes && typeof p.attributes === 'object' ? p.attributes : {}
+  return Object.entries(attrs).filter(([, v]) => v !== null && v !== undefined && String(v) !== '')
+}
+
+function productLabels(p: Record<string, any>) {
+  const labels = []
+  if (p.label) labels.push(String(p.label))
+  if (p.is_new) labels.push('NEW')
+  if (p.is_bestseller) labels.push('TOP')
+  return labels
+}
+
+function promoTitle(p: Record<string, any>) {
+  return p.product_title || p.title || p.promotion_name || p.sku || '--'
+}
+
+function promoName(p: Record<string, any>) {
+  return p.promotion_name || p.name || p.promotion_type || p.type || '--'
 }
 
 // 商品详情 + 价格历史弹窗
 const detail = ref<Record<string, any> | null>(null)
 const priceHistory = ref<Record<string, any>[]>([])
+const productTrendDetail = ref<Record<string, any> | null>(null)
 const detailLoading = ref(false)
+const trendGranularity = ref<'day' | 'week' | 'month'>('month')
+const trendDateFrom = ref('')
+const trendDateTo = ref('')
+const trendPromoSearch = ref('')
+const trendPromoType = ref('')
+const productTrendSeries = [
+  { key: 'estimated_sales', name: '销量', color: '#f59e0b' },
+  { key: 'estimated_revenue', name: '收入', color: '#ef4444' },
+  { key: 'sale_price', name: '售价', color: '#3b82f6' },
+  { key: 'review_total', name: '评论数', color: '#8b5cf6' },
+  { key: 'avg_rating', name: '评分', color: '#ec4899', yAxisIndex: 1 },
+]
+const productTrendRows = computed(() => productTrendDetail.value?.trend || priceHistory.value || [])
+const productPromotions = computed(() => productTrendDetail.value?.promotions || [])
+const productSummary = computed(() => productTrendDetail.value?.summary || {})
+const productCurrentPeriod = computed(() => productSummary.value?.current_period || null)
+const productPreviousPeriod = computed(() => productSummary.value?.previous_period || null)
+function productTrendParams(includeToken = false) {
+  return {
+    ...(includeToken ? { token: auth.token, workspace_id: auth.workspaceId } : {}),
+    granularity: trendGranularity.value,
+    date_from: trendDateFrom.value,
+    date_to: trendDateTo.value,
+    promo_search: trendPromoSearch.value.trim(),
+    promo_type: trendPromoType.value,
+  }
+}
 async function openDetail(id: number | string | undefined) {
   if (id === undefined || id === null) return
   detail.value = null
   priceHistory.value = []
+  productTrendDetail.value = null
   detailLoading.value = true
   try {
-    const [d, h] = await Promise.all([getProduct(id), productPriceHistory(id)])
-    detail.value = d
-    priceHistory.value = Array.isArray(h) ? h : asList(h, ['items', 'history'])
+    const trend = await productTrend(id, productTrendParams())
+    productTrendDetail.value = trend
+    detail.value = trend?.product || null
+    priceHistory.value = asList(trend?.trend || [], ['items', 'history'])
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
     detailLoading.value = false
   }
 }
+async function reloadProductTrend() {
+  if (!detail.value?.id) return
+  detailLoading.value = true
+  try {
+    productTrendDetail.value = await productTrend(detail.value.id, productTrendParams())
+    priceHistory.value = asList(productTrendDetail.value?.trend || [], ['items', 'history'])
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    detailLoading.value = false
+  }
+}
+function resetProductTrendFilters() {
+  trendDateFrom.value = ''
+  trendDateTo.value = ''
+  trendPromoSearch.value = ''
+  trendPromoType.value = ''
+  reloadProductTrend()
+}
+function exportProductTrend() {
+  if (!detail.value?.id) return
+  window.open(`/api/export/product-trend${qs({ pid: detail.value.id, ...productTrendParams(true) })}`, '_blank')
+}
+function storeDelta(key: string, format: 'number' | 'price' | 'percent' = 'number') {
+  const cur = Number(storeCurrentPeriod.value?.[key] || 0)
+  const prev = Number(storePreviousPeriod.value?.[key] || 0)
+  if (!storePreviousPeriod.value) return '无上周期'
+  const delta = cur - prev
+  if (format === 'price') return `${delta >= 0 ? '+' : ''}${fmtPrice(delta, reportCurrency.value)} vs 上周期`
+  if (format === 'percent') return `${delta >= 0 ? '+' : ''}${delta.toFixed(2)} vs 上周期`
+  return `${delta >= 0 ? '+' : ''}${delta.toLocaleString()} vs 上周期`
+}
+function periodDelta(key: string) {
+  const cur = Number(productCurrentPeriod.value?.[key] || 0)
+  const prev = Number(productPreviousPeriod.value?.[key] || 0)
+  if (!productPreviousPeriod.value) return '无上周期'
+  const delta = cur - prev
+  return `${delta >= 0 ? '+' : ''}${delta.toLocaleString()} vs 上周期`
+}
 function closeDetail() {
   detail.value = null
   priceHistory.value = []
+  productTrendDetail.value = null
 }
 
 function saveCfg() {
@@ -208,16 +347,6 @@ function resetCfg() {
   localStorage.removeItem('sc_report_cfg')
 }
 
-function makePath(values: number[], max: number, w: number, h: number, pad = 20) {
-  if (!values.length) return ''
-  const stepX = (w - 2 * pad) / Math.max(values.length - 1, 1)
-  return values.map((value, index) => {
-    const x = pad + index * stepX
-    const y = h - pad - (value / max) * (h - 2 * pad)
-    return `${index === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
-  }).join(' ')
-}
-
 watch(site, () => {
   page.value = 1
   promoPage.value = 1
@@ -225,13 +354,14 @@ watch(site, () => {
 })
 watch([page, pageSize, subTab], loadReport)
 watch([promoPage, promoPageSize], loadReport)
+watch([granularity, () => dateRange.value.from, () => dateRange.value.to], loadReport)
 // 权限:viewer 只读,可查看面板但编辑动作(导出/自定义报表)受限。
 // 规格"仅有权限人员可查看/编辑"——查看放开,编辑按角色门控。
 const canEdit = computed(() => {
   const u = auth.user
   if (!u) return false
   if (u.global_role === 'super_admin' || u.role === 'admin' || u.role === 'owner') return true
-  return ['admin', 'owner', 'operator', 'member', 'user'].includes(u.workspace_role || u.role || '')
+  return ['admin', 'owner', 'operator'].includes(u.workspace_role || u.role || '')
 })
 onMounted(async () => {
   if (auth.token && !auth.user) await auth.loadMe().catch(() => null)
@@ -263,7 +393,7 @@ onMounted(async () => {
           </div>
         </div>
         <div class="meta">
-          <span>总产品数: <b>{{ cards.sku_count || total || '--' }}</b></span>
+          <span>总 SKU 行: <b>{{ cards.sku_count || total || '--' }}</b></span>
           <span>总类别数: <b>{{ cards.category_count != null ? cards.category_count : '--' }}</b></span>
         </div>
       </div>
@@ -276,14 +406,17 @@ onMounted(async () => {
 
       <UAlert v-if="error" color="error" variant="soft" :title="error" class="mb-4" />
 
+      <PageLoading v-if="initialReportLoading" title="加载站点报表..." note="正在汇总概览、商品和促销数据" />
+
+      <template v-else>
       <template v-if="tab === 'shop'">
         <div v-if="cfg.sections.kpi" class="stats">
-          <div v-if="cfg.kpiCards.sku" class="stat"><div class="lbl">SKU</div><div class="val">{{ cards.sku_count ? Number(cards.sku_count).toLocaleString() : '--' }}</div><div class="sub">在售 SKU</div></div>
-          <div v-if="cfg.kpiCards.new" class="stat"><div class="lbl">新增产品</div><div class="val">{{ cards.new_product_count ? Number(cards.new_product_count).toLocaleString() : '--' }}</div><div class="sub">New Arrivals</div></div>
-          <div v-if="cfg.kpiCards.sales" class="stat"><div class="lbl">30天销量</div><div class="val">{{ cards.thirty_day_sales ? Number(cards.thirty_day_sales).toLocaleString() : '--' }}</div><div class="sub">上个周期: --</div></div>
-          <div v-if="cfg.kpiCards.revenue" class="stat"><div class="lbl">30天收入</div><div class="val">{{ cards.thirty_day_revenue ? '$' + (Number(cards.thirty_day_revenue) / 1000).toFixed(1) + 'k' : '--' }}</div><div class="sub">上个周期: --</div></div>
-          <div v-if="cfg.kpiCards.traffic" class="stat"><div class="lbl">畅销产品</div><div class="val">{{ cards.bestseller_count != null ? Number(cards.bestseller_count).toLocaleString() : '--' }}</div><div class="sub">Bestsellers</div></div>
-          <div v-if="cfg.kpiCards.conversion" class="stat"><div class="lbl">类别数</div><div class="val">{{ cards.category_count != null ? Number(cards.category_count).toLocaleString() : '--' }}</div><div class="sub">Categories</div></div>
+          <div v-if="cfg.kpiCards.sku" class="stat"><div class="lbl">SKU</div><div class="val">{{ (storeCurrentPeriod?.sku_count ?? cards.sku_count) ? Number(storeCurrentPeriod?.sku_count ?? cards.sku_count).toLocaleString() : '--' }}</div><div class="sub">{{ storeDelta('sku_count') }}</div></div>
+          <div v-if="cfg.kpiCards.new" class="stat"><div class="lbl">新增产品</div><div class="val">{{ (storeCurrentPeriod?.new_product_count ?? cards.new_product_count) ? Number(storeCurrentPeriod?.new_product_count ?? cards.new_product_count).toLocaleString() : '--' }}</div><div class="sub">{{ storeDelta('new_product_count') }}</div></div>
+          <div v-if="cfg.kpiCards.sales" class="stat"><div class="lbl">30天销量</div><div class="val">{{ (storeCurrentPeriod?.estimated_sales ?? cards.thirty_day_sales) ? Number(storeCurrentPeriod?.estimated_sales ?? cards.thirty_day_sales).toLocaleString() : '--' }}</div><div class="sub">{{ storeDelta('estimated_sales') }}</div></div>
+          <div v-if="cfg.kpiCards.revenue" class="stat"><div class="lbl">30天收入</div><div class="val">{{ (storeCurrentPeriod?.estimated_revenue ?? cards.thirty_day_revenue) ? fmtPrice(storeCurrentPeriod?.estimated_revenue ?? cards.thirty_day_revenue, reportCurrency) : '--' }}</div><div class="sub">{{ storeDelta('estimated_revenue', 'price') }}</div></div>
+          <div v-if="cfg.kpiCards.traffic" class="stat"><div class="lbl">评论总数</div><div class="val">{{ storeCurrentPeriod?.review_total != null ? Number(storeCurrentPeriod.review_total).toLocaleString() : '--' }}</div><div class="sub">{{ storeDelta('review_total') }}</div></div>
+          <div v-if="cfg.kpiCards.conversion" class="stat"><div class="lbl">平均评分</div><div class="val">{{ storeCurrentPeriod?.avg_rating != null ? Number(storeCurrentPeriod.avg_rating).toFixed(2) : '--' }}</div><div class="sub">{{ storeDelta('avg_rating', 'percent') }}</div></div>
         </div>
 
         <div v-if="cfg.sections.trend" class="section">
@@ -295,50 +428,16 @@ onMounted(async () => {
                 <option value="week">按周</option>
                 <option value="day">按天</option>
               </select>
-              <span style="font-size:12px;color:#6b7280">{{ dateRange.from }} → {{ dateRange.to }}</span>
+              <input v-model="dateRange.from" class="date-input" type="date" />
+              <span class="range-sep">→</span>
+              <input v-model="dateRange.to" class="date-input" type="date" />
+              <span class="range-note">{{ trendSummary.visible_points || 0 }} 点</span>
             </div>
           </div>
           <div class="chart-wrap">
-            <div class="legend">
-              <span><span class="legend-dot" style="background:#3b82f6"></span>库存单位</span>
-              <span><span class="legend-dot" style="background:#10b981"></span>新SKU</span>
-              <span><span class="legend-dot" style="background:#f59e0b"></span>销售</span>
-              <span><span class="legend-dot" style="background:#ef4444"></span>收入</span>
-              <span><span class="legend-dot" style="background:#8b5cf6"></span>评论数</span>
-              <span><span class="legend-dot" style="background:#ec4899"></span>评分(0-5)</span>
-            </div>
-            <svg v-if="chartLines" class="chart-svg" viewBox="0 0 900 260" preserveAspectRatio="none">
-              <g class="grid">
-                <line x1="40" y1="40" x2="880" y2="40" />
-                <line x1="40" y1="100" x2="880" y2="100" />
-                <line x1="40" y1="160" x2="880" y2="160" />
-                <line x1="40" y1="220" x2="880" y2="220" />
-              </g>
-              <g class="axis-label">
-                <text x="32" y="44" text-anchor="end">{{ chartLines.max }}</text>
-                <text x="32" y="104" text-anchor="end">{{ Math.round(chartLines.max * 0.66) }}</text>
-                <text x="32" y="164" text-anchor="end">{{ Math.round(chartLines.max * 0.33) }}</text>
-                <text x="32" y="224" text-anchor="end">0</text>
-              </g>
-              <g>
-                <path :d="makePath(chartLines.series.sku, chartLines.max, 900, 240)" stroke="#3b82f6" fill="none" stroke-width="2" />
-                <path :d="makePath(chartLines.series.new, chartLines.max, 900, 240)" stroke="#10b981" fill="none" stroke-width="2" />
-                <path :d="makePath(chartLines.series.sales, chartLines.max, 900, 240)" stroke="#f59e0b" fill="none" stroke-width="2" />
-                <path :d="makePath(chartLines.series.revenue, chartLines.max, 900, 240)" stroke="#ef4444" fill="none" stroke-width="2" />
-                <path :d="makePath(chartLines.series.reviews, chartLines.max, 900, 240)" stroke="#8b5cf6" fill="none" stroke-width="2" />
-                <path :d="makePath(chartLines.series.rating, 5, 900, 240)" stroke="#ec4899" fill="none" stroke-width="2" stroke-dasharray="4,3" />
-              </g>
-              <g class="axis-label">
-                <text
-                  v-for="(d, i) in chartLines.dates.filter((_, idx) => idx % Math.ceil(chartLines!.dates.length / 10) === 0)"
-                  :key="`${d}-${i}`"
-                  :x="40 + i * (860 / Math.max(chartLines.dates.length - 1, 1)) * Math.ceil(chartLines.dates.length / 10)"
-                  y="248"
-                  text-anchor="end"
-                >{{ d.slice(5) }}</text>
-              </g>
-            </svg>
-            <div v-else class="loading">趋势数据加载中…</div>
+            <TrendLineChart v-if="aggregatedTrends.length" :rows="aggregatedTrends" />
+            <div v-else-if="loading" class="loading">趋势数据加载中…</div>
+            <div v-else class="loading">暂无趋势数据</div>
           </div>
         </div>
       </template>
@@ -377,6 +476,7 @@ onMounted(async () => {
               <label>价格<span class="rng"><input v-model="filters.min_price" type="number" placeholder="min" /><input v-model="filters.max_price" type="number" placeholder="max" /></span></label>
               <label>30天销量<span class="rng"><input v-model="filters.min_sales" type="number" placeholder="min" /><input v-model="filters.max_sales" type="number" placeholder="max" /></span></label>
               <label>30天收入<span class="rng"><input v-model="filters.min_revenue" type="number" placeholder="min" /><input v-model="filters.max_revenue" type="number" placeholder="max" /></span></label>
+              <label>变体数<span class="rng"><input v-model="filters.min_variants" type="number" placeholder="min" /><input v-model="filters.max_variants" type="number" placeholder="max" /></span></label>
               <label>视频
                 <select v-model="filters.has_video"><option value="">不限</option><option value="true">有</option><option value="false">无</option></select>
               </label>
@@ -390,40 +490,77 @@ onMounted(async () => {
               <button class="primary" @click="applyFilters">应用筛选</button>
             </div>
           </div>
-          <table>
-            <thead>
-              <tr>
-                <th style="width:50px">NO.</th>
-                <th v-if="cfg.productCols.sku">库存单位</th>
-                <th v-if="cfg.productCols.title">产品详情</th>
-                <th v-if="cfg.productCols.attrs">属性</th>
-                <th v-if="cfg.productCols.price" style="width:90px">价格</th>
-                <th v-if="cfg.productCols.rating" style="width:80px">评分</th>
-                <th v-if="cfg.productCols.status" style="width:90px">状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(p, i) in products" :key="p.id || p.sku" style="cursor:pointer" @click="openDetail(p.id)">
-                <td>{{ (page - 1) * pageSize + i + 1 }}</td>
-                <td v-if="cfg.productCols.sku"><a class="sku-link" :href="p.product_url || undefined" :target="p.product_url ? '_blank' : undefined" rel="noopener" @click.stop>{{ p.sku || p.item_id }}</a></td>
-                <td v-if="cfg.productCols.title"><div class="title-cell"><div class="thumb">📦</div><div class="info"><span class="title-text" :title="p.title || p.name">{{ p.title || p.name || '' }}</span><span v-if="p.is_new" class="new-badge">NEW</span></div></div></td>
-                <td v-if="cfg.productCols.attrs">
-                  <div class="attr-cell">
-                    <div v-if="p.attributes?.color">Color: {{ p.attributes.color }}</div>
-                    <div v-if="p.attributes?.size">Size: {{ p.attributes.size }}</div>
-                    <div v-if="p.attributes?.material">Material: {{ p.attributes.material }}</div>
-                    <div v-if="!p.attributes || Object.keys(p.attributes).length === 0" style="color:#9ca3af">--</div>
-                  </div>
-                </td>
-                <td v-if="cfg.productCols.price">{{ fmtPrice(p.sale_price ?? p.price, p.currency) }}</td>
-                <td v-if="cfg.productCols.rating">{{ p.ratings || p.rating ? (p.ratings || p.rating) + ' (' + (p.review_count || 0) + ')' : '--' }}</td>
-                <td v-if="cfg.productCols.status">{{ p.status || '--' }}</td>
-              </tr>
-              <tr v-if="!products.length">
-                <td :colspan="1 + visibleProductColumnCount" class="empty">暂无数据 · 切换 site 或先抓取</td>
-              </tr>
-            </tbody>
-          </table>
+          <DataLoadingPanel class="report-table-wrap" :loading="loading" :has-data="products.length > 0" label="正在更新产品列表">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:50px">NO.</th>
+                  <th v-if="cfg.productCols.sku">Sku</th>
+                  <th v-if="cfg.productCols.title" style="min-width:280px">Product Details</th>
+                  <th v-if="cfg.productCols.label">Label</th>
+                  <th v-if="cfg.productCols.variantId">VariantId</th>
+                  <th v-if="cfg.productCols.variantCount" style="width:90px">Variants</th>
+                  <th v-if="cfg.productCols.attrs" style="min-width:180px">Attributes</th>
+                  <th v-if="cfg.productCols.salePrice" style="width:100px">Sale Price</th>
+                  <th v-if="cfg.productCols.price" style="width:100px">Price</th>
+                  <th v-if="cfg.productCols.sales" style="width:110px">30-Day Sales</th>
+                  <th v-if="cfg.productCols.revenue" style="width:120px">30-Day Revenue</th>
+                  <th v-if="cfg.productCols.rating" style="width:90px">Ratings</th>
+                  <th v-if="cfg.productCols.reviews" style="width:90px">Reviews</th>
+                  <th v-if="cfg.productCols.status" style="width:100px">Status</th>
+                  <th v-if="cfg.productCols.category" style="min-width:180px">Category</th>
+                  <th v-if="cfg.productCols.inventory" style="width:100px">Inventory</th>
+                  <th v-if="cfg.productCols.video" style="width:80px">Video</th>
+                  <th v-if="cfg.productCols.freeShipping" style="width:120px">Free shipping</th>
+                  <th v-if="cfg.productCols.createdTime" style="width:150px">Created Time</th>
+                  <th v-if="cfg.productCols.updatedTime" style="width:150px">Update Time</th>
+                  <th v-if="cfg.productCols.action" style="width:88px">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(p, i) in products" :key="p.id || p.sku" style="cursor:pointer" @click="openDetail(p.id)">
+                  <td>{{ (page - 1) * pageSize + i + 1 }}</td>
+                  <td v-if="cfg.productCols.sku"><a class="sku-link" :href="p.product_url || undefined" :target="p.product_url ? '_blank' : undefined" rel="noopener" @click.stop>{{ p.sku || p.item_id }}</a></td>
+                  <td v-if="cfg.productCols.title"><div class="title-cell"><img v-if="p.image" :src="p.image" class="thumb thumb-img" alt="" /><div v-else class="thumb">📦</div><div class="info"><span class="title-text" :title="productTitle(p)">{{ productTitle(p) }}</span><span v-if="p.is_new" class="new-badge">NEW</span></div></div></td>
+                  <td v-if="cfg.productCols.label">
+                    <div v-if="productLabels(p).length" class="mini-tags">
+                      <span v-for="tag in productLabels(p)" :key="tag">{{ tag }}</span>
+                    </div>
+                    <span v-else>--</span>
+                  </td>
+                  <td v-if="cfg.productCols.variantId">{{ p.variant_id || p.variantId || '--' }}</td>
+                  <td v-if="cfg.productCols.variantCount">{{ p.variant_count ?? 1 }}</td>
+                  <td v-if="cfg.productCols.attrs">
+                    <div class="attr-cell">
+                      <div v-for="[key, val] in attrEntries(p).slice(0, 4)" :key="key">{{ key }}: {{ val }}</div>
+                      <div v-if="attrEntries(p).length > 4" style="color:#9ca3af">+{{ attrEntries(p).length - 4 }}</div>
+                      <div v-if="attrEntries(p).length === 0" style="color:#9ca3af">--</div>
+                    </div>
+                  </td>
+                  <td v-if="cfg.productCols.salePrice">{{ fmtPrice(p.sale_price ?? p.price, p.currency) }}</td>
+                  <td v-if="cfg.productCols.price">{{ fmtPrice(p.original_price, p.currency) }}</td>
+                  <td v-if="cfg.productCols.sales">{{ p.thirty_day_sales != null ? Number(p.thirty_day_sales).toLocaleString() : '0' }}</td>
+                  <td v-if="cfg.productCols.revenue">{{ fmtPrice(p.thirty_day_revenue ?? 0, p.currency) }}</td>
+                  <td v-if="cfg.productCols.rating">{{ p.ratings || p.rating || '--' }}</td>
+                  <td v-if="cfg.productCols.reviews">{{ p.review_count != null ? Number(p.review_count).toLocaleString() : '0' }}</td>
+                  <td v-if="cfg.productCols.status">{{ p.status || '--' }}</td>
+                  <td v-if="cfg.productCols.category"><span class="title-text" :title="p.category_path">{{ p.category_path || '--' }}</span></td>
+                  <td v-if="cfg.productCols.inventory">{{ p.inventory ?? '--' }}</td>
+                  <td v-if="cfg.productCols.video">{{ yesNo(p.has_video) }}</td>
+                  <td v-if="cfg.productCols.freeShipping">{{ yesNo(p.has_free_shipping) }}</td>
+                  <td v-if="cfg.productCols.createdTime">{{ shortDate(p.created_time) }}</td>
+                  <td v-if="cfg.productCols.updatedTime">{{ shortDate(p.updated_time) }}</td>
+                  <td v-if="cfg.productCols.action"><button class="row-action" @click.stop="openDetail(p.id)">趋势</button></td>
+                </tr>
+                <tr v-if="loading && !products.length">
+                  <td :colspan="1 + visibleProductColumnCount" class="empty">产品数据加载中...</td>
+                </tr>
+                <tr v-else-if="!products.length">
+                  <td :colspan="1 + visibleProductColumnCount" class="empty">暂无数据 · 切换 site 或先抓取</td>
+                </tr>
+              </tbody>
+            </table>
+          </DataLoadingPanel>
           <div class="pagination">
             <button @click="page = Math.max(1, page - 1)" :disabled="page <= 1">‹</button>
             <button v-for="p in Math.min(totalPages, 5)" :key="p" @click="page = p" :class="{ active: page === p }">{{ p }}</button>
@@ -445,33 +582,71 @@ onMounted(async () => {
             <h3>🎁 销售促销 <span class="desc">查看产品的促销信息</span></h3>
             <div class="actions">
               <button class="icon-btn" @click="loadReport">↻ 刷新</button>
+              <button v-if="canEdit" class="icon-btn" @click="exportPromotions">↓ 导出</button>
             </div>
           </div>
-          <table>
-            <thead><tr>
-              <th style="width:50px">NO.</th><th>库存单位</th><th>促销名称</th><th>类型</th>
-              <th style="width:80px">折扣</th><th style="width:90px">原价</th><th style="width:90px">促销价</th>
-              <th>门槛</th><th style="width:130px">开始时间</th><th style="width:130px">结束时间</th><th style="width:130px">更新时间</th>
-            </tr></thead>
-            <tbody>
-              <tr v-for="(p, i) in promotions" :key="p.id || p.sku">
-                <td>{{ (promoPage - 1) * promoPageSize + i + 1 }}</td>
-                <td><a class="sku-link" :href="p.product_url || undefined" :target="p.product_url ? '_blank' : undefined" rel="noopener">{{ p.sku || p.item_id }}</a></td>
-                <td><span class="title-text" :title="p.promotion_name || p.product_title || p.title">{{ p.promotion_name || p.product_title || p.title || '--' }}</span></td>
-                <td>{{ p.promotion_type || p.type || '价格促销' }}</td>
-                <td>{{ p.discount_percent != null ? p.discount_percent + '%' : '--' }}</td>
-                <td>{{ fmtPrice(p.original_price, p.currency) }}</td>
-                <td>{{ fmtPrice(p.promotion_price, p.currency) }}</td>
-                <td>{{ p.threshold || '--' }}</td>
-                <td>{{ p.start_time ? p.start_time.slice(0, 16).replace('T', ' ') : '--' }}</td>
-                <td>{{ p.end_time ? p.end_time.slice(0, 16).replace('T', ' ') : '--' }}</td>
-                <td>{{ (p.detected_time || p.updated_at || '').slice(0, 16).replace('T', ' ') }}</td>
-              </tr>
-              <tr v-if="!promotions.length">
-                <td colspan="11" class="empty">暂无促销数据</td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="promo-filters">
+            <input v-model="promoSearch" placeholder="搜索 SKU / 商品 / 活动" @keyup.enter="applyPromoFilters" />
+            <select v-model="promoType" @change="applyPromoFilters">
+              <option value="">全部类型</option>
+              <option value="price">价格促销</option>
+              <option value="coupon">Coupons</option>
+              <option value="bundle">Bundle</option>
+            </select>
+            <input v-model="promoDateFrom" type="date" @change="applyPromoFilters" />
+            <input v-model="promoDateTo" type="date" @change="applyPromoFilters" />
+            <button class="icon-btn" @click="applyPromoFilters">筛选</button>
+            <button class="icon-btn" @click="resetPromoFilters">清空</button>
+          </div>
+          <DataLoadingPanel class="report-table-wrap" :loading="loading" :has-data="promotions.length > 0" label="正在更新促销列表">
+            <table>
+              <thead><tr>
+                <th style="width:50px">NO.</th>
+                <th style="width:110px">SKU</th>
+                <th style="width:150px">Updated Time</th>
+                <th style="min-width:300px">Products Details</th>
+                <th style="width:120px">Type</th>
+                <th style="min-width:180px">Name</th>
+                <th style="width:90px">Discount</th>
+                <th style="width:100px">Pre-price</th>
+                <th style="width:100px">Post-price</th>
+                <th style="min-width:130px">Threshold</th>
+                <th style="width:150px">Start Time</th>
+                <th style="width:150px">End Time</th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="(p, i) in promotions" :key="p.id || p.sku">
+                  <td>{{ (promoPage - 1) * promoPageSize + i + 1 }}</td>
+                  <td><a class="sku-link" :href="p.product_url || undefined" :target="p.product_url ? '_blank' : undefined" rel="noopener">{{ p.sku || p.item_id }}</a></td>
+                  <td>{{ shortDate(p.detected_time || p.updated_at) }}</td>
+                  <td>
+                    <div class="title-cell">
+                      <img v-if="p.product_image" :src="p.product_image" class="thumb thumb-img" alt="" />
+                      <div v-else class="thumb">📦</div>
+                      <div class="info">
+                        <span class="title-text" :title="promoTitle(p)">{{ promoTitle(p) }}</span>
+                        <span v-if="p.promotion_name" class="new-badge">{{ p.promotion_name }}</span>
+                      </div>
+                    </div>
+                  </td>
+                  <td>{{ p.promotion_type || p.type || '价格促销' }}</td>
+                  <td><span class="title-text" :title="promoName(p)">{{ promoName(p) }}</span></td>
+                  <td>{{ p.discount_percent != null ? p.discount_percent + '%' : '--' }}</td>
+                  <td>{{ fmtPrice(p.original_price, p.currency) }}</td>
+                  <td>{{ fmtPrice(p.promotion_price, p.currency) }}</td>
+                  <td>{{ p.threshold || '--' }}</td>
+                  <td>{{ p.start_time ? p.start_time.slice(0, 16).replace('T', ' ') : '--' }}</td>
+                  <td>{{ p.end_time ? p.end_time.slice(0, 16).replace('T', ' ') : '--' }}</td>
+                </tr>
+                <tr v-if="loading && !promotions.length">
+                  <td colspan="12" class="empty">促销数据加载中...</td>
+                </tr>
+                <tr v-else-if="!promotions.length">
+                  <td colspan="12" class="empty">暂无促销数据</td>
+                </tr>
+              </tbody>
+            </table>
+          </DataLoadingPanel>
           <div v-if="promoTotal" class="pagination">
             <button @click="promoPage = Math.max(1, promoPage - 1)" :disabled="promoPage <= 1">‹</button>
             <button v-for="p in Math.min(promoTotalPages, 5)" :key="p" @click="promoPage = p" :class="{ active: promoPage === p }">{{ p }}</button>
@@ -486,6 +661,7 @@ onMounted(async () => {
             <span style="margin-left:8px;color:#9ca3af;font-size:12px">共 {{ promoTotal }} 条</span>
           </div>
         </div>
+      </template>
       </template>
 
       <div class="cfg-mask" :class="{ open: cfgOpen }" @click="cfgOpen = false"></div>
@@ -515,10 +691,24 @@ onMounted(async () => {
             <h4>产品 table 列</h4>
             <div class="cfg-row"><input id="cc-sku" type="checkbox" v-model="cfg.productCols.sku"><label for="cc-sku">库存单位 SKU</label></div>
             <div class="cfg-row"><input id="cc-title" type="checkbox" v-model="cfg.productCols.title"><label for="cc-title">产品详情</label></div>
+            <div class="cfg-row"><input id="cc-label" type="checkbox" v-model="cfg.productCols.label"><label for="cc-label">Label</label></div>
+            <div class="cfg-row"><input id="cc-variant" type="checkbox" v-model="cfg.productCols.variantId"><label for="cc-variant">VariantId</label></div>
+            <div class="cfg-row"><input id="cc-variant-count" type="checkbox" v-model="cfg.productCols.variantCount"><label for="cc-variant-count">Variants</label></div>
             <div class="cfg-row"><input id="cc-attr" type="checkbox" v-model="cfg.productCols.attrs"><label for="cc-attr">属性</label></div>
-            <div class="cfg-row"><input id="cc-price" type="checkbox" v-model="cfg.productCols.price"><label for="cc-price">价格</label></div>
+            <div class="cfg-row"><input id="cc-sale-price" type="checkbox" v-model="cfg.productCols.salePrice"><label for="cc-sale-price">Sale Price</label></div>
+            <div class="cfg-row"><input id="cc-price" type="checkbox" v-model="cfg.productCols.price"><label for="cc-price">Price</label></div>
+            <div class="cfg-row"><input id="cc-sales" type="checkbox" v-model="cfg.productCols.sales"><label for="cc-sales">30 天销量</label></div>
+            <div class="cfg-row"><input id="cc-revenue" type="checkbox" v-model="cfg.productCols.revenue"><label for="cc-revenue">30 天收入</label></div>
             <div class="cfg-row"><input id="cc-rating" type="checkbox" v-model="cfg.productCols.rating"><label for="cc-rating">评分</label></div>
+            <div class="cfg-row"><input id="cc-reviews" type="checkbox" v-model="cfg.productCols.reviews"><label for="cc-reviews">评论数</label></div>
             <div class="cfg-row"><input id="cc-status" type="checkbox" v-model="cfg.productCols.status"><label for="cc-status">状态</label></div>
+            <div class="cfg-row"><input id="cc-category" type="checkbox" v-model="cfg.productCols.category"><label for="cc-category">Category</label></div>
+            <div class="cfg-row"><input id="cc-inventory" type="checkbox" v-model="cfg.productCols.inventory"><label for="cc-inventory">Inventory</label></div>
+            <div class="cfg-row"><input id="cc-video" type="checkbox" v-model="cfg.productCols.video"><label for="cc-video">Video</label></div>
+            <div class="cfg-row"><input id="cc-shipping" type="checkbox" v-model="cfg.productCols.freeShipping"><label for="cc-shipping">Free shipping</label></div>
+            <div class="cfg-row"><input id="cc-created" type="checkbox" v-model="cfg.productCols.createdTime"><label for="cc-created">Created Time</label></div>
+            <div class="cfg-row"><input id="cc-updated" type="checkbox" v-model="cfg.productCols.updatedTime"><label for="cc-updated">Update Time</label></div>
+            <div class="cfg-row"><input id="cc-action" type="checkbox" v-model="cfg.productCols.action"><label for="cc-action">趋势操作</label></div>
           </div>
           <div class="cfg-group">
             <h4>时间范围</h4>
@@ -539,11 +729,11 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- 商品详情弹窗 -->
+      <!-- 产品趋势分析弹窗 -->
       <div v-if="detail || detailLoading" class="od-modal" @click.self="closeDetail">
-        <div class="od-modal-card" style="max-width:680px">
+        <div class="od-modal-card product-trend-modal">
           <div class="od-modal-head">
-            <h3>商品详情</h3>
+            <h3>产品趋势分析</h3>
             <button class="od-x" @click="closeDetail">✕</button>
           </div>
           <div v-if="detailLoading" class="sub">加载中…</div>
@@ -552,13 +742,13 @@ onMounted(async () => {
               <img v-if="detail.image" :src="detail.image" class="prod-detail-img" />
               <div v-else class="prod-detail-img prod-detail-img-empty">📦</div>
               <div class="prod-detail-meta">
-                <div class="prod-detail-title">{{ detail.title }}</div>
+                <div class="prod-detail-title">{{ productTitle(detail) }}</div>
                 <div class="sub">SKU: {{ detail.sku }} · {{ detail.site }}</div>
                 <div class="prod-detail-stats">
-                  <span>价格 <b>{{ fmtPrice(detail.sale_price, detail.currency) }}</b></span>
-                  <span v-if="detail.original_price">原价 <s>{{ fmtPrice(detail.original_price, detail.currency) }}</s></span>
-                  <span>评分 <b>{{ detail.ratings || '—' }}</b> ({{ detail.review_count || 0 }})</span>
-                  <span>30天销量 <b>{{ detail.thirty_day_sales || 0 }}</b></span>
+                  <span>价格 <b>{{ fmtPrice(productSummary.price ?? detail.sale_price, productSummary.currency || detail.currency) }}</b></span>
+                  <span v-if="productSummary.original_price || detail.original_price">原价 <s>{{ fmtPrice(productSummary.original_price ?? detail.original_price, productSummary.currency || detail.currency) }}</s></span>
+                  <span>评分 <b>{{ productSummary.ratings || detail.ratings || '—' }}</b> ({{ productSummary.review_count ?? detail.review_count ?? 0 }})</span>
+                  <span>30天销量 <b>{{ productSummary.thirty_day_sales ?? detail.thirty_day_sales ?? 0 }}</b></span>
                 </div>
                 <div class="prod-detail-badges">
                   <span>{{ detail.status || '—' }}</span>
@@ -566,17 +756,79 @@ onMounted(async () => {
                 </div>
               </div>
             </div>
+
+            <div class="trend-controls">
+              <select v-model="trendGranularity" @change="reloadProductTrend">
+                <option value="month">By Month</option>
+                <option value="week">By Week</option>
+                <option value="day">By Day</option>
+              </select>
+              <input v-model="trendDateFrom" type="date" @change="reloadProductTrend" />
+              <input v-model="trendDateTo" type="date" @change="reloadProductTrend" />
+              <input v-model="trendPromoSearch" placeholder="搜索促销 / 商品标题" @keyup.enter="reloadProductTrend" />
+              <select v-model="trendPromoType" @change="reloadProductTrend">
+                <option value="">全部活动</option>
+                <option value="coupon">Coupons</option>
+                <option value="price">Price Promotion</option>
+                <option value="bundle">Bundle</option>
+              </select>
+              <button class="row-action" @click="reloadProductTrend">筛选</button>
+              <button class="row-action" @click="resetProductTrendFilters">清空</button>
+              <button v-if="canEdit" class="row-action" @click="exportProductTrend">导出</button>
+            </div>
+
+            <div class="product-trend-kpis">
+              <div><span>Sales</span><b>{{ productCurrentPeriod?.estimated_sales ?? productSummary.thirty_day_sales ?? 0 }}</b><small>{{ periodDelta('estimated_sales') }}</small></div>
+              <div><span>Revenues</span><b>{{ fmtPrice(productCurrentPeriod?.estimated_revenue ?? productSummary.thirty_day_revenue ?? 0, productSummary.currency || detail.currency) }}</b><small>{{ periodDelta('estimated_revenue') }}</small></div>
+              <div><span>Price</span><b>{{ fmtPrice(productCurrentPeriod?.sale_price ?? productSummary.price ?? detail.sale_price, productSummary.currency || detail.currency) }}</b><small>{{ trendGranularity }}</small></div>
+              <div><span>Ratings</span><b>{{ productCurrentPeriod?.avg_rating ?? productSummary.ratings ?? detail.ratings ?? '—' }}</b><small>当前 SKU</small></div>
+              <div><span>Reviews</span><b>{{ productCurrentPeriod?.review_total ?? productSummary.review_count ?? detail.review_count ?? 0 }}</b><small>{{ periodDelta('review_total') }}</small></div>
+              <div><span>促销</span><b>{{ productSummary.promotion_count ?? productPromotions.length }}</b></div>
+            </div>
+
+            <div v-if="productSummary.data_notes?.length" class="data-notes">
+              <span v-for="note in productSummary.data_notes" :key="note">{{ note }}</span>
+            </div>
+
             <div class="prod-detail-history">
-              <h4>价格历史</h4>
-              <div v-if="!priceHistory.length" class="sub">暂无价格历史</div>
+              <h4>销售趋势 <span class="sub">({{ trendGranularity }})</span></h4>
+              <TrendLineChart v-if="productTrendRows.length" :rows="productTrendRows" :series="productTrendSeries" :height="300" />
+              <div v-else class="sub">暂无趋势数据</div>
+            </div>
+
+            <div class="prod-detail-history">
+              <h4>趋势明细</h4>
+              <div v-if="!productTrendRows.length" class="sub">暂无历史快照</div>
               <table v-else>
-                <thead><tr><th>日期</th><th>售价</th><th>原价</th><th>评论数</th></tr></thead>
+                <thead><tr><th>日期</th><th>售价</th><th>原价</th><th>评论数</th><th>估算销量</th><th>估算收入</th></tr></thead>
                 <tbody>
-                  <tr v-for="(h, i) in priceHistory" :key="i">
+                  <tr v-for="(h, i) in productTrendRows" :key="i">
                     <td>{{ (h.date || '').slice(0, 10) }}</td>
                     <td>{{ fmtPrice(h.sale_price, detail?.currency) }}</td>
                     <td>{{ fmtPrice(h.original_price, detail?.currency) }}</td>
-                    <td>{{ h.review_count != null ? h.review_count : '—' }}</td>
+                    <td>{{ h.review_total ?? h.review_count ?? '—' }}</td>
+                    <td>{{ h.estimated_sales ?? 0 }}</td>
+                    <td>{{ fmtPrice(h.estimated_revenue ?? 0, detail?.currency) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="prod-detail-history">
+              <h4>销售促销</h4>
+              <div v-if="!productPromotions.length" class="sub">暂无促销记录</div>
+              <table v-else>
+                <thead><tr><th>类型</th><th>名称</th><th>折扣</th><th>原价</th><th>促销价</th><th>开始</th><th>结束</th><th>更新时间</th></tr></thead>
+                <tbody>
+                  <tr v-for="promo in productPromotions" :key="promo.id">
+                    <td>{{ promo.promotion_type || '--' }}</td>
+                    <td>{{ promo.promotion_name || promo.product_title || '--' }}</td>
+                    <td>{{ promo.discount_percent != null ? promo.discount_percent + '%' : '--' }}</td>
+                    <td>{{ fmtPrice(promo.original_price, promo.currency || detail?.currency) }}</td>
+                    <td>{{ fmtPrice(promo.promotion_price, promo.currency || detail?.currency) }}</td>
+                    <td>{{ promo.start_time ? promo.start_time.slice(0, 10) : '--' }}</td>
+                    <td>{{ promo.end_time ? promo.end_time.slice(0, 10) : '--' }}</td>
+                    <td>{{ promo.detected_time ? promo.detected_time.slice(0, 16).replace('T', ' ') : '--' }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -590,17 +842,36 @@ onMounted(async () => {
 
 <style scoped>
 .title-text { display:inline-block; max-width:380px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:bottom; }
+.report-page {
+  --report-control-bg: #fff;
+  --report-control-border: #d1d5db;
+  --report-control-text: #1f2329;
+  --report-control-muted: #6b7280;
+  --report-panel-soft: #fafbfc;
+}
 .icon-btn.filter-on { border-color:#7c6ce0; color:#7c6ce0; }
-.gran-select { padding:5px 10px; border:1px solid #d1d5db; border-radius:6px; font-size:12.5px; font-family:inherit; background:#fff; cursor:pointer; }
-.filter-panel { border:1px solid #e5e7eb; border-radius:10px; padding:14px; margin-bottom:14px; background:#fafbfc; }
+.gran-select { padding:7px 30px 7px 10px; border:1px solid var(--report-control-border); border-radius:7px; font-size:12.5px; font-family:inherit; background:var(--report-control-bg); color:var(--report-control-text); cursor:pointer; }
+.date-input { height:32px; padding:0 9px; border:1px solid var(--report-control-border); border-radius:7px; background:var(--report-control-bg); color:var(--report-control-text); font-size:12px; font-family:inherit; }
+.range-sep,.range-note { color:var(--report-control-muted); font-size:12px; }
+.filter-panel { border:1px solid var(--report-control-border); border-radius:10px; padding:14px; margin-bottom:14px; background:var(--report-panel-soft); }
 .filter-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:12px; }
-.filter-grid label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:#6b7280; }
-.filter-grid input, .filter-grid select { padding:5px 8px; border:1px solid #d1d5db; border-radius:6px; font-size:12.5px; font-family:inherit; }
+.filter-grid label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--report-control-muted); }
+.filter-grid input, .filter-grid select { padding:7px 9px; border:1px solid var(--report-control-border); border-radius:7px; font-size:12.5px; font-family:inherit; background:var(--report-control-bg); color:var(--report-control-text); }
+.filter-grid input::placeholder, .promo-filters input::placeholder { color:var(--report-control-muted); }
 .filter-grid .rng { display:flex; gap:6px; }
 .filter-grid .rng input { width:100%; min-width:0; }
+.mini-tags { display:flex; flex-wrap:wrap; gap:4px; }
+.mini-tags span { display:inline-flex; align-items:center; min-height:20px; padding:2px 7px; border-radius:999px; background:#eef2ff; color:#4338ca; font-size:11px; font-weight:600; white-space:nowrap; }
+.row-action { padding:5px 10px; border:1px solid #c4b5fd; border-radius:7px; background:#fff; color:#6d28d9; cursor:pointer; font-size:12px; font-family:inherit; white-space:nowrap; }
+.row-action:hover { background:#f5f3ff; }
 .filter-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
-.filter-actions button { padding:6px 16px; border-radius:7px; border:1px solid #d1d5db; background:#fff; cursor:pointer; font-size:12.5px; font-family:inherit; }
+.filter-actions button { padding:7px 16px; border-radius:7px; border:1px solid var(--report-control-border); background:var(--report-control-bg); color:var(--report-control-text); cursor:pointer; font-size:12.5px; font-family:inherit; }
 .filter-actions button.primary { background:#7c6ce0; color:#fff; border-color:#7c6ce0; }
+.promo-filters { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+.promo-filters input,.promo-filters select { padding:7px 10px; border:1px solid var(--report-control-border); border-radius:7px; font-size:12.5px; font-family:inherit; background:var(--report-control-bg); color:var(--report-control-text); }
+.promo-filters input:first-child { min-width:220px; }
+.report-table-wrap { overflow:auto; border-radius:8px; }
+.thumb-img { object-fit:cover; }
 .prod-detail-top { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap; }
 .prod-detail-img { width:120px; height:120px; object-fit:cover; border-radius:8px; }
 .prod-detail-img-empty { display:flex; align-items:center; justify-content:center; font-size:2rem; background:#f3f4f6; }
@@ -611,6 +882,26 @@ onMounted(async () => {
 .prod-detail-link { color:#6b7280; font-size:0.82rem; }
 .prod-detail-history { margin-top:16px; }
 .prod-detail-history h4 { margin:0 0 8px; }
+.product-trend-modal { width:min(1120px, calc(100vw - 36px)); max-width:min(1120px, calc(100vw - 36px)); max-height:calc(100vh - 36px); overflow:auto; }
+.trend-controls { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:14px; padding:10px; border:1px solid var(--report-control-border); border-radius:9px; background:var(--report-panel-soft); }
+.trend-controls input,.trend-controls select { min-height:32px; padding:6px 9px; border:1px solid var(--report-control-border); border-radius:7px; background:var(--report-control-bg); color:var(--report-control-text); font-size:12.5px; font-family:inherit; }
+.trend-controls input[type="text"],.trend-controls input:not([type]) { min-width:190px; }
+.product-trend-kpis { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; margin-top:16px; }
+.product-trend-kpis div { min-height:70px; padding:10px 12px; border:1px solid var(--report-control-border); border-radius:9px; background:var(--report-panel-soft); }
+.product-trend-kpis span { display:block; font-size:12px; color:var(--report-control-muted); margin-bottom:4px; }
+.product-trend-kpis b { display:block; color:#111827; font-size:18px; line-height:1.3; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.product-trend-kpis small { display:block; margin-top:3px; color:var(--report-control-muted); font-size:11px; line-height:1.25; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.data-notes { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.data-notes span { border:1px solid #e5e7eb; border-radius:999px; padding:4px 9px; background:#fff7ed; color:#9a3412; font-size:12px; }
+.prod-detail-history table { width:100%; border-collapse:collapse; font-size:12.5px; }
+.prod-detail-history th,.prod-detail-history td { padding:8px 9px; border-bottom:1px solid #e5e7eb; text-align:left; white-space:nowrap; }
+.prod-detail-history th { color:#6b7280; background:#f9fafb; font-weight:700; }
 .od-modal-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
 .od-x { background:transparent; border:0; cursor:pointer; font-size:1rem; }
+@media (max-width: 980px) {
+  .product-trend-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media (max-width: 560px) {
+  .product-trend-kpis { grid-template-columns:1fr; }
+}
 </style>

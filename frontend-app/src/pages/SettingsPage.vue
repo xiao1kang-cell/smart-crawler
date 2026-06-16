@@ -11,7 +11,6 @@ import {
   listUsers,
   listWorkspaceSites,
   proxyStatus,
-  reloadProxy,
   resetUserPassword,
   updateInvite,
   updateUser,
@@ -19,6 +18,8 @@ import {
 } from '../api/settings'
 import { useAuthStore } from '../stores/auth'
 import { useWorkspaceStore } from '../stores/workspace'
+import PageLoading from '../components/common/PageLoading.vue'
+import JobsPanel from '../components/settings/JobsPanel.vue'
 
 const auth = useAuthStore()
 const workspace = useWorkspaceStore()
@@ -43,6 +44,7 @@ const newInviteCode = ref('')
 const menu = [
   { key: 'workspace', label: '工作区', desc: '当前租户与切换' },
   { key: 'workspace_sites', label: '工作区站点', desc: '可见站点清单' },
+  { key: 'jobs', label: '采集任务', desc: '队列与进程状态' },
   { key: 'users', label: '用户管理', desc: '内部账号与角色' },
   { key: 'invites', label: '邀请注册', desc: '新租户或成员邀请' },
   { key: 'proxy', label: '代理池', desc: '本地代理健康' },
@@ -53,6 +55,14 @@ const canAdmin = computed(() => auth.user?.role === 'admin' || auth.user?.global
 const canManageWorkspaces = computed(() => auth.user?.global_role === 'super_admin' || (auth.user?.username === 'admin' && auth.user?.role === 'admin') || ['admin', 'owner'].includes(auth.user?.workspace_role || ''))
 const proxyTotal = computed(() => Number(proxy.value?.total || proxy.value?.proxies?.length || proxy.value?.details?.length || 0))
 const proxyOk = computed(() => proxyAvailable(proxy.value))
+const proxyHealth = computed(() => proxy.value?.health || {})
+const proxyStatusCounts = computed(() => proxyHealth.value?.by_status || {})
+const proxyDetails = computed(() => asList(proxyHealth.value, ['details']).slice(0, 6))
+const proxyProblemCount = computed(() => {
+  const counts = proxyStatusCounts.value
+  return Number(counts.down || 0) + Number(counts.blocked || 0) + Number(counts.degraded || 0)
+})
+const initialLoading = computed(() => busy.value === 'load' && !workspace.workspaces.length && !sites.value.length && !users.value.length && !invites.value.length)
 
 function formatWorkspaceName(row?: Record<string, any> | null) {
   if (!row) return '—'
@@ -65,6 +75,14 @@ function formatRole(role?: string) {
 
 function formatAccountStatus(status?: string) {
   return ({ active: '正常', disabled: '禁用', locked: '锁定' } as Record<string, string>)[status || ''] || status || '正常'
+}
+
+function formatProxyStatus(status?: string) {
+  return ({ healthy: '健康', degraded: '降级', down: '不可用', blocked: '认证阻断', unknown: '未知' } as Record<string, string>)[status || ''] || status || '未知'
+}
+
+function proxyTone(status?: string) {
+  return ['healthy'].includes(status || '') ? 'ok' : ['degraded', 'unknown'].includes(status || '') ? 'warn' : 'bad'
 }
 
 async function guarded(label: string, fn: () => Promise<void>) {
@@ -182,8 +200,8 @@ async function patchInvite(invite: Record<string, any>, active = false) {
 
 async function refreshProxy() {
   await guarded('proxy', async () => {
-    proxy.value = await reloadProxy()
-    message.value = 'Proxy 配置已重新加载'
+    proxy.value = await proxyStatus()
+    message.value = '代理状态已刷新'
   })
 }
 
@@ -198,11 +216,13 @@ onMounted(load)
 <template>
   <section>
     <div class="lead">设置</div>
-    <div class="sub">工作区 · 用户管理 · 邀请码 · 代理池 · 文档</div>
+    <div class="sub">工作区 · 采集任务 · 用户管理 · 邀请码 · 代理池 · 文档</div>
     <UAlert v-if="error" color="error" variant="soft" :title="error" class="mb-4" />
     <UAlert v-if="message" color="success" variant="soft" :title="message" class="mb-4" />
 
-    <div class="subnav-layout">
+    <PageLoading v-if="initialLoading" title="加载设置..." note="正在读取工作区、用户、邀请和代理状态" />
+
+    <div v-else class="subnav-layout">
       <nav class="subnav" aria-label="设置二级菜单">
         <button v-for="item in menu" :key="item.key" class="subnav-item" :class="{ active: section === item.key }" @click="section = item.key">
           <span>{{ item.label }}</span>
@@ -256,6 +276,11 @@ onMounted(load)
           <div v-if="sites.length" class="quick-site-row">
             <button v-for="site in sites.slice(0, 12)" :key="site.site || site.name" class="mini-btn" @click="addSite(site.site || site.name)">+ {{ site.site || site.name }}</button>
           </div>
+        </div>
+
+        <div v-if="section === 'jobs'" class="set-block">
+          <h3>⚙ 采集任务</h3>
+          <JobsPanel embedded />
         </div>
 
         <div v-if="section === 'users' && canAdmin" class="set-block">
@@ -372,15 +397,38 @@ onMounted(load)
 
         <div v-if="section === 'proxy'" class="set-block">
           <h3>🌐 代理池 ({{ proxyOk }}/{{ proxyTotal }})</h3>
-          <button class="mini-btn" :disabled="busy === 'proxy'" @click="refreshProxy">重新加载 Proxy</button>
-          <div v-for="p in (proxy?.details || proxy?.proxies || []).slice(0, 5)" :key="p.url || p.proxy" class="key-row">
-            <div class="info">
-              <span class="key-prefix">{{ (p.url || p.proxy || '').slice(0, 45) }}…</span>
-              <span class="meta">成功={{ p.success_count || p.success || 0 }} 失败={{ p.fail_count || p.fail || 0 }}</span>
+          <div class="proxy-summary-grid">
+            <div class="proxy-summary-card">
+              <span>池内代理</span>
+              <b>{{ proxyTotal }}</b>
             </div>
-            <span class="pill" :class="Number(p.fail_count || p.fail || 0) > 3 ? 'bad' : 'ok'">{{ Number(p.fail_count || p.fail || 0) > 3 ? '⚠' : '✓' }}</span>
+            <div class="proxy-summary-card">
+              <span>当前可用</span>
+              <b>{{ proxyOk }}</b>
+            </div>
+            <div class="proxy-summary-card" :class="{ warn: proxyProblemCount > 0 }">
+              <span>健康异常</span>
+              <b>{{ proxyProblemCount }}</b>
+            </div>
           </div>
-          <div v-if="!(proxy?.details || proxy?.proxies || []).length" class="empty-state">代理状态未加载</div>
+          <div class="proxy-actions">
+            <button class="mini-btn" :disabled="busy === 'proxy'" @click="refreshProxy">刷新状态</button>
+            <a v-if="auth.user?.global_role === 'super_admin'" class="mini-btn proxy-admin-link" href="/admin/proxies" target="_blank" rel="noopener">后台代理管理</a>
+          </div>
+          <div v-if="proxyHealth?.total" class="proxy-status-line">
+            <span>健康 {{ proxyStatusCounts.healthy || 0 }}</span>
+            <span>降级 {{ proxyStatusCounts.degraded || 0 }}</span>
+            <span>不可用 {{ proxyStatusCounts.down || 0 }}</span>
+            <span>阻断 {{ proxyStatusCounts.blocked || 0 }}</span>
+          </div>
+          <div v-for="p in proxyDetails" :key="p.proxy || p.hash" class="key-row">
+            <div class="info">
+              <span class="key-prefix">{{ p.proxy || '—' }}</span>
+              <span class="meta">成功={{ p.success_count || 0 }} 失败={{ p.failure_count || 0 }} · {{ p.last_failure_code || '无最近失败' }}</span>
+            </div>
+            <span class="pill" :class="proxyTone(p.status)">{{ formatProxyStatus(p.status) }}</span>
+          </div>
+          <div v-if="!proxyDetails.length" class="empty-state">代理健康状态未加载</div>
         </div>
 
         <div v-if="section === 'docs'" class="set-block">

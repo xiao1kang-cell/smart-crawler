@@ -1,4 +1,8 @@
-"""采集器工厂 —— 按 site.platform 选择采集器。"""
+"""采集器工厂 —— 按 site.platform 选择采集器。
+
+专用采集器优先；未注册的新平台自动降级到 GenericCrawler，避免 worker
+因为配置里出现新 platform 而直接失败。
+"""
 from __future__ import annotations
 
 from ..models import Site
@@ -88,4 +92,8 @@ def get_crawler(site: Site) -> BaseCrawler:
     if platform == "bestbuy":
         from .bestbuy import BestBuyCrawler
         return BestBuyCrawler(site)
-    raise ValueError(f"未知平台: {platform}")
+    if platform == "sephora":
+        from .sephora import SephoraCrawler
+        return SephoraCrawler(site)
+    from .generic import GenericCrawler
+    return GenericCrawler(site)

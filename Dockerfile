@@ -8,6 +8,15 @@ RUN pnpm install --frozen-lockfile
 COPY frontend-app/ ./
 RUN pnpm build
 
+FROM node:20-alpine AS admin-build
+
+WORKDIR /web
+RUN corepack enable && corepack prepare pnpm@10.27.0 --activate
+COPY admin-app/package.json admin-app/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY admin-app/ ./
+RUN pnpm build
+
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
@@ -27,6 +36,7 @@ RUN playwright install --with-deps chromium
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
 COPY --from=frontend-build /web/dist ./frontend-app/dist
+COPY --from=admin-build /web/dist ./admin-app/dist
 
 WORKDIR /app/backend
 EXPOSE 8077

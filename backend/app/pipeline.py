@@ -15,6 +15,31 @@ from .models import PriceHistory, Product
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 _PRICE_RE = re.compile(r"[-+]?\d[\d,]*\.?\d*")
+_PRESERVE_ON_EMPTY = {
+    "title",
+    "description",
+    "image_urls",
+    "category_path",
+    "sale_price",
+    "original_price",
+    "currency",
+    "variant_id",
+    "attributes",
+    "ratings",
+    "review_count",
+    "status",
+    "inventory",
+    "label",
+    "tags",
+    "product_url",
+    "product_type",
+    "mpn",
+    "gtin",
+    "weight",
+    "shipping_time",
+    "return_policy_days",
+    "published_at",
+}
 
 
 def clean_text(value):
@@ -67,6 +92,10 @@ def normalize(raw: dict) -> dict:
     p["description"] = clean_text(p.get("description"))
     p["sale_price"] = to_price(p.get("sale_price"))
     p["original_price"] = to_price(p.get("original_price"))
+    if p["sale_price"] is None and p["original_price"] is not None:
+        p["sale_price"] = p["original_price"]
+    if p["original_price"] is None and p["sale_price"] is not None:
+        p["original_price"] = p["sale_price"]
     p["published_at"] = parse_dt(p.get("published_at"))
     return p
 
@@ -105,6 +134,7 @@ def upsert_products(session: Session, site: str, items: list[dict]) -> dict:
             p.setdefault("is_new", True)
             obj = Product(created_time=now, updated_time=now, **_product_kwargs(p))
             session.add(obj)
+            product_row = obj
             stats["inserted"] += 1
             stats["new"] += 1
         else:
@@ -113,16 +143,16 @@ def upsert_products(session: Session, site: str, items: list[dict]) -> dict:
             for k, v in _product_kwargs(p).items():
                 if k in ("created_time",):
                     continue
+                if k in _PRESERVE_ON_EMPTY and _is_empty(v):
+                    current = getattr(row, k, None)
+                    if not _is_empty(current):
+                        continue
                 setattr(row, k, v)
             row.updated_time = now
+            product_row = row
             stats["updated"] += 1
 
-        session.add(PriceHistory(
-            site=site, sku=sku, date=today,
-            sale_price=p.get("sale_price"),
-            original_price=p.get("original_price"),
-            review_count=p.get("review_count"),
-        ))
+        _upsert_price_history(session, site, sku, today, product_row)
     return stats
 
 
@@ -131,6 +161,31 @@ _PRODUCT_COLS = {c.name for c in Product.__table__.columns} - {"id"}
 
 def _product_kwargs(p: dict) -> dict:
     return {k: v for k, v in p.items() if k in _PRODUCT_COLS}
+
+
+def _is_empty(value) -> bool:
+    return value is None or value == "" or value == [] or value == {}
+
+
+def _upsert_price_history(
+        session: Session, site: str, sku: str, day: date,
+        product: Product) -> None:
+    values = {
+        "sale_price": product.sale_price,
+        "original_price": product.original_price,
+        "review_count": product.review_count,
+    }
+    row = (session.query(PriceHistory)
+           .filter(PriceHistory.site == site,
+                   PriceHistory.sku == sku,
+                   PriceHistory.date == day)
+           .first())
+    if row is None:
+        session.add(PriceHistory(site=site, sku=sku, date=day, **values))
+        return
+    for k, v in values.items():
+        if v is not None or getattr(row, k) is None:
+            setattr(row, k, v)
 
 
 def _has_changed(row: Product, p: dict) -> bool:

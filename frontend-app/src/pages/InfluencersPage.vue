@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { influencerFull } from '../api/influencers'
+import PageLoading from '../components/common/PageLoading.vue'
 
 const form = ref({ platform: 'instagram', username: 'cristiano' })
 const data = ref<Record<string, any> | null>(null)
@@ -64,7 +65,9 @@ function setTarget(item: Record<string, string>) {
 
     <div v-if="error" class="inf-err">❌ {{ error }}</div>
 
-    <div v-if="data?.profile" class="inf-card">
+    <PageLoading v-if="loading && !data" title="采集红人数据..." note="正在读取公开资料、联系方式和近期帖子" />
+
+    <div v-else-if="data?.profile" class="inf-card">
       <div class="inf-hero">
         <img v-if="data.profile.avatar_url" :src="data.profile.avatar_url" class="inf-avatar" referrerpolicy="no-referrer" />
         <div class="inf-meta">

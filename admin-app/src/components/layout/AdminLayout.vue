@@ -5,8 +5,10 @@ import {
   Boxes,
   ClipboardList,
   CreditCard,
+  DatabaseZap,
   ListChecks,
   LogOut,
+  Network,
   Users
 } from 'lucide-vue-next'
 import { onMounted, ref } from 'vue'
@@ -22,9 +24,11 @@ const error = ref('')
 const nav = [
   { path: '/', label: '概览', icon: BarChart3 },
   { path: '/tenants', label: '租户用户', icon: Users },
-  { path: '/datasets', label: '数据集', icon: Boxes },
-  { path: '/queue', label: '队列', icon: ListChecks },
+  { path: '/datasets', label: '通用数据集', icon: Boxes },
+  { path: '/queue', label: 'spine 队列', icon: ListChecks },
+  { path: '/data-quality', label: '数据质量', icon: DatabaseZap },
   { path: '/usage', label: '计费', icon: CreditCard },
+  { path: '/proxies', label: '代理池', icon: Network },
   { path: '/health', label: '健康', icon: Activity },
   { path: '/audit', label: '审计', icon: ClipboardList }
 ]

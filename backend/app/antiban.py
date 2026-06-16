@@ -24,6 +24,7 @@ RATE_TIERS = {
     "flexispot": 2.0,
     "vonhaus": 2.0,
     "vidaxl": 2.5,
+    "sephora": 2.5,
     "trustpilot": 6.0,
     "google_map": 8.0,
 }

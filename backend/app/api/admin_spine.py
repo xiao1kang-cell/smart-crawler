@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import time
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
@@ -43,7 +43,7 @@ from ..models import (
     WorkspaceSite,
 )
 from ..spine_queue import HEARTBEAT_INTERVAL, _backoff
-from .routes import require_user, _require_super_admin
+from .routes import require_user, _build_data_quality_payload, _require_super_admin
 
 router = APIRouter(prefix="/api/admin/spine", tags=["admin · spine"])
 
@@ -129,6 +129,13 @@ def _queue_stats(db: Session) -> dict:
                    .filter(*_spine_stuck_filter(spine_cutoff)).scalar() or 0)
     crawl_stuck = (db.query(func.count(CrawlJob.id))
                    .filter(*_crawl_stuck_filter(crawl_cutoff)).scalar() or 0)
+    crawl_stale_pending = (
+        db.query(func.count(CrawlJob.id))
+        .filter(CrawlJob.status == "pending",
+                CrawlJob.created_at.isnot(None),
+                CrawlJob.created_at < crawl_cutoff)
+        .scalar() or 0
+    )
     ondemand_stuck = (db.query(func.count(OnDemandJob.id))
                       .filter(*_ondemand_stuck_filter(ondemand_cutoff)).scalar() or 0)
 
@@ -160,6 +167,8 @@ def _queue_stats(db: Session) -> dict:
     for row in by_queue.values():
         for key, value in row.items():
             total[key] = int(total.get(key, 0)) + int(value or 0)
+    by_queue["crawl"]["stale_pending"] = int(crawl_stale_pending or 0)
+    total["stale_pending"] = int(crawl_stale_pending or 0)
     total["by_queue"] = by_queue
     total["updated_at"] = now.isoformat()
     total["stuck_threshold_sec"] = {
@@ -171,6 +180,26 @@ def _queue_stats(db: Session) -> dict:
         "crawl_failed_by_site": _group_rows(
             db.query(CrawlJob.site, func.count(CrawlJob.id))
             .filter(CrawlJob.status == "failed")
+            .group_by(CrawlJob.site),
+            limit=25,
+        ),
+        "crawl_running_by_site": _group_rows(
+            db.query(CrawlJob.site, func.count(CrawlJob.id))
+            .filter(CrawlJob.status == "running")
+            .group_by(CrawlJob.site),
+            limit=25,
+        ),
+        "crawl_stuck_by_site": _group_rows(
+            db.query(CrawlJob.site, func.count(CrawlJob.id))
+            .filter(*_crawl_stuck_filter(crawl_cutoff))
+            .group_by(CrawlJob.site),
+            limit=25,
+        ),
+        "crawl_stale_pending_by_site": _group_rows(
+            db.query(CrawlJob.site, func.count(CrawlJob.id))
+            .filter(CrawlJob.status == "pending",
+                    CrawlJob.created_at.isnot(None),
+                    CrawlJob.created_at < crawl_cutoff)
             .group_by(CrawlJob.site),
             limit=25,
         ),
@@ -232,6 +261,7 @@ def _crawl_job_dict(j: CrawlJob, *, now: datetime | None = None) -> dict:
         "source_label": "站点采集",
         "site": j.site,
         "target": j.site,
+        "trigger": j.trigger,
         "url": None,
         "dataset": None,
         "entity_type": "site",
@@ -367,6 +397,132 @@ def jobs_stats(user: str = Depends(require_user),
     return _queue_stats(db)
 
 
+@router.get("/data-quality")
+def admin_data_quality(
+    tenant: int | None = None,
+    include_hidden: bool = Query(default=False),
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """全局站点数据质量明细，供后台定位哪些站点需要重跑。"""
+    _require_super_admin(user, db)
+    q = (db.query(WorkspaceSite.site, WorkspaceSite.workspace_id, Workspace.name)
+         .join(Workspace, Workspace.id == WorkspaceSite.workspace_id)
+         .filter(WorkspaceSite.enabled.is_(True), Workspace.status == "active"))
+    if tenant is not None:
+        q = q.filter(WorkspaceSite.workspace_id == tenant)
+    if not include_hidden:
+        q = q.filter(WorkspaceSite.hidden.is_(False))
+
+    site_workspace_rows = q.order_by(WorkspaceSite.site, WorkspaceSite.workspace_id).all()
+    workspace_by_site: dict[str, list[dict]] = {}
+    for site, workspace_id, workspace_name in site_workspace_rows:
+        workspace_by_site.setdefault(site, []).append({
+            "id": workspace_id,
+            "name": workspace_name,
+        })
+
+    site_codes = sorted(workspace_by_site)
+    sites = db.query(Site).filter(Site.site.in_(site_codes)).all() if site_codes else []
+    payload = _build_data_quality_payload(db, sites)
+    for item in payload["items"]:
+        item["workspaces"] = workspace_by_site.get(item["site"], [])
+    payload["summary"]["workspace_count"] = len({
+        ws["id"] for rows in workspace_by_site.values() for ws in rows
+    })
+    payload["summary"]["tenant_id"] = tenant
+    return payload
+
+
+@router.post("/crawl/enqueue")
+def admin_crawl_enqueue(
+    payload: dict,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+    ip: str = Header(default="", alias="X-Forwarded-For"),
+) -> dict:
+    """后台按站点触发采集；复用已有 pending/running，避免重复入队。"""
+    actor = _require_super_admin(user, db)
+    raw_sites = payload.get("sites")
+    if raw_sites is None and payload.get("site"):
+        raw_sites = [payload.get("site")]
+    if not isinstance(raw_sites, list):
+        raise HTTPException(422, {"error": "sites required"})
+    sites = []
+    for item in raw_sites:
+        site = str(item or "").strip()
+        if site and site not in sites:
+            sites.append(site)
+    if not sites:
+        raise HTTPException(422, {"error": "sites required"})
+
+    existing_sites = {
+        site for (site,) in db.query(Site.site).filter(Site.site.in_(sites)).all()
+    }
+    missing = [site for site in sites if site not in existing_sites]
+    if missing:
+        raise HTTPException(404, {"error": "site_not_found", "sites": missing})
+
+    from ..runner import HIGH_PRIORITY_TRIGGERS, enqueue as enqueue_crawl
+
+    jobs: list[int] = []
+    created: list[int] = []
+    reused: list[int] = []
+    promoted: list[int] = []
+    by_site: dict[str, dict] = {}
+    for site in sites:
+        running = (db.query(CrawlJob)
+                   .filter(CrawlJob.site == site, CrawlJob.status == "running")
+                   .order_by(CrawlJob.id.desc())
+                   .first())
+        if running:
+            jobs.append(running.id)
+            reused.append(running.id)
+            by_site[site] = {"job_id": running.id, "status": "already_running"}
+            continue
+        pending = (db.query(CrawlJob)
+                   .filter(CrawlJob.site == site, CrawlJob.status == "pending")
+                   .order_by(CrawlJob.id.desc())
+                   .first())
+        if pending:
+            jobs.append(pending.id)
+            if pending.trigger in HIGH_PRIORITY_TRIGGERS:
+                reused.append(pending.id)
+                by_site[site] = {"job_id": pending.id, "status": "already_queued"}
+            else:
+                pending.trigger = "admin_quality_rerun"
+                pending.requested_by_user_id = actor.id
+                pending.created_at = datetime.utcnow()
+                promoted.append(pending.id)
+                by_site[site] = {"job_id": pending.id, "status": "promoted"}
+            continue
+        job_id = enqueue_crawl(site, trigger="admin_quality_rerun",
+                               requested_by_user_id=actor.id)
+        jobs.append(job_id)
+        created.append(job_id)
+        by_site[site] = {"job_id": job_id, "status": "queued"}
+
+    record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
+                 action="crawl.enqueue", target_type="site",
+                 target_id=",".join(sites),
+                 detail={"created_jobs": created, "existing_jobs": reused,
+                         "promoted_jobs": promoted},
+                 ip=ip or None)
+    db.commit()
+    return {
+        "status": "queued" if created and not reused and not promoted else (
+            "already_running" if reused and not created and not promoted else "mixed"
+        ),
+        "jobs": jobs,
+        "created_jobs": created,
+        "existing_jobs": reused,
+        "promoted_jobs": promoted,
+        "by_site": by_site,
+        "count": len(jobs),
+        "queued_at": datetime.utcnow().isoformat(),
+    }
+
+
 def _job_dict(j: SpineJob) -> dict:
     return {"id": j.id, "url": j.url, "dataset": j.dataset,
             "entity_type": j.entity_type, "status": j.status,
@@ -393,13 +549,29 @@ def jobs_list(status: str | None = None, dataset: str | None = None,
 
 
 @router.get("/jobs/{job_id}")
-def job_detail(job_id: int, user: str = Depends(require_user),
+def job_detail(job_id: int, source: str = "spine",
+               user: str = Depends(require_user),
                db: Session = Depends(get_db)) -> dict:
     _require_super_admin(user, db)
+    source = (source or "spine").lower()
+    if source == "crawl":
+        j = db.get(CrawlJob, job_id)
+        if j is None:
+            raise HTTPException(404, {"error": "job_not_found", "job_id": job_id,
+                                      "source": source})
+        return _crawl_job_dict(j)
+    if source == "ondemand":
+        j = db.get(OnDemandJob, job_id)
+        if j is None:
+            raise HTTPException(404, {"error": "job_not_found", "job_id": job_id,
+                                      "source": source})
+        return _ondemand_job_dict(j)
+    if source != "spine":
+        raise HTTPException(422, {"error": "unknown_job_source", "source": source})
     j = db.get(SpineJob, job_id)
     if j is None:
         raise HTTPException(404, {"error": "job_not_found", "job_id": job_id})
-    return _job_dict(j)
+    return _spine_job_dict(j)
 
 
 @router.post("/jobs/{job_id}/retry")
@@ -1074,12 +1246,19 @@ def proxy_rule_create(payload: dict,
     pattern = (payload.get("site_pattern") or payload.get("site") or "").strip()
     if not pattern:
         raise HTTPException(422, {"error": "site_pattern required"})
-    row = ProxyRule(site_pattern=pattern, created_at=datetime.utcnow())
-    db.add(row)
+    match_type = (payload.get("match_type") or "contains").strip() or "contains"
+    row = (db.query(ProxyRule)
+           .filter(ProxyRule.site_pattern == pattern,
+                   ProxyRule.match_type == match_type)
+           .first())
+    if row is None:
+        row = ProxyRule(site_pattern=pattern, match_type=match_type,
+                        created_at=datetime.utcnow())
+        db.add(row)
     _update_rule_from_payload(row, payload)
     db.flush()
     record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
-                 action="proxy.rule.create", target_type="proxy_rule",
+                 action="proxy.rule.upsert", target_type="proxy_rule",
                  target_id=str(row.id), detail={"site_pattern": row.site_pattern},
                  ip=ip or None)
     db.commit()

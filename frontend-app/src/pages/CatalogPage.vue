@@ -3,6 +3,8 @@ import { onMounted, ref } from 'vue'
 import { asList, fmtNumber, fmtPrice, qs } from '../api/client'
 import { getProduct, listProducts, listSites, productPriceHistory } from '../api/products'
 import { useAuthStore } from '../stores/auth'
+import DataLoadingPanel from '../components/common/DataLoadingPanel.vue'
+import PageLoading from '../components/common/PageLoading.vue'
 import StatusBadge from '../components/common/StatusBadge.vue'
 
 const auth = useAuthStore()
@@ -106,6 +108,14 @@ function rememberSite() {
   localStorage.setItem('sc_site', selectedSite.value)
 }
 
+function productTitle(p: Record<string, any>) {
+  return p.title || p.name || p.product_title || p.spu || p.sku || p.item_id || `商品 #${p.id}`
+}
+
+function productPrice(p: Record<string, any>) {
+  return fmtPrice(p.sale_price ?? p.price ?? p.original_price, p.currency)
+}
+
 onMounted(load)
 </script>
 
@@ -123,15 +133,16 @@ onMounted(load)
         <button class="btn-go" @click="exportProducts">📥 导出表格</button>
     </div>
 
-    <div class="cat-table-wrap">
-      <table class="cat-table">
+    <DataLoadingPanel class="cat-table-wrap" :loading="loading" :has-data="products.length > 0" label="正在更新商品列表">
+      <PageLoading v-if="loading && !products.length" compact title="加载商品数据..." note="正在读取站点商品库" />
+      <table v-else class="cat-table">
         <thead><tr><th></th><th>商品编码</th><th>商品</th><th>价格</th><th>评分</th><th>30 天销量</th><th>状态</th></tr></thead>
         <tbody>
           <tr v-for="p in products" :key="p.id || `${p.site}-${p.sku}`" style="cursor:pointer" @click="openDetail(p.id)">
-            <td><div class="thumb">📦</div></td>
+            <td><img v-if="p.image" :src="p.image" class="thumb-img" alt="" /><div v-else class="thumb">📦</div></td>
             <td><code v-if="!p.product_url">{{ p.sku || p.item_id || p.id }}</code><a v-else :href="p.product_url" target="_blank" rel="noopener" class="sku-link" @click.stop><code>{{ p.sku || p.item_id || p.id }}</code></a></td>
-            <td><span class="title-text" :title="p.title || p.name">{{ p.title || p.name || '' }}</span></td>
-            <td>{{ fmtPrice(p.sale_price ?? p.price, p.currency) }}</td>
+            <td><span class="title-text" :title="productTitle(p)">{{ productTitle(p) }}</span></td>
+            <td><span>{{ productPrice(p) }}</span><div v-if="p.original_price && p.original_price !== p.sale_price" class="price-sub">原价 {{ fmtPrice(p.original_price, p.currency) }}</div></td>
             <td>{{ p.ratings || p.rating || '—' }}</td>
             <td>{{ p.thirty_day_sales || 0 }}</td>
             <td><StatusBadge :status="p.status" /></td>
@@ -147,7 +158,7 @@ onMounted(load)
         <span class="cat-pager-info">第 {{ page }} / {{ totalPages() }} 页 · 共 {{ fmtNumber(total) }} 条</span>
         <button class="btn-go" :disabled="page >= totalPages() || loading" @click="gotoPage(page + 1)">下一页 ›</button>
       </div>
-    </div>
+    </DataLoadingPanel>
 
     <!-- 商品详情弹窗 -->
     <div v-if="detail || detailLoading" class="od-modal" @click.self="closeDetail">
@@ -162,11 +173,11 @@ onMounted(load)
             <img v-if="detail.image" :src="detail.image" class="prod-detail-img" />
             <div v-else class="prod-detail-img prod-detail-img-empty">📦</div>
             <div class="prod-detail-meta">
-              <div class="prod-detail-title">{{ detail.title }}</div>
+              <div class="prod-detail-title">{{ productTitle(detail) }}</div>
               <div class="sub">SKU: {{ detail.sku }} · {{ detail.site }}</div>
               <div class="prod-detail-stats">
-                <span>价格 <b>{{ fmtPrice(detail.sale_price, detail.currency) }}</b></span>
-                <span v-if="detail.original_price">原价 <s>{{ detail.original_price }}</s></span>
+                <span>价格 <b>{{ productPrice(detail) }}</b></span>
+                <span v-if="detail.original_price">原价 <s>{{ fmtPrice(detail.original_price, detail.currency) }}</s></span>
                 <span>评分 <b>{{ detail.ratings || '—' }}</b> ({{ detail.review_count || 0 }})</span>
                 <span>30天销量 <b>{{ detail.thirty_day_sales || 0 }}</b></span>
               </div>
@@ -198,9 +209,11 @@ onMounted(load)
 </template>
 
 <style scoped>
-.title-text { display:inline-block; max-width:360px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:bottom; }
+.title-text { display:-webkit-box; max-width:420px; overflow:hidden; -webkit-line-clamp:2; -webkit-box-orient:vertical; line-height:1.35; vertical-align:bottom; }
 .sku-link { text-decoration:none; }
 .sku-link code { color:var(--ui-primary, #7c6ce0); }
+.thumb-img { width:32px; height:32px; border-radius:6px; object-fit:cover; display:block; border:1px solid var(--ui-border, #2a2a3a); }
+.price-sub { color:var(--ui-muted, #9ca3af); font-size:.72rem; margin-top:2px; }
 .cat-pager { display:flex; justify-content:center; align-items:center; gap:12px; margin-top:14px; }
 .cat-pager-info { color:var(--ui-muted, #9ca3af); font-size:0.82rem; }
 .prod-detail-top { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap; }

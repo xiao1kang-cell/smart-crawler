@@ -6,7 +6,7 @@
   · 粘性会话：同一 site 在一次 crawl 中复用同一代理（避免半途切 IP 触发反爬）
   · 多 tier 优先级：residential > datacenter > free-pool
 
-数据格式（PROXIES_FILE 指向的私有文件，未设置时读取 backend/proxies.txt 模板）：
+数据格式（优先级：PROXIES_FILE > backend/proxies.local.txt > backend/proxies.txt 模板）：
   [residential]
   http://user:pass@host:port    # 商业住宅代理
   socks5://host:port            # Tailscale/SSH 隧道
@@ -28,10 +28,19 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-_PROXY_FILE = Path(os.environ.get(
-    "PROXIES_FILE",
-    str(Path(__file__).resolve().parent.parent / "proxies.txt"),
-))
+
+def _default_proxy_file() -> Path:
+    env_file = os.environ.get("PROXIES_FILE")
+    if env_file:
+        return Path(env_file)
+    backend_dir = Path(__file__).resolve().parent.parent
+    local_file = backend_dir / "proxies.local.txt"
+    if local_file.exists():
+        return local_file
+    return backend_dir / "proxies.txt"
+
+
+_PROXY_FILE = _default_proxy_file()
 
 FAIL_THRESHOLD = int(os.environ.get("PROXY_FAIL_THRESHOLD", "3"))
 COOLDOWN_SEC = int(os.environ.get("PROXY_COOLDOWN_SEC", "600"))
@@ -42,6 +51,11 @@ class ProxyEntry:
     url: str                          # http://user:pass@host:port
     tier: str                         # residential / datacenter
     exclude: set[str] = field(default_factory=set)  # 不可用于的平台关键词(如 amazon)
+    id: int | None = None
+    source: str = "file"
+    pool_slugs: set[str] = field(default_factory=set)
+    provider: str | None = None
+    country: str | None = None
     fail_count: int = 0
     success_count: int = 0
     last_used: float = 0.0
@@ -85,7 +99,7 @@ def _parse_proxy_line(line: str, tier: str) -> ProxyEntry:
 
 
 class ProxyPool:
-    def __init__(self):
+    def __init__(self, *, use_persistent_health: bool = False, prefer_db: bool = True):
         import os
         self._lock = threading.Lock()
         self._proxies: list[ProxyEntry] = []
@@ -94,10 +108,12 @@ class ProxyPool:
         self._index: int = os.getpid()
         self._sticky: dict[str, str] = {}   # site -> proxy URL（粘性会话）
         self._loaded = False
+        self.use_persistent_health = use_persistent_health
+        self.prefer_db = prefer_db
 
     def _load(self) -> None:
-        proxies: list[ProxyEntry] = []
-        if _PROXY_FILE.exists():
+        proxies: list[ProxyEntry] = self._load_from_db() if self.prefer_db else []
+        if not proxies and _PROXY_FILE.exists():
             current_tier = "datacenter"
             for line in _PROXY_FILE.read_text(encoding="utf-8").splitlines():
                 line = line.strip()
@@ -115,6 +131,55 @@ class ProxyPool:
                     proxies.insert(0, ProxyEntry(url=env, tier=tier))
         self._proxies = proxies
         self._loaded = True
+
+    def _load_from_db(self) -> list[ProxyEntry]:
+        try:
+            from .db import SessionLocal
+            from .proxy_config import bootstrap_proxy_config
+            from .models import ProxyEndpoint, ProxyPoolConfig, ProxyPoolMember
+        except Exception:
+            return []
+        db = SessionLocal()
+        try:
+            bootstrap_proxy_config(db)
+            db.commit()
+            endpoints = (db.query(ProxyEndpoint)
+                         .filter(ProxyEndpoint.active == True)  # noqa: E712
+                         .order_by(ProxyEndpoint.id.asc())
+                         .all())
+            if not endpoints:
+                return []
+            endpoint_ids = [row.id for row in endpoints]
+            memberships = (db.query(ProxyPoolMember, ProxyPoolConfig)
+                           .join(ProxyPoolConfig, ProxyPoolConfig.id == ProxyPoolMember.pool_id)
+                           .filter(ProxyPoolMember.endpoint_id.in_(endpoint_ids),
+                                   ProxyPoolMember.active == True,  # noqa: E712
+                                   ProxyPoolConfig.active == True)  # noqa: E712
+                           .all())
+            pools_by_endpoint: dict[int, set[str]] = {}
+            for member, pool in memberships:
+                pools_by_endpoint.setdefault(member.endpoint_id, set()).add(pool.slug)
+            proxies: list[ProxyEntry] = []
+            for row in endpoints:
+                if not row.proxy_url:
+                    continue
+                tier = (row.endpoint_type or "datacenter").strip().lower()
+                pool_slugs = pools_by_endpoint.get(row.id, set()) | {tier, "all"}
+                proxies.append(ProxyEntry(
+                    id=row.id,
+                    url=row.proxy_url,
+                    tier=tier,
+                    exclude=set(row.exclude_sites or []),
+                    source=row.source or "db",
+                    pool_slugs=pool_slugs,
+                    provider=row.provider,
+                    country=row.country,
+                ))
+            return proxies
+        except Exception:
+            return []
+        finally:
+            db.close()
 
     def _ensure_loaded(self):
         if not self._loaded:
@@ -137,18 +202,35 @@ class ProxyPool:
         - site 非 None: 默认**不**粘性，每次轮换；force_rotate=True 时清除当前粘性
         - 旧粘性行为已废弃 → 默认每次都轮换，否则 10 代理只用 1 个
         """
-        if tier in (None, "none", ""):
+        candidate_tiers = _candidate_tiers_from_rules(site, tier)
+        if not candidate_tiers or candidate_tiers[0] in (None, "none", ""):
             return None
         self._ensure_loaded()
+        unhealthy = (_persistent_unhealthy_hashes()
+                     if self.use_persistent_health else set())
         with self._lock:
             # 显式 force_rotate：解除当前 site 粘性绑定
             if site and force_rotate:
                 self._sticky.pop(site, None)
             # 注：默认不再检查 _sticky（之前的粘性把所有请求压到 1 个代理）
 
-            # 找候选：tier 匹配 + 可用 + 未被该 site 排除
-            candidates = [p for p in self._proxies
-                          if p.tier == tier and p.is_available and p.allows(site)]
+            # 找候选：tier 匹配 + 可用 + 未被该 site 排除。
+            # 规则/池可配置 fallback_pool_slug；只有主池没有可用代理时才降级。
+            candidates = []
+            for tier_text in candidate_tiers:
+                tier_text = (tier_text or "").strip().lower()
+                if tier_text in ("", "none"):
+                    return None
+                pool_slug = (tier_text.split(":", 1)[1]
+                             if tier_text.startswith("pool:") else None)
+                candidates = [
+                    p for p in self._proxies
+                    if self._tier_matches(p, tier_text, pool_slug)
+                    and p.is_available and p.allows(site)
+                    and _proxy_hash(p.url) not in unhealthy
+                ]
+                if candidates:
+                    break
             if not candidates:
                 return None
 
@@ -169,6 +251,12 @@ class ProxyPool:
                     p.success_count += 1
                     p.fail_count = max(0, p.fail_count - 1)  # 恢复
                     break
+
+    @staticmethod
+    def _tier_matches(proxy: ProxyEntry, tier: str, pool_slug: str | None) -> bool:
+        if pool_slug:
+            return pool_slug in proxy.pool_slugs
+        return proxy.tier == tier
 
     def report_failure(self, url: str, *, hard: bool = False):
         """报告代理失败。hard=True 直接 ban 5×COOLDOWN（被风控时用）。"""
@@ -195,27 +283,38 @@ class ProxyPool:
         self._ensure_loaded()
         with self._lock:
             now = time.time()
+            unhealthy = (_persistent_unhealthy_hashes()
+                         if self.use_persistent_health else set())
+            def available(proxy: ProxyEntry) -> bool:
+                return proxy.is_available and _proxy_hash(proxy.url) not in unhealthy
+
             return {
                 "total": len(self._proxies),
                 "by_tier": {
                     tier: {
                         "total": sum(1 for p in self._proxies if p.tier == tier),
                         "available": sum(1 for p in self._proxies
-                                         if p.tier == tier and p.is_available),
+                                         if p.tier == tier and available(p)),
                         "blocked": sum(1 for p in self._proxies
-                                       if p.tier == tier and not p.is_available),
+                                       if p.tier == tier and not available(p)),
                     }
                     for tier in {p.tier for p in self._proxies}
                 },
                 "details": [
                     {
+                        "hash": _proxy_hash(p.url),
                         "url": _redact(p.url),
                         "tier": p.tier,
+                        "endpoint_id": p.id,
+                        "source": p.source,
+                        "pools": sorted(p.pool_slugs),
+                        "provider": p.provider,
+                        "country": p.country,
                         "exclude": sorted(p.exclude),
                         "fail_count": p.fail_count,
                         "success_count": p.success_count,
                         "blocked_for_sec": max(0, int(p.blocked_until - now)),
-                        "available": p.is_available,
+                        "available": available(p),
                     }
                     for p in self._proxies
                 ],
@@ -228,8 +327,128 @@ def _redact(url: str) -> str:
     return re.sub(r"://([^:]+):([^@]+)@", r"://\1:****@", url)
 
 
+def _proxy_hash(url: str) -> str:
+    import hashlib
+    return hashlib.sha256(url.encode("utf-8", "ignore")).hexdigest()
+
+
+def _resolve_tier_from_rules(site: str | None, configured_tier: str | None) -> str | None:
+    candidates = _candidate_tiers_from_rules(site, configured_tier)
+    return candidates[0] if candidates else configured_tier
+
+
+def _candidate_tiers_from_rules(site: str | None,
+                                configured_tier: str | None) -> list[str | None]:
+    if not site:
+        return _with_pool_fallback(configured_tier)
+    try:
+        from .db import SessionLocal
+        from .models import ProxyPoolConfig, ProxyRule
+    except Exception:
+        return _with_pool_fallback(configured_tier)
+    db = SessionLocal()
+    try:
+        rules = (db.query(ProxyRule)
+                 .filter(ProxyRule.enabled == True)  # noqa: E712
+                 .order_by(ProxyRule.priority.asc(), ProxyRule.id.asc())
+                 .all())
+        site_l = site.lower()
+        for rule in rules:
+            pattern = (rule.site_pattern or "").strip().lower()
+            if not pattern:
+                continue
+            match_type = (rule.match_type or "contains").lower()
+            matched = (
+                (match_type == "exact" and site_l == pattern)
+                or (match_type == "prefix" and site_l.startswith(pattern))
+                or (match_type not in ("exact", "prefix") and pattern in site_l)
+            )
+            if not matched:
+                continue
+            mode = (rule.proxy_mode or "pool").strip().lower()
+            if mode == "none":
+                return ["none"]
+            if mode == "pool":
+                primary = f"pool:{rule.pool_slug}" if rule.pool_slug else configured_tier
+                fallback = (f"pool:{rule.fallback_pool_slug}"
+                            if rule.fallback_pool_slug else
+                            _pool_fallback_tier(db, primary))
+                return _unique_tiers([primary, fallback])
+            if mode in ("datacenter", "residential"):
+                fallback = (f"pool:{rule.fallback_pool_slug}"
+                            if rule.fallback_pool_slug else
+                            _pool_fallback_tier(db, mode))
+                return _unique_tiers([mode, fallback])
+        return _with_pool_fallback(configured_tier, db=db)
+    except Exception:
+        return _with_pool_fallback(configured_tier)
+    finally:
+        db.close()
+
+
+def _unique_tiers(values: list[str | None]) -> list[str | None]:
+    out: list[str | None] = []
+    seen: set[str] = set()
+    for value in values:
+        key = (value or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
+    return out or [None]
+
+
+def _with_pool_fallback(configured_tier: str | None,
+                        db=None) -> list[str | None]:
+    if db is None:
+        try:
+            from .db import SessionLocal
+        except Exception:
+            return _unique_tiers([configured_tier])
+        own_db = SessionLocal()
+        try:
+            return _unique_tiers([configured_tier,
+                                  _pool_fallback_tier(own_db, configured_tier)])
+        finally:
+            own_db.close()
+    return _unique_tiers([configured_tier, _pool_fallback_tier(db, configured_tier)])
+
+
+def _pool_fallback_tier(db, tier_text: str | None) -> str | None:
+    tier = (tier_text or "").strip().lower()
+    if not tier or tier == "none":
+        return None
+    slug = tier.split(":", 1)[1] if tier.startswith("pool:") else tier
+    try:
+        from .models import ProxyPoolConfig
+        row = (db.query(ProxyPoolConfig)
+               .filter(ProxyPoolConfig.slug == slug,
+                       ProxyPoolConfig.active == True)  # noqa: E712
+               .first())
+        if row and row.fallback_pool_slug:
+            return f"pool:{row.fallback_pool_slug}"
+    except Exception:
+        return None
+    return None
+
+
+def _persistent_unhealthy_hashes() -> set[str]:
+    try:
+        from .db import SessionLocal
+        from .proxy_health import unhealthy_proxy_hashes
+    except Exception:
+        return set()
+    db = SessionLocal()
+    try:
+        return unhealthy_proxy_hashes(db)
+    except Exception:
+        return set()
+    finally:
+        db.close()
+
+
 # 单例
-_pool = ProxyPool()
+_pool = ProxyPool(use_persistent_health=True)
 
 
 def get_proxy(tier: str | None = None, site: str | None = None) -> str | None:

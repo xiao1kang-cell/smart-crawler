@@ -4,6 +4,7 @@ import { createPinia } from 'pinia'
 import { createApp } from 'vue'
 import App from '../App.vue'
 import router from './router'
+import { installOverflowTitle } from '../utils/overflowTitle'
 import '../styles/theme.css'
 
 try {
@@ -32,3 +33,4 @@ app.use(pinia)
 app.use(router)
 app.use(VueQueryPlugin, { queryClient })
 app.mount('#app')
+installOverflowTitle()

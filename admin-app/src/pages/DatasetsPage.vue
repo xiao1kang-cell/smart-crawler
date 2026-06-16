@@ -35,7 +35,10 @@ onMounted(load)
 <template>
   <div class="page">
     <div class="page-head">
-      <h1 class="page-title">数据集</h1>
+      <div>
+        <h1 class="page-title">通用数据集</h1>
+        <p class="page-subtitle">仅统计 spine normalized 层；商品库和 VOC 在概览的数据库存中单独统计。</p>
+      </div>
       <button class="btn small" :disabled="loading" @click="load">刷新</button>
     </div>
 
@@ -94,6 +97,12 @@ onMounted(load)
 .page-title {
   font-size: 20px;
   font-weight: 600;
+}
+
+.page-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.55;
 }
 
 .btn {

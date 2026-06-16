@@ -48,47 +48,89 @@ def init_db() -> None:
     """建表 + 轻量迁移 + 用 sites.yaml 初始化站点。"""
     from . import models  # noqa: F401  保证模型已注册
 
-    Base.metadata.create_all(engine)
-    _migrate()
-    _seed_sites()
-    _seed_workspaces()
-    _seed_users()
-    _seed_workspace_sites()
-    _backfill_workspace_links()
+    with _init_lock() as conn:
+        if conn is None:
+            Base.metadata.create_all(bind=engine)
+            _migrate()
+        else:
+            Base.metadata.create_all(bind=conn)
+            _migrate(bind=conn)
+            conn.commit()
+        _seed_sites()
+        _seed_workspaces()
+        _seed_users()
+        _seed_workspace_sites()
+        _backfill_workspace_links()
+        _seed_proxy_config()
 
 
-def _migrate() -> None:
+@contextmanager
+def _init_lock():
+    """Serialize startup DDL across web and worker containers.
+
+    PostgreSQL can still race on concurrent CREATE TABLE IF NOT EXISTS for new
+    tables because the underlying type/index rows are created separately. A
+    session-scoped advisory lock keeps deployments boring when multiple
+    processes start at once. DDL is committed before seed steps so their normal
+    sessions can see newly-created tables. SQLite runs in-process for local dev/tests.
+    """
+    if IS_SQLITE:
+        yield None
+        return
+
+    from sqlalchemy import text
+
+    lock_key = 740731551
+    with engine.connect() as conn:
+        conn.execute(text("SELECT pg_advisory_lock(:key)"), {"key": lock_key})
+        conn.commit()
+        try:
+            yield conn
+        finally:
+            conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": lock_key})
+            conn.commit()
+
+
+def _migrate(bind=None) -> None:
     """幂等迁移：给已存在的表补上模型新增的列。
 
     用 ANSI `ALTER TABLE ADD COLUMN`，SQLite / PostgreSQL 均兼容；
     靠 inspect 判重避免重复加列。
     """
+    if bind is not None:
+        _migrate_with_connection(bind)
+        return
+
+    with engine.begin() as conn:
+        _migrate_with_connection(conn)
+
+
+def _migrate_with_connection(conn) -> None:
     from sqlalchemy import inspect, text
 
-    insp = inspect(engine)
-    with engine.begin() as conn:
-        for table in Base.metadata.sorted_tables:
-            if not insp.has_table(table.name):
+    insp = inspect(conn)
+    for table in Base.metadata.sorted_tables:
+        if not insp.has_table(table.name):
+            continue
+        existing = {c["name"] for c in insp.get_columns(table.name)}
+        for col in table.columns:
+            if col.name in existing:
                 continue
-            existing = {c["name"] for c in insp.get_columns(table.name)}
-            for col in table.columns:
-                if col.name in existing:
-                    continue
-                coltype = col.type.compile(engine.dialect)
-                conn.execute(text(
-                    f"ALTER TABLE {table.name} ADD COLUMN {col.name} {coltype}"))
-        if insp.has_table("users"):
+            coltype = col.type.compile(engine.dialect)
             conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email_unique "
-                "ON users (email) WHERE email IS NOT NULL"))
-        if insp.has_table("user_sessions"):
-            conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ix_user_sessions_session_hash_unique "
-                "ON user_sessions (session_hash)"))
-        if insp.has_table("invite_codes"):
-            conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ix_invite_codes_code_hash_unique "
-                "ON invite_codes (code_hash)"))
+                f"ALTER TABLE {table.name} ADD COLUMN {col.name} {coltype}"))
+    if insp.has_table("users"):
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email_unique "
+            "ON users (email) WHERE email IS NOT NULL"))
+    if insp.has_table("user_sessions"):
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_user_sessions_session_hash_unique "
+            "ON user_sessions (session_hash)"))
+    if insp.has_table("invite_codes"):
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_invite_codes_code_hash_unique "
+            "ON invite_codes (code_hash)"))
 
 
 def _seed_sites() -> None:
@@ -237,6 +279,17 @@ def _backfill_workspace_links() -> None:
         for usage in s.query(Usage).filter(Usage.workspace_id.is_(None)).all():
             key = s.get(ApiKey, usage.api_key_id) if usage.api_key_id else None
             usage.workspace_id = key.workspace_id if key and key.workspace_id else workspace.id
+
+
+def _seed_proxy_config() -> None:
+    """首次启动把私有代理文件导入 DB；失败不阻断服务启动。"""
+    try:
+        from .proxy_config import bootstrap_proxy_config
+
+        with session_scope() as s:
+            bootstrap_proxy_config(s)
+    except Exception as exc:
+        print(f"[seed] 代理配置初始化跳过：{exc}")
 
 
 @contextmanager

@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { listJobs, triggerJob } from '../api/jobs'
+import { listJobs } from '../api/jobs'
 import { listSites } from '../api/products'
 import { listCoverage } from '../api/coverage'
 import { proxyStatus } from '../api/settings'
 import { asList, fmtNumber, proxyAvailable } from '../api/client'
+import PageLoading from '../components/common/PageLoading.vue'
+import { useJobTrigger } from '../composables/useJobTrigger'
 
 const loading = ref(false)
 const error = ref('')
@@ -13,6 +15,7 @@ const coverage = ref<Record<string, any>[]>([])
 const coverageSummary = ref<Record<string, any>>({})
 const jobs = ref<Record<string, any>[]>([])
 const proxy = ref<Record<string, any> | null>(null)
+const jobTrigger = useJobTrigger({ onDone: () => load() })
 
 const healthySites = computed(() => Number(coverageSummary.value.healthy_count ?? coverage.value.filter((x) => normalizedPct(x) >= 50).length))
 const warningSites = computed(() => Number(coverageSummary.value.warning_count ?? coverage.value.filter((x) => {
@@ -62,8 +65,11 @@ async function load() {
 }
 
 async function trigger(site?: string) {
-  await triggerJob({ site })
-  await load()
+  await jobTrigger.trigger(site)
+}
+
+function siteKey(row: Record<string, any>) {
+  return String(row.site || row.name || '')
 }
 
 onMounted(load)
@@ -74,7 +80,9 @@ onMounted(load)
     <div class="lead">系统总览 · 实时数据</div>
     <div class="sub">smart-crawler 控制台 · 客户视角统一看板</div>
     <UAlert v-if="error" color="error" variant="soft" :title="error" />
-    <div class="stats-hero">
+    <PageLoading v-if="loading && !sites.length && !coverage.length && !jobs.length" title="加载系统总览..." note="正在同步站点、覆盖率、任务和代理池" />
+
+    <div v-else class="stats-hero">
       <div class="stat"><div class="lbl">商品总数</div><div class="val">{{ fmtNumber(totalSku) }}</div><div class="delta">{{ coveragePct }}% 覆盖</div></div>
       <div class="stat"><div class="lbl">健康站点</div><div class="val">{{ healthySites }} / {{ sites.length }}</div><div class="delta">≥ 50% 覆盖</div></div>
       <div class="stat"><div class="lbl">警告</div><div class="val">{{ warningSites }}</div><div class="delta warn">5-50%</div></div>
@@ -83,7 +91,7 @@ onMounted(load)
       <div class="stat"><div class="lbl">代理池</div><div class="val">{{ proxyAvailable(proxy) }}/{{ proxy?.total || 0 }}</div><div class="delta">健康</div></div>
     </div>
 
-    <RouterLink class="entry-row" to="/app/reports">
+    <RouterLink v-if="!loading || coverage.length" class="entry-row" to="/app/reports">
       <div class="entry-card">
         <div class="entry-icon">📊</div>
         <div class="entry-meta">
@@ -94,7 +102,7 @@ onMounted(load)
       </div>
     </RouterLink>
 
-    <div class="overview-section">
+    <div v-if="!loading || coverage.length" class="overview-section">
       <h3 class="section-title">站点覆盖率前 20</h3>
       <div class="cov-grid">
         <div v-for="row in sortedCoverage.slice(0, 20)" :key="row.site || row.name" class="cov-tile" :class="row.status">
@@ -103,8 +111,13 @@ onMounted(load)
           <div class="num">{{ fmtNumber(row.current || row.sku_count || row.products || row.count) }}</div>
           <div class="pct">{{ row.coverage_pct ?? row.coverage ?? '—' }}% · 满 {{ fmtNumber(row.estimated_full || 0) }}</div>
           <div class="bar"><div :style="{ width: width(row) }" /></div>
-          <button @click="trigger(row.site || row.name)">▶ 触发抓取</button>
+          <button :class="jobTrigger.classFor(siteKey(row))" :disabled="jobTrigger.isBusy(siteKey(row))" @click="trigger(siteKey(row))">{{ jobTrigger.labelFor(siteKey(row), '触发抓取') }}</button>
+          <div v-if="jobTrigger.detailFor(siteKey(row))" class="trigger-note" :class="jobTrigger.classFor(siteKey(row))">{{ jobTrigger.detailFor(siteKey(row)) }}</div>
         </div>
+      </div>
+      <div v-if="!loading && !coverage.length" class="empty-state">
+        <b>暂无覆盖率数据</b>
+        可以先在设置里加入站点，或从覆盖率页面触发抓取。
       </div>
     </div>
   </section>

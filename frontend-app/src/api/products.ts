@@ -16,8 +16,12 @@ export function productPriceHistory(id: number | string) {
   return apiJson(`/api/products/${id}/price-history`)
 }
 
-export function siteOverview(site: string) {
-  return apiJson(`/api/sites/${encodeURIComponent(site)}/overview`)
+export function productTrend(id: number | string, params: Record<string, unknown> = {}) {
+  return apiJson(`/api/products/${id}/trend${qs(params)}`)
+}
+
+export function siteOverview(site: string, params: Record<string, unknown> = {}) {
+  return apiJson(`/api/sites/${encodeURIComponent(site)}/overview${qs(params)}`)
 }
 
 export function listPromotions(params: Record<string, unknown> = {}) {

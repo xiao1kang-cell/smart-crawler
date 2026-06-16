@@ -4,7 +4,6 @@ import {
   Bot,
   Boxes,
   BriefcaseBusiness,
-  ClipboardList,
   Database,
   LogOut,
   Settings,
@@ -33,7 +32,6 @@ const nav = [
   { path: '/app/ask', label: '💬 问答', icon: Sparkles },
   { path: '/app/catalog', label: '📦 商品库', icon: Boxes },
   { path: '/app/coverage', label: '🌐 覆盖率', icon: Database },
-  { path: '/app/jobs', label: '⚙️ 任务', icon: ClipboardList },
   { path: '/app/ondemand', label: '🔗 按需抓取', icon: Bot },
   { path: '/app/influencers', label: '🌟 红人', icon: Sparkles },
   { path: '/app/settings', label: '🔧 设置', icon: Settings }
@@ -80,7 +78,7 @@ onMounted(bootstrap)
           {{ item.label }}
         </RouterLink>
       </nav>
-      <div class="usage-strip">商品 <b>{{ totalSku.toLocaleString() }}</b> · 覆盖 <b>{{ coveragePct }}%</b></div>
+      <div class="usage-strip">覆盖SKU <b>{{ totalSku.toLocaleString() }}</b> · 覆盖 <b>{{ coveragePct }}%</b></div>
       <RouterLink class="acct" :class="{ active: route.path.startsWith('/app/account') }" to="/app/account">
         <div class="avatar">{{ (auth.user?.display_name || auth.user?.username || 'A').charAt(0).toUpperCase() }}</div>
         <span>{{ auth.user?.display_name || auth.user?.username || '管理员' }}</span>

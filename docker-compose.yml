@@ -42,6 +42,9 @@ services:
       # 忘记密码需重置时：临时加 ADMIN_PASSWORD_FORCE_RESET=1 启动一次。
       - ADMIN_USERNAME=${ADMIN_USERNAME:-aosen}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-change-me}
+      # Web 容器保留 FastAPI + scheduler；采集执行交给独立 worker 容器，避免
+      # 页面触发的 job 只入队但无人消费。
+      - WORKER_THREADS=${WORKER_THREADS:-0}
       - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
       - HOMARY_LIMIT=${HOMARY_LIMIT:-2000}
       - COSTWAY_PAGES_PER_CAT=${COSTWAY_PAGES_PER_CAT:-50}
@@ -63,8 +66,9 @@ services:
       postgres:
         condition: service_healthy
 
-  # 4 个并行 worker 副本 —— 不跑 FastAPI/scheduler，专跑 worker loop，连同一 PG
-  # 启用：docker compose --profile workers up -d 后 worker_1..4 全部 join 队列
+  # worker 副本 —— 不跑 FastAPI/scheduler，专跑 worker loop，连同一 PG。
+  # worker_1 只处理页面/人工触发任务，避免被凌晨 scheduled backlog 卡住。
+  # worker_3/4 为扩容 worker：docker compose --profile workers up -d 启用。
   worker_1: &worker_template
     build: .
     image: smart-crawler:latest
@@ -79,6 +83,7 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
       - RUN_SCHEDULER=0
       - WORKER_ID=worker-1
+      - TRIGGER_ALLOWLIST=manual,tracking_add,admin_quality_rerun,admin_retry
       - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
       - HOMARY_LIMIT=${HOMARY_LIMIT:-2000}
       - COSTWAY_PAGES_PER_CAT=${COSTWAY_PAGES_PER_CAT:-50}
@@ -97,7 +102,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    profiles: ["workers"]
 
   worker_2:
     <<: *worker_template
@@ -106,6 +110,9 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
       - RUN_SCHEDULER=0
       - WORKER_ID=worker-2
+      - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
+      - HOMARY_LIMIT=${HOMARY_LIMIT:-2000}
+      - COSTWAY_PAGES_PER_CAT=${COSTWAY_PAGES_PER_CAT:-50}
       - VIDAXL_LIMIT=${VIDAXL_LIMIT:-3000}
       - IKEA_LIMIT=${IKEA_LIMIT:-200}
       - IKEA_USE_STEALTH=${IKEA_USE_STEALTH:-0}
@@ -122,10 +129,14 @@ services:
   worker_3:
     <<: *worker_template
     container_name: smart-crawler-worker-3
+    profiles: ["workers"]
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
       - RUN_SCHEDULER=0
       - WORKER_ID=worker-3
+      - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
+      - HOMARY_LIMIT=${HOMARY_LIMIT:-2000}
+      - COSTWAY_PAGES_PER_CAT=${COSTWAY_PAGES_PER_CAT:-50}
       - VIDAXL_LIMIT=${VIDAXL_LIMIT:-3000}
       - IKEA_LIMIT=${IKEA_LIMIT:-200}
       - IKEA_USE_STEALTH=${IKEA_USE_STEALTH:-0}
@@ -142,10 +153,14 @@ services:
   worker_4:
     <<: *worker_template
     container_name: smart-crawler-worker-4
+    profiles: ["workers"]
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
       - RUN_SCHEDULER=0
       - WORKER_ID=worker-4
+      - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
+      - HOMARY_LIMIT=${HOMARY_LIMIT:-2000}
+      - COSTWAY_PAGES_PER_CAT=${COSTWAY_PAGES_PER_CAT:-50}
       - VIDAXL_LIMIT=${VIDAXL_LIMIT:-3000}
       - IKEA_LIMIT=${IKEA_LIMIT:-200}
       - IKEA_USE_STEALTH=${IKEA_USE_STEALTH:-0}

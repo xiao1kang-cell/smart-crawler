@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_, text
 from sqlalchemy.orm import Session
 
 from ..access import DEFAULT_API_KEY_SCOPES, api_key_scopes, normalize_scopes
@@ -22,7 +22,8 @@ from ..auth import (TOKEN_TTL, generate_session_id, hash_secret, hash_password,
                     verify_password)
 from ..db import get_db
 from ..export import export_workbook
-from ..models import (ApiKey, Category, CrawlJob, Keyword, PriceHistory,
+from ..models import (ApiKey, Category, CrawlFailure, CrawlJob, CrawlUrl,
+                      Keyword, PriceHistory, ProxyHealth,
                       Product, Promotion, Review, ShoppingResult, Site, Trend,
                       User, UserSession, InviteCode, Workspace,
                       WorkspaceMember, WorkspaceSite, ReportConfig)
@@ -30,10 +31,29 @@ from ..proxy import pool_status
 from ..runner import enqueue
 
 
+SITE_CURRENCY_BY_COUNTRY = {
+    "US": "USD", "CA": "CAD", "UK": "GBP", "GB": "GBP",
+    "DE": "EUR", "FR": "EUR", "IT": "EUR", "ES": "EUR", "NL": "EUR",
+    "IE": "EUR", "PT": "EUR", "PL": "PLN", "RO": "RON",
+    "SE": "SEK", "CH": "CHF", "JP": "JPY", "KR": "KRW",
+    "CN": "CNY", "ID": "IDR", "MX": "MXN", "BR": "BRL",
+}
+
+
+def _currency_for_site(site: str | None) -> str | None:
+    if not site or "_" not in site:
+        return None
+    suffix = site.rsplit("_", 1)[-1].upper()
+    if suffix == "GLOBAL":
+        return "USD"
+    return SITE_CURRENCY_BY_COUNTRY.get(suffix)
+
+
 # 新品判定窗口：created_time 落在最近 N 天即视为新品。
 # 不要用 Product.is_new 列——它在 pipeline 首次插入时置 True 后从不复位，
 # 各站近期全量首采会让 96%+ 商品被误标为新品（2026-06 线上实测）。
 NEW_PRODUCT_DAYS = 30
+CRAWL_JOB_STUCK_SEC = 1800
 
 
 # ---------- 鉴权依赖：接受 Bearer Token 或 X-API-Key ----------
@@ -512,12 +532,15 @@ def change_password(payload: dict, user: str = Depends(require_user),
 
 
 @router.get("/me")
-def me(user: str = Depends(require_user), db: Session = Depends(get_db)):
+def me(user: str = Depends(require_user),
+       x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
+       db: Session = Depends(get_db)):
     u = _current_user(user, db)
     if not u:
         return {"username": user, "role": "viewer"}
     workspaces = [_workspace_response(ws) for ws in _user_workspaces(db, u)]
-    current_ws_id = (
+    current_ws = _current_workspace(user, db, x_workspace_id)
+    current_ws_id = current_ws.id if current_ws else (
         u.default_workspace_id or (workspaces[0]["id"] if workspaces else None)
     )
     # 当前工作区内的成员角色(owner/admin/member/viewer),供前端按租户角色门控
@@ -526,7 +549,8 @@ def me(user: str = Depends(require_user), db: Session = Depends(get_db)):
         from .. import models as _m
         mem = (db.query(_m.WorkspaceMember)
                .filter(_m.WorkspaceMember.workspace_id == current_ws_id,
-                       _m.WorkspaceMember.user_id == u.id).first())
+                       _m.WorkspaceMember.user_id == u.id,
+                       _m.WorkspaceMember.status == "active").first())
         workspace_role = mem.role if mem else None
     return _public_user(u) | {
         "workspaces": workspaces,
@@ -578,15 +602,18 @@ def current_workspace(user: str = Depends(require_user),
 def site_dict(s: Site) -> dict:
     return {"site": s.site, "brand": s.brand, "country": s.country,
             "url": s.url, "platform": s.platform, "proxy_tier": s.proxy_tier,
+            "currency": _currency_for_site(s.site),
             "last_crawled": s.last_crawled.isoformat() if s.last_crawled else None}
 
 
 def product_dict(p: Product) -> dict:
+    currency = p.currency or _currency_for_site(p.site)
     return {
-        "id": p.id, "sku": p.sku, "spu": p.spu, "title": p.title,
+        "id": p.id, "sku": p.sku, "spu": p.spu, "variant_id": p.variant_id,
+        "title": p.title,
         "image": (p.image_urls or [None])[0], "image_urls": p.image_urls,
         "category_path": p.category_path, "sale_price": p.sale_price,
-        "original_price": p.original_price, "currency": p.currency,
+        "original_price": p.original_price, "currency": currency,
         "attributes": p.attributes, "ratings": p.ratings,
         "review_count": p.review_count, "thirty_day_sales": p.thirty_day_sales,
         "thirty_day_revenue": p.thirty_day_revenue, "status": p.status,
@@ -599,6 +626,183 @@ def product_dict(p: Product) -> dict:
         "updated_time": p.updated_time.isoformat() if p.updated_time else None,
         "site": p.site, "brand": p.brand,
     }
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _parse_iso_datetime_end(value: str | None) -> datetime | None:
+    parsed = _parse_iso_datetime(value)
+    if parsed and value and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip()):
+        return parsed + timedelta(days=1) - timedelta(microseconds=1)
+    return parsed
+
+
+def _filtered_products_query(
+    db: Session,
+    allowed_sites: list[str],
+    *,
+    site: str | None = None,
+    tab: str = "all",
+    search: str | None = None,
+    status: str | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    category: str | None = None,
+    min_rating: float | None = None,
+    max_rating: float | None = None,
+    min_reviews: int | None = None,
+    max_reviews: int | None = None,
+    min_sales: int | None = None,
+    max_sales: int | None = None,
+    min_revenue: float | None = None,
+    max_revenue: float | None = None,
+    min_variants: int | None = None,
+    max_variants: int | None = None,
+    has_video: bool | None = None,
+    free_shipping: bool | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
+):
+    q = db.query(Product)
+    if site:
+        _require_site_in_workspace(site, allowed_sites)
+        q = q.filter(Product.site == site)
+    else:
+        q = q.filter(Product.site.in_(allowed_sites))
+    if tab == "bestseller":
+        q = q.filter(Product.is_bestseller.is_(True))
+    elif tab == "new":
+        # 验收口径的“最新产品”应展示站点最近采集到的新品列表。
+        # 有些历史站点没有最近 30 天 created_time，不能因此把 tab 变成空表。
+        q = q.filter(or_(Product.created_time.isnot(None),
+                         Product.published_at.isnot(None)))
+    if search:
+        like = f"%{search}%"
+        q = q.filter(or_(Product.title.ilike(like), Product.sku.ilike(like),
+                         Product.spu.ilike(like)))
+    if status:
+        q = q.filter(Product.status == status)
+    if min_price is not None:
+        q = q.filter(Product.sale_price >= min_price)
+    if max_price is not None:
+        q = q.filter(Product.sale_price <= max_price)
+    if category:
+        q = q.filter(Product.category_path.ilike(f"%{category}%"))
+    if min_rating is not None:
+        q = q.filter(Product.ratings >= min_rating)
+    if max_rating is not None:
+        q = q.filter(Product.ratings <= max_rating)
+    if min_reviews is not None:
+        q = q.filter(Product.review_count >= min_reviews)
+    if max_reviews is not None:
+        q = q.filter(Product.review_count <= max_reviews)
+    if min_sales is not None:
+        q = q.filter(Product.thirty_day_sales >= min_sales)
+    if max_sales is not None:
+        q = q.filter(Product.thirty_day_sales <= max_sales)
+    if min_revenue is not None:
+        q = q.filter(Product.thirty_day_revenue >= min_revenue)
+    if max_revenue is not None:
+        q = q.filter(Product.thirty_day_revenue <= max_revenue)
+    if min_variants is not None or max_variants is not None:
+        variant_key = func.coalesce(Product.spu, Product.sku)
+        variant_counts = (
+            db.query(
+                Product.site.label("variant_site"),
+                variant_key.label("variant_key"),
+                func.count(Product.id).label("variant_count"),
+            )
+            .group_by(Product.site, variant_key)
+            .subquery()
+        )
+        q = q.join(
+            variant_counts,
+            and_(
+                Product.site == variant_counts.c.variant_site,
+                variant_key == variant_counts.c.variant_key,
+            ),
+        )
+        if min_variants is not None:
+            q = q.filter(variant_counts.c.variant_count >= min_variants)
+        if max_variants is not None:
+            q = q.filter(variant_counts.c.variant_count <= max_variants)
+    if has_video is not None:
+        q = q.filter(Product.has_video.is_(has_video))
+    if free_shipping is not None:
+        q = q.filter(Product.has_free_shipping.is_(free_shipping))
+    parsed_from = _parse_iso_datetime(created_from)
+    if parsed_from:
+        q = q.filter(Product.created_time >= parsed_from)
+    parsed_to = _parse_iso_datetime_end(created_to)
+    if parsed_to:
+        q = q.filter(Product.created_time <= parsed_to)
+    return q
+
+
+def _variant_counts_for_products(db: Session, products: list[Product]) -> dict[int, int]:
+    keys = {(p.site, p.spu or p.sku) for p in products if p.site and (p.spu or p.sku)}
+    if not keys:
+        return {}
+    sites = sorted({site for site, _key in keys})
+    variant_key = func.coalesce(Product.spu, Product.sku)
+    rows = (
+        db.query(Product.site, variant_key.label("variant_key"),
+                 func.count(Product.id))
+        .filter(Product.site.in_(sites))
+        .group_by(Product.site, variant_key)
+        .all()
+    )
+    by_key = {(site, key): int(count or 0) for site, key, count in rows}
+    return {p.id: by_key.get((p.site, p.spu or p.sku), 1) for p in products}
+
+
+def _product_order_cols(tab: str):
+    if tab == "new":
+        return (
+            func.coalesce(Product.published_at, Product.created_time,
+                          Product.updated_time).desc().nullslast(),
+            Product.id.desc(),
+        )
+    return (Product.id,)
+
+
+def _filtered_promotions_query(
+    db: Session,
+    allowed_sites: list[str],
+    *,
+    site: str | None = None,
+    search: str | None = None,
+    type: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+):
+    q = db.query(Promotion)
+    if site:
+        _require_site_in_workspace(site, allowed_sites)
+        q = q.filter(Promotion.site == site)
+    else:
+        q = q.filter(Promotion.site.in_(allowed_sites))
+    if search:
+        like = f"%{search}%"
+        q = q.filter(or_(Promotion.sku.ilike(like),
+                         Promotion.promotion_name.ilike(like),
+                         Promotion.product_title.ilike(like)))
+    if type:
+        q = q.filter(Promotion.promotion_type.ilike(f"%{type}%"))
+    parsed_from = _parse_iso_datetime(date_from)
+    if parsed_from:
+        q = q.filter(Promotion.detected_time >= parsed_from)
+    parsed_to = _parse_iso_datetime_end(date_to)
+    if parsed_to:
+        q = q.filter(Promotion.detected_time <= parsed_to)
+    return q
 
 
 # ---------- 站点概览（R-001 / R-002 / §14.2）----------
@@ -647,12 +851,17 @@ def list_sites(
 @router.get("/sites/{site}/overview")
 def site_overview(site: str, user: str = Depends(require_user),
                   x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
+                  granularity: str = Query("month", pattern="^(day|week|month)$"),
+                  date_from: str | None = None,
+                  date_to: str | None = None,
                   db: Session = Depends(get_db)):
     """6 个指标卡 + 趋势序列。"""
     ws = _current_workspace(user, db, x_workspace_id)
     _require_site_in_workspace(site, _workspace_site_names(db, ws.id))
-    if not db.query(Site).filter(Site.site == site).first():
+    site_row = db.query(Site).filter(Site.site == site).first()
+    if not site_row:
         raise HTTPException(404, "站点不存在")
+    currency = _currency_for_site(site)
     sku_count = db.query(Product).filter(Product.site == site).count()
     _new_cutoff = datetime.utcnow() - timedelta(days=NEW_PRODUCT_DAYS)
     new_count = db.query(Product).filter(
@@ -666,13 +875,51 @@ def site_overview(site: str, user: str = Depends(require_user),
         func.coalesce(func.sum(Product.thirty_day_sales), 0),
         func.coalesce(func.sum(Product.thirty_day_revenue), 0.0),
     ).filter(Product.site == site).first()
-    trends = [{"date": t.date.isoformat(), "sku_count": t.sku_count,
-               "new_product_count": t.new_product_count,
-               "estimated_sales": t.estimated_sales,
-               "estimated_revenue": t.estimated_revenue,
-               "avg_rating": t.avg_rating, "review_total": t.review_total}
-              for t in db.query(Trend).filter(Trend.site == site)
-              .order_by(Trend.date).all()]
+    last_product_updated = (db.query(func.max(Product.updated_time))
+                            .filter(Product.site == site).scalar())
+    updated_candidates = [
+        site_row.last_crawled,
+        last_product_updated,
+        site_row.updated_at,
+        site_row.created_at,
+    ]
+    updated_at = next((value for value in updated_candidates if value), None)
+    trend_q = db.query(Trend).filter(Trend.site == site)
+    parsed_from = _parse_iso_datetime(date_from)
+    parsed_to = _parse_iso_datetime_end(date_to)
+    if parsed_from:
+        trend_q = trend_q.filter(Trend.date >= parsed_from.date())
+    if parsed_to:
+        trend_q = trend_q.filter(Trend.date <= parsed_to.date())
+    raw_trends = trend_q.order_by(Trend.date).all()
+    trend_buckets: dict[str, dict] = {}
+    for t in raw_trends:
+        key = _trend_bucket_key(t.date, granularity)
+        # 站点趋势是日快照/30天滚动指标，聚合到周/月时用桶内最后一天代表。
+        trend_buckets[key] = {
+            "date": key, "source_date": t.date.isoformat(),
+            "sku_count": t.sku_count,
+            "new_product_count": t.new_product_count,
+            "estimated_sales": t.estimated_sales,
+            "estimated_revenue": t.estimated_revenue,
+            "traffic": t.traffic,
+            "conversion_rate": t.conversion_rate,
+            "avg_rating": t.avg_rating,
+            "review_total": t.review_total,
+        }
+    trends = list(trend_buckets.values())
+    current_period = trends[-1] if trends else {
+        "date": None,
+        "sku_count": sku_count,
+        "new_product_count": new_count,
+        "estimated_sales": int(sales or 0),
+        "estimated_revenue": round(revenue or 0, 2),
+        "traffic": None,
+        "conversion_rate": None,
+        "avg_rating": None,
+        "review_total": None,
+    }
+    previous_period = trends[-2] if len(trends) > 1 else None
     return {
         "cards": {
             "sku_count": sku_count, "new_product_count": new_count,
@@ -680,9 +927,18 @@ def site_overview(site: str, user: str = Depends(require_user),
             "category_count": int(category_count),
             "thirty_day_sales": int(sales or 0),
             "thirty_day_revenue": round(revenue or 0, 2),
+            "currency": currency,
             "traffic": None, "conversion_rate": None,
         },
         "trends": trends,
+        "currency": currency,
+        "updated_at": updated_at.isoformat() if updated_at else None,
+        "trend_summary": {
+            "granularity": granularity,
+            "visible_points": len(trends),
+            "current_period": current_period,
+            "previous_period": previous_period,
+        },
     }
 
 
@@ -704,6 +960,8 @@ def list_products(
     max_sales: int | None = None,
     min_revenue: float | None = None,
     max_revenue: float | None = None,
+    min_variants: int | None = None,
+    max_variants: int | None = None,
     has_video: bool | None = None,
     free_shipping: bool | None = None,
     created_from: str | None = None,
@@ -716,63 +974,28 @@ def list_products(
 ):
     ws = _current_workspace(user, db, x_workspace_id)
     allowed_sites = _workspace_site_names(db, ws.id)
-    q = db.query(Product)
-    if site:
-        _require_site_in_workspace(site, allowed_sites)
-        q = q.filter(Product.site == site)
-    else:
-        q = q.filter(Product.site.in_(allowed_sites))
-    if tab == "bestseller":
-        q = q.filter(Product.is_bestseller.is_(True))
-    elif tab == "new":
-        _new_cutoff = datetime.utcnow() - timedelta(days=NEW_PRODUCT_DAYS)
-        q = q.filter(Product.created_time >= _new_cutoff)
-    if search:
-        like = f"%{search}%"
-        q = q.filter((Product.title.ilike(like)) | (Product.sku.ilike(like)))
-    if status:
-        q = q.filter(Product.status == status)
-    if min_price is not None:
-        q = q.filter(Product.sale_price >= min_price)
-    if max_price is not None:
-        q = q.filter(Product.sale_price <= max_price)
-    if category:
-        q = q.filter(Product.category_path.ilike(f"%{category}%"))
-    if min_rating is not None:
-        q = q.filter(Product.ratings >= min_rating)
-    if max_rating is not None:
-        q = q.filter(Product.ratings <= max_rating)
-    if min_reviews is not None:
-        q = q.filter(Product.review_count >= min_reviews)
-    if max_reviews is not None:
-        q = q.filter(Product.review_count <= max_reviews)
-    if min_sales is not None:
-        q = q.filter(Product.thirty_day_sales >= min_sales)
-    if max_sales is not None:
-        q = q.filter(Product.thirty_day_sales <= max_sales)
-    if min_revenue is not None:
-        q = q.filter(Product.thirty_day_revenue >= min_revenue)
-    if max_revenue is not None:
-        q = q.filter(Product.thirty_day_revenue <= max_revenue)
-    if has_video is not None:
-        q = q.filter(Product.has_video.is_(has_video))
-    if free_shipping is not None:
-        q = q.filter(Product.has_free_shipping.is_(free_shipping))
-    if created_from:
-        try:
-            q = q.filter(Product.created_time >= datetime.fromisoformat(created_from))
-        except ValueError:
-            pass
-    if created_to:
-        try:
-            q = q.filter(Product.created_time <= datetime.fromisoformat(created_to))
-        except ValueError:
-            pass
+    q = _filtered_products_query(
+        db, allowed_sites, site=site, tab=tab, search=search, status=status,
+        min_price=min_price, max_price=max_price, category=category,
+        min_rating=min_rating, max_rating=max_rating,
+        min_reviews=min_reviews, max_reviews=max_reviews,
+        min_sales=min_sales, max_sales=max_sales,
+        min_revenue=min_revenue, max_revenue=max_revenue,
+        min_variants=min_variants, max_variants=max_variants,
+        has_video=has_video, free_shipping=free_shipping,
+        created_from=created_from, created_to=created_to,
+    )
     total = q.count()
-    rows = (q.order_by(Product.id)
+    rows = (q.order_by(*_product_order_cols(tab))
             .offset((page - 1) * page_size).limit(page_size).all())
+    variant_counts = _variant_counts_for_products(db, rows)
+    items = []
+    for row in rows:
+        item = product_dict(row)
+        item["variant_count"] = variant_counts.get(row.id, 1)
+        items.append(item)
     return {"total": total, "page": page, "page_size": page_size,
-            "items": [product_dict(p) for p in rows]}
+            "items": items}
 
 
 @router.post("/ondemand/fetch")
@@ -949,27 +1172,205 @@ def price_history(pid: int, user: str = Depends(require_user),
              "review_count": r.review_count} for r in rows]
 
 
+def _trend_bucket_key(value, granularity: str) -> str:
+    if not value:
+        return ""
+    if granularity == "month":
+        return value.isoformat()[:7]
+    if granularity == "week":
+        year, week, _weekday = value.isocalendar()
+        return f"{year}-W{week:02d}"
+    return value.isoformat()[:10]
+
+
+def _build_product_trend_payload(
+    db: Session,
+    p: Product,
+    *,
+    granularity: str = "day",
+    date_from: str | None = None,
+    date_to: str | None = None,
+    promo_search: str | None = None,
+    promo_type: str | None = None,
+) -> dict:
+    granularity = granularity if granularity in {"day", "week", "month"} else "day"
+    parsed_from = _parse_iso_datetime(date_from)
+    parsed_to = _parse_iso_datetime_end(date_to)
+    from_date = parsed_from.date() if parsed_from else None
+    to_date = parsed_to.date() if parsed_to else None
+    rows = (db.query(PriceHistory)
+            .filter(PriceHistory.site == p.site, PriceHistory.sku == p.sku)
+            .order_by(PriceHistory.date).all())
+    site_row = db.query(Site).filter(Site.site == p.site).first()
+    rate = float(site_row.review_rate or 0.025) if site_row else 0.025
+    rate = rate if rate > 0 else 0.025
+
+    raw_rows = []
+    prev_reviews: int | None = None
+    for h in rows:
+        sales = 0
+        if h.review_count is not None and prev_reviews is not None:
+            delta = int(h.review_count or 0) - int(prev_reviews or 0)
+            sales = max(0, round(delta / rate)) if delta > 0 else 0
+        if h.review_count is not None:
+            prev_reviews = int(h.review_count or 0)
+        price = h.sale_price if h.sale_price is not None else h.original_price
+        if from_date and h.date and h.date < from_date:
+            continue
+        if to_date and h.date and h.date > to_date:
+            continue
+        raw_rows.append({
+            "date": h.date.isoformat(),
+            "sale_price": h.sale_price,
+            "original_price": h.original_price,
+            "review_total": h.review_count,
+            "estimated_sales": sales,
+            "estimated_revenue": round(sales * (price or 0), 2),
+            "avg_rating": p.ratings,
+        })
+
+    if granularity == "day":
+        trend_rows = raw_rows
+    else:
+        buckets: dict[str, dict] = {}
+        for row in raw_rows:
+            key = _trend_bucket_key(datetime.fromisoformat(row["date"]).date(),
+                                    granularity)
+            current = buckets.setdefault(key, {
+                "date": key,
+                "sale_price": row["sale_price"],
+                "original_price": row["original_price"],
+                "review_total": row["review_total"],
+                "estimated_sales": 0,
+                "estimated_revenue": 0,
+                "avg_rating": row["avg_rating"],
+                "points": 0,
+            })
+            current["estimated_sales"] += row["estimated_sales"] or 0
+            current["estimated_revenue"] = round(
+                (current["estimated_revenue"] or 0) + (row["estimated_revenue"] or 0), 2)
+            current["sale_price"] = row["sale_price"]
+            current["original_price"] = row["original_price"]
+            current["review_total"] = row["review_total"]
+            current["avg_rating"] = row["avg_rating"]
+            current["points"] += 1
+        trend_rows = [buckets[k] for k in sorted(buckets.keys())]
+
+    promo_q = db.query(Promotion).filter(Promotion.site == p.site,
+                                         Promotion.sku == p.sku)
+    if promo_search:
+        like = f"%{promo_search}%"
+        promo_q = promo_q.filter(or_(Promotion.sku.ilike(like),
+                                     Promotion.promotion_name.ilike(like),
+                                     Promotion.product_title.ilike(like)))
+    if promo_type:
+        promo_q = promo_q.filter(Promotion.promotion_type.ilike(f"%{promo_type}%"))
+    if parsed_from:
+        promo_q = promo_q.filter(Promotion.detected_time >= parsed_from)
+    if parsed_to:
+        promo_q = promo_q.filter(Promotion.detected_time <= parsed_to)
+    promos = (promo_q.order_by(Promotion.detected_time.desc().nullslast(),
+                               Promotion.id.desc())
+              .limit(500).all())
+    promo_rows = [{
+        "id": r.id,
+        "sku": r.sku,
+        "site": r.site,
+        "promotion_type": r.promotion_type,
+        "promotion_name": r.promotion_name,
+        "original_price": r.original_price,
+        "promotion_price": r.promotion_price,
+        "currency": p.currency or _currency_for_site(p.site),
+        "discount_percent": r.discount_percent,
+        "threshold": r.threshold,
+        "product_title": r.product_title,
+        "product_image": r.product_image,
+        "start_time": r.start_time.isoformat() if r.start_time else None,
+        "end_time": r.end_time.isoformat() if r.end_time else None,
+        "detected_time": r.detected_time.isoformat() if r.detected_time else None,
+    } for r in promos]
+
+    has_review_signal = sum(1 for h in rows if h.review_count is not None) >= 2
+    current_period = trend_rows[-1] if trend_rows else None
+    previous_period = trend_rows[-2] if len(trend_rows) >= 2 else None
+    return {
+        "product": product_dict(p),
+        "summary": {
+            "thirty_day_sales": p.thirty_day_sales or 0,
+            "thirty_day_revenue": p.thirty_day_revenue or 0,
+            "price": p.sale_price if p.sale_price is not None else p.original_price,
+            "original_price": p.original_price,
+            "currency": p.currency or _currency_for_site(p.site),
+            "ratings": p.ratings,
+            "review_count": p.review_count or 0,
+            "review_rate": rate,
+            "history_points": len(rows),
+            "visible_points": len(trend_rows),
+            "promotion_count": len(promo_rows),
+            "granularity": granularity,
+            "date_from": date_from,
+            "date_to": date_to,
+            "current_period": current_period,
+            "previous_period": previous_period,
+            "has_review_signal": has_review_signal,
+            "traffic": None,
+            "conversion_rate": None,
+            "data_notes": [
+                "销量/收入由评论增量按留评率估算" if has_review_signal else "评论历史不足，销量/收入暂无法估算",
+                "流量/转化率需要接入第三方数据源",
+            ],
+        },
+        "trend": trend_rows,
+        "promotions": promo_rows,
+    }
+
+
+@router.get("/products/{pid}/trend")
+def product_trend(pid: int, user: str = Depends(require_user),
+                  granularity: str = Query("day", pattern="^(day|week|month)$"),
+                  date_from: str | None = None,
+                  date_to: str | None = None,
+                  promo_search: str | None = None,
+                  promo_type: str | None = None,
+                  x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
+                  db: Session = Depends(get_db)):
+    """单品趋势分析 —— 销售/收入/价格/评分/评论 + SKU 促销明细。"""
+    p = db.get(Product, pid)
+    if not p:
+        raise HTTPException(404, "商品不存在")
+    ws = _current_workspace(user, db, x_workspace_id)
+    _require_site_in_workspace(p.site, _workspace_site_names(db, ws.id))
+    return _build_product_trend_payload(
+        db, p, granularity=granularity, date_from=date_from, date_to=date_to,
+        promo_search=promo_search, promo_type=promo_type,
+    )
+
+
 # ---------- 促销分析（§14.4 / API-005）----------
 @router.get("/promotions")
 def list_promotions(site: str | None = None, page: int = 1,
                     page_size: int = 50,
+                    search: str | None = None,
+                    type: str | None = None,
+                    date_from: str | None = None,
+                    date_to: str | None = None,
                     user: str = Depends(require_user),
                     x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
                     db: Session = Depends(get_db)):
     ws = _current_workspace(user, db, x_workspace_id)
     allowed_sites = _workspace_site_names(db, ws.id)
-    q = db.query(Promotion)
-    if site:
-        _require_site_in_workspace(site, allowed_sites)
-        q = q.filter(Promotion.site == site)
-    else:
-        q = q.filter(Promotion.site.in_(allowed_sites))
+    q = _filtered_promotions_query(
+        db, allowed_sites, site=site, search=search, type=type,
+        date_from=date_from, date_to=date_to,
+    )
     total = q.count()
-    rows = q.offset((page - 1) * page_size).limit(page_size).all()
+    rows = (q.order_by(Promotion.detected_time.desc().nullslast(), Promotion.id.desc())
+            .offset((page - 1) * page_size).limit(page_size).all())
     return {"total": total, "items": [{
         "id": r.id, "sku": r.sku, "site": r.site,
         "promotion_type": r.promotion_type, "promotion_name": r.promotion_name,
         "original_price": r.original_price, "promotion_price": r.promotion_price,
+        "currency": _currency_for_site(r.site),
         "discount_percent": r.discount_percent, "threshold": r.threshold,
         "product_title": r.product_title, "product_image": r.product_image,
         "start_time": r.start_time.isoformat() if r.start_time else None,
@@ -1134,15 +1535,30 @@ def update_report_config(config_id: int, payload: dict,
 
 # ---------- 采集任务看板（C-030 / C-003）----------
 @router.get("/jobs")
-def list_jobs(limit: int = 30, user: str = Depends(require_user),
+def list_jobs(limit: int = 30, status: str | None = None,
+              ids: str | None = None, user: str = Depends(require_user),
               x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
               db: Session = Depends(get_db)):
     ws = _current_workspace(user, db, x_workspace_id)
     allowed_sites = _workspace_site_names(db, ws.id)
-    rows = (db.query(CrawlJob)
-            .filter(or_(CrawlJob.requested_by_workspace_id == ws.id,
-                        CrawlJob.site.in_(allowed_sites)))
-            .order_by(CrawlJob.id.desc()).limit(limit).all())
+    q = (db.query(CrawlJob)
+         .filter(or_(CrawlJob.requested_by_workspace_id == ws.id,
+                     CrawlJob.site.in_(allowed_sites))))
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+        if statuses:
+            q = q.filter(CrawlJob.status.in_(statuses))
+    if ids:
+        job_ids = []
+        for raw in ids.split(","):
+            raw = raw.strip()
+            if raw.isdigit():
+                job_ids.append(int(raw))
+        if job_ids:
+            q = q.filter(CrawlJob.id.in_(job_ids))
+        else:
+            return []
+    rows = q.order_by(CrawlJob.id.desc()).limit(limit).all()
     return [{
         "id": j.id, "site": j.site, "status": j.status,
         "products_count": j.products_count, "new_count": j.new_count,
@@ -1150,10 +1566,81 @@ def list_jobs(limit: int = 30, user: str = Depends(require_user),
         "duration_sec": round(j.duration_sec, 1) if j.duration_sec else None,
         "requested_by_workspace_id": j.requested_by_workspace_id,
         "requested_by_user_id": j.requested_by_user_id,
+        "created_at": j.created_at.isoformat() if j.created_at else None,
         "started_at": j.started_at.isoformat() if j.started_at else None,
         "finished_at": j.finished_at.isoformat() if j.finished_at else None,
         "error": j.error,
+        "failure_code": j.failure_code,
+        "failure_stage": j.failure_stage,
+        "failure_detail": j.failure_detail,
+        "retryable": j.retryable,
+        "suggested_action": j.suggested_action,
     } for j in rows]
+
+
+@router.get("/crawl/diagnostics")
+def crawl_diagnostics(
+    site: str | None = None,
+    limit: int = 20,
+    user: str = Depends(require_user),
+    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
+    db: Session = Depends(get_db),
+):
+    """抓取诊断：URL 漏斗、失败原因分布、最近失败事件。"""
+    ws = _current_workspace(user, db, x_workspace_id)
+    allowed = set(_workspace_site_names(db, ws.id, include_hidden=True))
+    if site and site not in allowed:
+        raise HTTPException(404, "站点不存在或不在当前工作区")
+    sites = [site] if site else sorted(allowed)
+
+    url_rows = (db.query(CrawlUrl.site, CrawlUrl.status, CrawlUrl.failure_code,
+                         func.count(CrawlUrl.id))
+                .filter(CrawlUrl.site.in_(sites))
+                .group_by(CrawlUrl.site, CrawlUrl.status, CrawlUrl.failure_code)
+                .all())
+    by_site: dict[str, dict] = {
+        s: {"site": s, "total": 0, "by_status": {}, "by_failure": {}}
+        for s in sites
+    }
+    for site_name, status_value, failure_code, count in url_rows:
+        row = by_site.setdefault(site_name, {
+            "site": site_name, "total": 0, "by_status": {}, "by_failure": {}})
+        row["total"] += int(count or 0)
+        status_key = status_value or "unknown"
+        row["by_status"][status_key] = row["by_status"].get(status_key, 0) + int(count or 0)
+        if failure_code:
+            row["by_failure"][failure_code] = row["by_failure"].get(failure_code, 0) + int(count or 0)
+
+    failures = (db.query(CrawlFailure)
+                .filter(CrawlFailure.site.in_(sites))
+                .order_by(CrawlFailure.id.desc())
+                .limit(max(1, min(limit, 100)))
+                .all())
+    failure_rows = [{
+        "id": f.id,
+        "site": f.site,
+        "job_id": f.job_id,
+        "url": f.url,
+        "stage": f.stage,
+        "code": f.code,
+        "detail": f.detail,
+        "retryable": f.retryable,
+        "suggested_action": f.suggested_action,
+        "http_status": f.http_status,
+        "fetcher": f.fetcher,
+        "proxy_tier": f.proxy_tier,
+        "occurred_at": f.occurred_at.isoformat() if f.occurred_at else None,
+    } for f in failures]
+
+    failure_counts = (db.query(CrawlFailure.code, func.count(CrawlFailure.id))
+                      .filter(CrawlFailure.site.in_(sites))
+                      .group_by(CrawlFailure.code).all())
+    return {
+        "sites": list(by_site.values()),
+        "failures": failure_rows,
+        "failure_counts": {code or "unknown": int(count or 0)
+                           for code, count in failure_counts},
+    }
 
 
 @router.post("/jobs/trigger")
@@ -1177,12 +1664,34 @@ def trigger(site: str | None = None, brand: str | None = None,
             raise HTTPException(404, "站点不存在")
         _require_site_in_workspace(site, allowed_sites)
         names = [site]
-    job_ids = [enqueue(n, trigger="manual",
-                       requested_by_workspace_id=ws.id,
-                       requested_by_user_id=requester.id if requester else None)
-               for n in names]
-    return {"status": "queued", "jobs": job_ids, "count": len(job_ids),
-            "queued_at": datetime.utcnow().isoformat()}
+    jobs: list[int] = []
+    reused: list[int] = []
+    created: list[int] = []
+    for name in names:
+        active = (db.query(CrawlJob)
+                  .filter(CrawlJob.site == name,
+                          CrawlJob.status.in_(("pending", "running")))
+                  .order_by(CrawlJob.id.desc())
+                  .first())
+        if active:
+            jobs.append(active.id)
+            reused.append(active.id)
+            continue
+        job_id = enqueue(name, trigger="manual",
+                         requested_by_workspace_id=ws.id,
+                         requested_by_user_id=requester.id if requester else None)
+        jobs.append(job_id)
+        created.append(job_id)
+    status = "queued" if created and not reused else (
+        "already_running" if reused and not created else "mixed")
+    return {
+        "status": status,
+        "jobs": jobs,
+        "created_jobs": created,
+        "existing_jobs": reused,
+        "count": len(jobs),
+        "queued_at": datetime.utcnow().isoformat(),
+    }
 
 
 _PLATFORM_METHOD = {
@@ -1866,6 +2375,26 @@ def export_products(token: str, site: str | None = None,
                     sites: str | None = None,
                     workspace_id: int | None = None,
                     categories: str | None = None,
+                    tab: str = Query("all", pattern="^(all|bestseller|new)$"),
+                    search: str | None = None,
+                    status: str | None = None,
+                    min_price: float | None = None,
+                    max_price: float | None = None,
+                    category: str | None = None,
+                    min_rating: float | None = None,
+                    max_rating: float | None = None,
+                    min_reviews: int | None = None,
+                    max_reviews: int | None = None,
+                    min_sales: int | None = None,
+                    max_sales: int | None = None,
+                    min_revenue: float | None = None,
+                    max_revenue: float | None = None,
+                    min_variants: int | None = None,
+                    max_variants: int | None = None,
+                    has_video: bool | None = None,
+                    free_shipping: bool | None = None,
+                    created_from: str | None = None,
+                    created_to: str | None = None,
                     format: str = "xlsx",
                     include_price_history: bool = False,
                     include_voc: bool = False,
@@ -1924,6 +2453,45 @@ def export_products(token: str, site: str | None = None,
             headers={"Content-Disposition": f'attachment; filename="{base_name}.zip"'},
         )
 
+    page_filter_active = any([
+        tab != "all", search, status, category,
+        min_price is not None, max_price is not None,
+        min_rating is not None, max_rating is not None,
+        min_reviews is not None, max_reviews is not None,
+        min_sales is not None, max_sales is not None,
+        min_revenue is not None, max_revenue is not None,
+        min_variants is not None, max_variants is not None,
+        has_video is not None, free_shipping is not None,
+        created_from, created_to,
+    ])
+    if page_filter_active:
+        import pandas as pd
+        from ..export import products_sample_df_from_rows
+        q = _filtered_products_query(
+            db, site_list, site=site, tab=tab, search=search, status=status,
+            min_price=min_price, max_price=max_price, category=category,
+            min_rating=min_rating, max_rating=max_rating,
+            min_reviews=min_reviews, max_reviews=max_reviews,
+            min_sales=min_sales, max_sales=max_sales,
+            min_revenue=min_revenue, max_revenue=max_revenue,
+            min_variants=min_variants, max_variants=max_variants,
+            has_video=has_video, free_shipping=free_shipping,
+            created_from=created_from, created_to=created_to,
+        )
+        rows = q.order_by(*_product_order_cols(tab)).all()
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            products_sample_df_from_rows(rows).to_excel(
+                writer, index=False, sheet_name="产品分析")
+        output.seek(0)
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument."
+                       "spreadsheetml.sheet",
+            headers={"Content-Disposition":
+                     f'attachment; filename="{base_name}_filtered.xlsx"'},
+        )
+
     # 默认 xlsx
     data = export_workbook(db, site_list, categories=cat_list, **workbook_kwargs)
     return StreamingResponse(
@@ -1931,6 +2499,113 @@ def export_products(token: str, site: str | None = None,
         media_type="application/vnd.openxmlformats-officedocument."
                    "spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{base_name}.xlsx"'},
+    )
+
+
+@public_router.get("/export/promotions")
+def export_promotions(token: str, site: str | None = None,
+                      workspace_id: int | None = None,
+                      search: str | None = None,
+                      type: str | None = None,
+                      date_from: str | None = None,
+                      date_to: str | None = None,
+                      db: Session = Depends(get_db)):
+    """导出销售促销，筛选条件与 /api/promotions 保持一致。"""
+    u = _user_from_token(db, token)
+    ws = _current_workspace(u.username, db, str(workspace_id) if workspace_id else None)
+    allowed_sites = _workspace_site_names(db, ws.id)
+    q = _filtered_promotions_query(
+        db, allowed_sites, site=site, search=search, type=type,
+        date_from=date_from, date_to=date_to,
+    )
+    rows = q.order_by(Promotion.detected_time.desc().nullslast(),
+                      Promotion.id.desc()).all()
+    import pandas as pd
+    from ..export import promotions_sample_df_from_rows
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        promotions_sample_df_from_rows(rows).to_excel(
+            writer, index=False, sheet_name="销售促销")
+    output.seek(0)
+    site_suffix = site or "all"
+    base_name = f"smart-crawler_promotions_{site_suffix}_{datetime.now():%Y%m%d}"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument."
+                   "spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{base_name}.xlsx"'},
+    )
+
+
+@public_router.get("/export/product-trend")
+def export_product_trend(token: str, pid: int,
+                         workspace_id: int | None = None,
+                         granularity: str = Query("day", pattern="^(day|week|month)$"),
+                         date_from: str | None = None,
+                         date_to: str | None = None,
+                         promo_search: str | None = None,
+                         promo_type: str | None = None,
+                         db: Session = Depends(get_db)):
+    """导出单品趋势分析，筛选条件与 /api/products/{pid}/trend 保持一致。"""
+    from openpyxl import Workbook
+
+    u = _user_from_token(db, token)
+    ws = _current_workspace(u.username, db, str(workspace_id) if workspace_id else None)
+    p = db.get(Product, pid)
+    if not p:
+        raise HTTPException(404, "商品不存在")
+    _require_site_in_workspace(p.site, _workspace_site_names(db, ws.id))
+    payload = _build_product_trend_payload(
+        db, p, granularity=granularity, date_from=date_from, date_to=date_to,
+        promo_search=promo_search, promo_type=promo_type,
+    )
+
+    wb = Workbook()
+    sh = wb.active
+    sh.title = "Sales Trends"
+    sh.append(["Date", "Sales", "Revenue", "Ratings", "Reviews",
+               "Sale Price", "Price", "Points"])
+    for row in payload["trend"]:
+        sh.append([
+            row.get("date"),
+            row.get("estimated_sales") or 0,
+            row.get("estimated_revenue") or 0,
+            row.get("avg_rating"),
+            row.get("review_total"),
+            row.get("sale_price"),
+            row.get("original_price"),
+            row.get("points", 1),
+        ])
+
+    promo_sh = wb.create_sheet("Sales Promotion")
+    promo_sh.append(["Updated Time", "SKU", "Product Title", "Type", "Name",
+                     "Discount", "Pre-price", "Post-price", "Threshold",
+                     "Start Time", "End Time"])
+    for promo in payload["promotions"]:
+        promo_sh.append([
+            promo.get("detected_time"),
+            promo.get("sku"),
+            promo.get("product_title"),
+            promo.get("promotion_type"),
+            promo.get("promotion_name"),
+            promo.get("discount_percent"),
+            promo.get("original_price"),
+            promo.get("promotion_price"),
+            promo.get("threshold"),
+            promo.get("start_time"),
+            promo.get("end_time"),
+        ])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    sku = re.sub(r"[^A-Za-z0-9_-]+", "_", p.sku or str(pid))[:80]
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument."
+                   "spreadsheetml.sheet",
+        headers={"Content-Disposition":
+                 f'attachment; filename="product_trend_{sku}_{datetime.now():%Y%m%d}.xlsx"'},
     )
 
 
@@ -2061,10 +2736,13 @@ def export_preview(token: str, site: str | None = None,
 
 # ---------- 代理池状态 ----------
 @router.get("/proxy/status")
-def proxy_status_endpoint():
+def proxy_status_endpoint(db: Session = Depends(get_db)):
     """代理池状态：总数 / 可用 / 各代理失败率。"""
     from ..proxy_pool import pool_status
-    return pool_status()
+    from ..proxy_health import proxy_health_summary
+    status = pool_status()
+    status["health"] = proxy_health_summary(db)
+    return status
 
 
 @router.post("/proxy/reload")
@@ -2256,6 +2934,301 @@ def data_coverage(
     }
     _coverage_cache_set(cache_key, result)
     return result
+
+
+def _empty_data_quality_payload() -> dict:
+    return {"items": [], "summary": {
+        "total_sites": 0, "healthy": 0, "needs_rerun": 0,
+        "missing_prices": 0, "missing_sales": 0,
+        "missing_promotions": 0, "coverage_risk": 0,
+        "pending_jobs": 0, "running_jobs": 0, "stuck_jobs": 0,
+        "failed_jobs": 0, "stale_pending_jobs": 0,
+    }}
+
+
+def _build_data_quality_payload(db: Session, sites: list[Site]) -> dict:
+    site_codes = [s.site for s in sites]
+    if not site_codes:
+        return _empty_data_quality_payload()
+
+    sitemap_totals = _load_sitemap_totals()
+    try:
+        fetched_counts = {
+            row[0]: int(row[1] or 0)
+            for row in db.execute(
+                text("SELECT site, count(*) FROM fetched_urls GROUP BY site")
+            ).all()
+        }
+    except Exception:
+        fetched_counts = {}
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    product_rows = {
+        row[0]: {
+            "sku_count": int(row[1] or 0),
+            "spu_count": int(row[2] or 0),
+            "price_signal_count": int(row[3] or 0),
+            "sales_signal_count": int(row[4] or 0),
+            "revenue_signal_count": int(row[5] or 0),
+            "last_product_updated": row[6],
+        }
+        for row in db.query(
+            Product.site,
+            func.count(Product.id),
+            func.count(func.distinct(func.coalesce(Product.spu, Product.sku))),
+            func.count(Product.id).filter(
+                func.coalesce(Product.sale_price, Product.original_price, 0) > 0
+            ),
+            func.count(Product.id).filter(func.coalesce(Product.thirty_day_sales, 0) > 0),
+            func.count(Product.id).filter(func.coalesce(Product.thirty_day_revenue, 0) > 0),
+            func.max(Product.updated_time),
+        ).filter(Product.site.in_(site_codes)).group_by(Product.site).all()
+    }
+    promotion_counts = {
+        row[0]: int(row[1] or 0)
+        for row in db.query(Promotion.site, func.count(Promotion.id))
+                     .filter(Promotion.site.in_(site_codes))
+                     .group_by(Promotion.site).all()
+    }
+    latest_jobs: dict[str, CrawlJob] = {}
+    for job in (db.query(CrawlJob)
+                .filter(CrawlJob.site.in_(site_codes))
+                .order_by(CrawlJob.site, CrawlJob.id.desc())
+                .all()):
+        latest_jobs.setdefault(job.site, job)
+    failure_counts = {
+        row[0]: int(row[1] or 0)
+        for row in db.query(CrawlFailure.site, func.count(CrawlFailure.id))
+                     .filter(CrawlFailure.site.in_(site_codes))
+                     .group_by(CrawlFailure.site).all()
+    }
+    queue_by_site: dict[str, dict] = {
+        site: {
+            "pending": 0,
+            "running": 0,
+            "stuck": 0,
+            "success": 0,
+            "failed": 0,
+            "blocked": 0,
+            "skipped": 0,
+            "partial": 0,
+            "total": 0,
+            "active_count": 0,
+            "stale_pending": 0,
+            "oldest_active_at": None,
+            "latest_active_at": None,
+        }
+        for site in site_codes
+    }
+    for site, status, count in (
+            db.query(CrawlJob.site, CrawlJob.status, func.count(CrawlJob.id))
+            .filter(CrawlJob.site.in_(site_codes))
+            .group_by(CrawlJob.site, CrawlJob.status)
+            .all()):
+        bucket = queue_by_site.setdefault(site, {"total": 0})
+        key = (status or "unknown").lower()
+        bucket[key] = int(bucket.get(key, 0)) + int(count or 0)
+        bucket["total"] = int(bucket.get("total", 0)) + int(count or 0)
+
+    now = datetime.utcnow()
+    stuck_cutoff = now - timedelta(seconds=CRAWL_JOB_STUCK_SEC)
+    for site, count in (
+            db.query(CrawlJob.site, func.count(CrawlJob.id))
+            .filter(CrawlJob.site.in_(site_codes),
+                    CrawlJob.status == "running",
+                    CrawlJob.started_at.isnot(None),
+                    CrawlJob.started_at < stuck_cutoff)
+            .group_by(CrawlJob.site)
+            .all()):
+        bucket = queue_by_site.setdefault(site, {"total": 0})
+        stuck_count = int(count or 0)
+        bucket["stuck"] = stuck_count
+        bucket["running"] = max(0, int(bucket.get("running", 0)) - stuck_count)
+
+    for site, count in (
+            db.query(CrawlJob.site, func.count(CrawlJob.id))
+            .filter(CrawlJob.site.in_(site_codes),
+                    CrawlJob.status == "pending",
+                    CrawlJob.created_at.isnot(None),
+                    CrawlJob.created_at < stuck_cutoff)
+            .group_by(CrawlJob.site)
+            .all()):
+        bucket = queue_by_site.setdefault(site, {"total": 0})
+        bucket["stale_pending"] = int(count or 0)
+
+    for site, active_count, oldest_active_at, latest_active_at in (
+            db.query(CrawlJob.site,
+                     func.count(CrawlJob.id),
+                     func.min(func.coalesce(CrawlJob.started_at, CrawlJob.created_at)),
+                     func.max(func.coalesce(CrawlJob.started_at, CrawlJob.created_at)))
+            .filter(CrawlJob.site.in_(site_codes),
+                    CrawlJob.status.in_(("pending", "running")))
+            .group_by(CrawlJob.site)
+            .all()):
+        bucket = queue_by_site.setdefault(site, {"total": 0})
+        bucket["active_count"] = int(active_count or 0)
+        bucket["oldest_active_at"] = oldest_active_at
+        bucket["latest_active_at"] = latest_active_at
+
+    items = []
+    for s in sites:
+        product = product_rows.get(s.site, {})
+        sku_count = int(product.get("sku_count") or 0)
+        spu_count = int(product.get("spu_count") or 0)
+        fetched = max(fetched_counts.get(s.site, 0), sku_count)
+        estimated = sitemap_totals.get(s.site) or _FULL_ESTIMATES.get(s.site, 0) or fetched
+        coverage_pct = round(min(fetched, estimated) / estimated * 100, 2) if estimated else 0
+        price_signal_count = int(product.get("price_signal_count") or 0)
+        sales_signal_count = int(product.get("sales_signal_count") or 0)
+        revenue_signal_count = int(product.get("revenue_signal_count") or 0)
+        promotion_count = promotion_counts.get(s.site, 0)
+        latest_job = latest_jobs.get(s.site)
+        queue_counts = queue_by_site.get(s.site, {})
+        issues: list[str] = []
+        if sku_count == 0:
+            issues.append("no_products")
+        if estimated and coverage_pct < 50:
+            issues.append("coverage_low")
+        if sku_count > 0 and price_signal_count == 0:
+            issues.append("price_missing")
+        if sku_count > 0 and sales_signal_count == 0:
+            issues.append("sales_missing")
+        if sku_count > 0 and revenue_signal_count == 0:
+            issues.append("revenue_missing")
+        if promotion_count == 0:
+            issues.append("promotions_missing")
+        if latest_job and latest_job.status == "failed":
+            issues.append("latest_job_failed")
+        if latest_job and latest_job.status in {"pending", "running"}:
+            issues.append("job_in_progress")
+        if int(queue_counts.get("stale_pending", 0) or 0) > 0:
+            issues.append("job_pending_stale")
+        if not latest_job and sku_count == 0:
+            issues.append("never_crawled")
+        status = "healthy"
+        if "no_products" in issues or "coverage_low" in issues:
+            status = "critical"
+        elif issues:
+            status = "warning"
+        last_product_updated = product.get("last_product_updated")
+        if "job_pending_stale" in issues:
+            suggested_action = "任务已排队超过30分钟；检查 worker/队列容量/代理可用性，必要时取消旧任务后重排"
+        elif "job_in_progress" in issues:
+            suggested_action = "已有抓取任务处理中；打开队列明细查看进度，不要重复入队"
+        elif status == "critical":
+            suggested_action = (
+                "重跑抓取并查看失败明细；价格缺失需检查价格解析/PDP enrich"
+                if "price_missing" in issues else
+                "重跑抓取并查看失败明细"
+            )
+        elif "price_missing" in issues:
+            suggested_action = "检查价格解析/PDP enrich；必要时配置可用住宅代理后重跑"
+        elif "latest_job_failed" in issues:
+            suggested_action = "已有数据但最近任务失败；查看队列失败明细后决定是否重跑"
+        elif status == "warning":
+            suggested_action = "补跑促销/销量估算或等待任务完成"
+        else:
+            suggested_action = "数据质量正常"
+        items.append({
+            "site": s.site,
+            "brand": s.brand,
+            "country": s.country,
+            "url": s.url,
+            "platform": s.platform,
+            "sku_count": sku_count,
+            "spu_count": spu_count,
+            "fetched_count": fetched,
+            "estimated_full": estimated,
+            "coverage_pct": coverage_pct,
+            "promotion_count": promotion_count,
+            "price_signal_count": price_signal_count,
+            "sales_signal_count": sales_signal_count,
+            "revenue_signal_count": revenue_signal_count,
+            "price_signal_pct": round(price_signal_count / sku_count * 100, 2) if sku_count else 0,
+            "sales_signal_pct": round(sales_signal_count / sku_count * 100, 2) if sku_count else 0,
+            "revenue_signal_pct": round(revenue_signal_count / sku_count * 100, 2) if sku_count else 0,
+            "failure_count": failure_counts.get(s.site, 0),
+            "crawl_queue": {
+                "pending": int(queue_counts.get("pending", 0) or 0),
+                "running": int(queue_counts.get("running", 0) or 0),
+                "stuck": int(queue_counts.get("stuck", 0) or 0),
+                "success": int(queue_counts.get("success", 0) or 0),
+                "failed": int(queue_counts.get("failed", 0) or 0),
+                "blocked": int(queue_counts.get("blocked", 0) or 0),
+                "skipped": int(queue_counts.get("skipped", 0) or 0),
+                "partial": int(queue_counts.get("partial", 0) or 0),
+                "total": int(queue_counts.get("total", 0) or 0),
+                "active_count": int(queue_counts.get("active_count", 0) or 0),
+                "stale_pending": int(queue_counts.get("stale_pending", 0) or 0),
+                "oldest_active_at": (
+                    queue_counts.get("oldest_active_at").isoformat()
+                    if queue_counts.get("oldest_active_at") else None
+                ),
+                "latest_active_at": (
+                    queue_counts.get("latest_active_at").isoformat()
+                    if queue_counts.get("latest_active_at") else None
+                ),
+            },
+            "last_crawled": s.last_crawled.isoformat() if s.last_crawled else None,
+            "last_product_updated": last_product_updated.isoformat() if last_product_updated else None,
+            "latest_job": {
+                "id": latest_job.id,
+                "status": latest_job.status,
+                "trigger": latest_job.trigger,
+                "created_at": latest_job.created_at.isoformat() if latest_job.created_at else None,
+                "finished_at": latest_job.finished_at.isoformat() if latest_job.finished_at else None,
+                "products_count": latest_job.products_count or 0,
+                "promotion_count": latest_job.promotion_count or 0,
+                "failure_code": latest_job.failure_code,
+                "failure_stage": latest_job.failure_stage,
+                "suggested_action": latest_job.suggested_action,
+            } if latest_job else None,
+            "issues": issues,
+            "status": status,
+            "suggested_action": suggested_action,
+        })
+
+    items.sort(key=lambda r: (
+        {"critical": 0, "warning": 1, "healthy": 2}.get(r["status"], 3),
+        r["coverage_pct"],
+        r["site"],
+    ))
+    summary = {
+        "total_sites": len(items),
+        "healthy": sum(1 for r in items if r["status"] == "healthy"),
+        "needs_rerun": sum(1 for r in items if r["status"] == "critical"),
+        "missing_prices": sum(1 for r in items if "price_missing" in r["issues"]),
+        "missing_sales": sum(1 for r in items if "sales_missing" in r["issues"]),
+        "missing_promotions": sum(1 for r in items if "promotions_missing" in r["issues"]),
+        "coverage_risk": sum(1 for r in items if "coverage_low" in r["issues"]),
+        "pending_jobs": sum(r["crawl_queue"]["pending"] for r in items),
+        "running_jobs": sum(r["crawl_queue"]["running"] for r in items),
+        "stuck_jobs": sum(r["crawl_queue"]["stuck"] for r in items),
+        "failed_jobs": sum(r["crawl_queue"]["failed"] for r in items),
+        "stale_pending_jobs": sum(r["crawl_queue"]["stale_pending"] for r in items),
+    }
+    return {"items": items, "summary": summary}
+
+
+@router.get("/data-quality")
+def data_quality(
+    user: str = Depends(require_user),
+    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
+    db: Session = Depends(get_db),
+    include_hidden: bool = Query(default=False, description="是否包含 hidden_sites（默认排除）"),
+):
+    """站点数据质量明细：把验收关注的 SKU/促销/销量收入/任务失败集中展示。"""
+    ws = _current_workspace(user, db, x_workspace_id)
+    allowed_sites = _workspace_site_names(db, ws.id, include_hidden=include_hidden)
+    hidden = _load_hidden_sites() if not include_hidden else set()
+    sites = [
+        s for s in db.query(Site).filter(Site.site.in_(allowed_sites)).all()
+        if s.site not in hidden
+    ]
+    return _build_data_quality_payload(db, sites)
 
 
 # ---------- 按 record 计费 · 用量查询 ----------

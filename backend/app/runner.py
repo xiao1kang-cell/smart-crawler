@@ -33,6 +33,8 @@ _PROMO_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
+HIGH_PRIORITY_TRIGGERS = ("manual", "admin_quality_rerun", "admin_retry")
+
 
 def enqueue(site_name: str, trigger: str = "manual",
             requested_by_workspace_id: int | None = None,
@@ -55,14 +57,19 @@ def claim_job(worker_id: str,
     """worker 原子领取最旧的 pending 任务，返回 job_id 或 None。"""
     with session_scope() as s:
         priority = case(
-            (CrawlJob.trigger == "manual", 0),
+            (CrawlJob.trigger.in_(HIGH_PRIORITY_TRIGGERS), 0),
             (CrawlJob.trigger == "tracking_add", 1),
             else_=2,
         )
         query = s.query(CrawlJob).filter(CrawlJob.status == "pending")
         if trigger_allowlist:
             query = query.filter(CrawlJob.trigger.in_(trigger_allowlist))
-        job = query.order_by(priority, CrawlJob.id).first()
+        high_priority_touched_at = case(
+            (CrawlJob.trigger.in_(HIGH_PRIORITY_TRIGGERS), CrawlJob.created_at),
+            else_=datetime(1970, 1, 1),
+        )
+        job = query.order_by(priority, high_priority_touched_at.desc(),
+                             CrawlJob.id).first()
         if job is None:
             return None
         # 乐观锁：仅当仍为 pending 时领取，防多 worker 抢同一任务
@@ -190,12 +197,13 @@ def execute_job(job_id: int) -> dict:
             record_failure(s, site=site_name, job_id=job_id, info=info)
         ws_id = job.requested_by_workspace_id
 
+    counter = getattr(crawler, "counter", None)
     _record_crawl_usage(
         workspace_id=ws_id,
         products_count=stats["inserted"] + stats["updated"],
         duration_sec=duration,
-        api_calls=crawler.counter.api_calls,
-        browser_opens=crawler.counter.browser_opens,
+        api_calls=getattr(counter, "api_calls", 0),
+        browser_opens=getattr(counter, "browser_opens", 0),
     )
     return {
         "job_id": job_id, "site": site_name, "status": job.status,

@@ -18,6 +18,9 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function setWorkspace(nextWorkspaceId: string) {
+    if (String(nextWorkspaceId || '') !== String(workspaceId.value || '')) {
+      user.value = null
+    }
     workspaceId.value = nextWorkspaceId
     if (nextWorkspaceId) {
       localStorage.setItem('sc_workspace_id', nextWorkspaceId)

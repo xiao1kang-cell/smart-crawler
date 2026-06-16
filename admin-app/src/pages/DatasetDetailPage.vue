@@ -65,6 +65,10 @@ async function load() {
   }
 }
 
+async function loadAll() {
+  await Promise.all([loadDataset(), load()])
+}
+
 watch([qualityFilter, size], () => {
   page.value = 1
   load()
@@ -100,7 +104,7 @@ async function doPromote(id: number) {
   busyId.value = id
   try {
     await promoteRecord(id)
-    await load()
+    await loadAll()
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -115,7 +119,7 @@ async function doDelete(id: number) {
   try {
     await deleteRecord(id)
     if (detail.value?.id === id) closeDetail()
-    await load()
+    await loadAll()
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -129,8 +133,7 @@ function truncate(s?: string | null, n = 48) {
 }
 
 onMounted(() => {
-  loadDataset()
-  load()
+  loadAll()
 })
 </script>
 
@@ -141,7 +144,7 @@ onMounted(() => {
         <button class="btn small" @click="router.push('/datasets')">← 返回</button>
         <h1 class="page-title">{{ dataset?.name || `数据集 #${datasetId}` }}</h1>
       </div>
-      <button class="btn small" :disabled="loading" @click="load">刷新</button>
+      <button class="btn small" :disabled="loading" @click="loadAll">刷新</button>
     </div>
 
     <div v-if="dataset" class="meta">

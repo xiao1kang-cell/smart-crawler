@@ -493,6 +493,84 @@ class ProxyHealth(Base):
     updated_at = Column(DateTime, default=datetime.utcnow)
 
 
+class ProxyEndpoint(Base):
+    """后台可控代理端点。文件代理只作为首次导入/兜底来源。"""
+
+    __tablename__ = "proxy_endpoints"
+    __table_args__ = (UniqueConstraint("proxy_hash", name="uq_proxy_endpoint_hash"),)
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String)
+    proxy_hash = Column(String, index=True)
+    proxy_url = Column(Text)                         # 仅服务端使用,API 永不回传明文
+    proxy_redacted = Column(String)
+    endpoint_type = Column(String, default="datacenter", index=True)
+    scheme = Column(String)
+    host = Column(String, index=True)
+    port = Column(Integer)
+    provider = Column(String)
+    country = Column(String, index=True)
+    active = Column(Boolean, default=True, index=True)
+    exclude_sites = Column(JSON)                     # ["amazon", "etsy"]
+    tags = Column(JSON)
+    max_concurrency = Column(Integer, default=1)
+    source = Column(String, default="admin")         # admin/file/env
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ProxyPoolConfig(Base):
+    """逻辑代理池。抓取策略引用 slug,成员可在后台调整。"""
+
+    __tablename__ = "proxy_pools"
+
+    id = Column(Integer, primary_key=True)
+    slug = Column(String, unique=True, index=True)
+    name = Column(String)
+    pool_type = Column(String, default="datacenter", index=True)
+    active = Column(Boolean, default=True, index=True)
+    fallback_pool_slug = Column(String)
+    description = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ProxyPoolMember(Base):
+    """代理池成员关系,支持权重和优先级扩展。"""
+
+    __tablename__ = "proxy_pool_members"
+    __table_args__ = (UniqueConstraint("pool_id", "endpoint_id",
+                                       name="uq_proxy_pool_endpoint"),)
+
+    id = Column(Integer, primary_key=True)
+    pool_id = Column(Integer, ForeignKey("proxy_pools.id"), index=True)
+    endpoint_id = Column(Integer, ForeignKey("proxy_endpoints.id"), index=True)
+    active = Column(Boolean, default=True, index=True)
+    weight = Column(Integer, default=1)
+    priority = Column(Integer, default=100, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ProxyRule(Base):
+    """站点到代理策略的后台规则。用于逐步替代代码/配置里的固定 tier。"""
+
+    __tablename__ = "proxy_rules"
+
+    id = Column(Integer, primary_key=True)
+    site_pattern = Column(String, index=True)         # exact/contains 由 match_type 控制
+    match_type = Column(String, default="contains")  # exact / contains / prefix
+    proxy_mode = Column(String, default="pool")      # none / datacenter / residential / pool
+    pool_slug = Column(String, index=True)
+    fallback_pool_slug = Column(String)
+    priority = Column(Integer, default=100, index=True)
+    enabled = Column(Boolean, default=True, index=True)
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
 class OnDemandJob(Base):
     """按需抓取任务记录 —— 每次 fetch(url) 一条。
 

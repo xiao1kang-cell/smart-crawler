@@ -62,15 +62,24 @@ def get_or_create_dataset(db: Session, name: str, *, workspace_id: int | None,
                           entity_type: str = "generic",
                           source_kind: str = "custom_url") -> Dataset:
     slug = _slugify(name)
-    row = (db.query(Dataset)
-           .filter(Dataset.workspace_id == workspace_id, Dataset.slug == slug)
-           .first())
+    row = find_dataset(db, name, workspace_id=workspace_id)
     if row:
         return row
     row = Dataset(name=name, slug=slug, entity_type=entity_type,
                   source_kind=source_kind, workspace_id=workspace_id)
     db.add(row); db.commit(); db.refresh(row)
     return row
+
+
+def find_dataset(db: Session, name: str, *, workspace_id: int | None) -> Dataset | None:
+    slug = _slugify(name)
+    return (db.query(Dataset)
+            .filter(Dataset.workspace_id == workspace_id, Dataset.slug == slug)
+            .first())
+
+
+def empty_dataset_response(name: str) -> dict:
+    return {"total": 0, "dataset": _slugify(name), "items": []}
 
 
 def quality_check(data: dict, entity_type: str, confidence: float,

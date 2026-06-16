@@ -2,14 +2,16 @@
 import { computed, onMounted, ref } from 'vue'
 import { asList } from '../api/client'
 import { listCoverage } from '../api/coverage'
-import { triggerJob } from '../api/jobs'
 import { useAuthStore } from '../stores/auth'
+import DataLoadingPanel from '../components/common/DataLoadingPanel.vue'
+import { useJobTrigger } from '../composables/useJobTrigger'
 
 const auth = useAuthStore()
 const rows = ref<Record<string, any>[]>([])
 const loading = ref(false)
 const error = ref('')
 const sortedRows = computed(() => rows.value.slice().sort((a, b) => normalizedPct(b) - normalizedPct(a)))
+const jobTrigger = useJobTrigger({ onDone: () => load() })
 
 function normalizedPct(row: Record<string, any>) {
   const raw = Number(row.coverage_pct || row.coverage || 0)
@@ -29,8 +31,7 @@ async function load() {
 }
 
 async function trigger(site: string) {
-  await triggerJob({ site })
-  await load()
+  await jobTrigger.trigger(site)
 }
 
 function siteKey(row: Record<string, any>) {
@@ -51,7 +52,7 @@ onMounted(load)
     <div class="lead">站点报表</div>
     <div class="sub">交互式网页报表 · 可自定义模块、列和时间范围 · 点站点打开</div>
     <UAlert v-if="error" color="error" variant="soft" :title="error" class="mb-4" />
-    <div class="report-grid">
+    <DataLoadingPanel class="report-grid" :loading="loading" :has-data="rows.length > 0" label="正在更新站点报表" skeleton-variant="cards" :skeleton-rows="6">
       <div v-for="s in sortedRows" :key="s.site || s.name" class="report-tile" :class="[s.status, { ready: (s.current || s.sku_count || s.products || s.count || 0) > 0, empty: !(s.current || s.sku_count || s.products || s.count || 0) }]">
         <div class="head">
           <h6>{{ s.site || s.name }}</h6>
@@ -67,13 +68,14 @@ onMounted(load)
         </div>
         <div class="covbar" :class="s.status"><i :style="{ width: Math.min(Number(s.coverage_pct || s.coverage || 0), 100) + '%' }"></i></div>
         <div class="report-rate">覆盖率 {{ s.coverage_pct != null ? s.coverage_pct + '%' : '—' }}</div>
-        <div class="btns">
+        <div class="btns" :class="{ two: (s.current || s.sku_count || s.products || s.count || 0) > 0 }">
           <a v-if="(s.current || s.sku_count || s.products || s.count || 0) > 0" :href="reportHref(s)" target="_blank" rel="noopener" class="btn-prim">📊 打开报表</a>
-          <button v-else class="btn-muted" :disabled="loading" @click="trigger(siteKey(s))">▶ 触发抓取</button>
+          <button class="btn-muted" :class="jobTrigger.classFor(siteKey(s))" :disabled="loading || jobTrigger.isBusy(siteKey(s))" @click="trigger(siteKey(s))">{{ jobTrigger.labelFor(siteKey(s), (s.current || s.sku_count || s.products || s.count || 0) > 0 ? '重跑抓取' : '触发抓取') }}</button>
         </div>
+        <div v-if="jobTrigger.detailFor(siteKey(s))" class="trigger-note" :class="jobTrigger.classFor(siteKey(s))">{{ jobTrigger.detailFor(siteKey(s)) }}</div>
       </div>
-    </div>
-    <div v-if="!rows.length" class="empty-state">
+    </DataLoadingPanel>
+    <div v-if="!loading && !rows.length" class="empty-state">
       <b>当前工作区还没有站点报表</b>
       请先在设置里给工作区加入站点。
     </div>
