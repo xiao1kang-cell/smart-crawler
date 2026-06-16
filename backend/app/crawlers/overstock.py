@@ -27,6 +27,12 @@
 如未来 Akamai 放松或拿到住宅代理 + cookie warmup 方案，可在 _enrich_from_pdp()
 里激活 StealthyFetcher 路径解析 JSON-LD `<script type="application/ld+json">`
 里的 Product schema（offers.price / aggregateRating / availability）。
+
+批C 收编（2026-06）：
+  - curl 段改用 make_fetcher().get()，自动计 api_calls
+  - stealth 段（_enrich_from_pdp）用 count_browser_fetch 包裹，成功计 browser_opens
+  - 删 proxy 自管（_session 中 s.proxies），改 _headers()；proxy 由 CrawlerFetcher 托管
+  - 假 200 挑战页检测逻辑（_blocked）保留并显式化
 """
 from __future__ import annotations
 
@@ -34,8 +40,6 @@ import os
 import re
 from datetime import datetime
 from urllib.parse import unquote
-
-from curl_cffi import requests as creq
 
 from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
@@ -63,28 +67,48 @@ class OverstockCrawler(BaseCrawler):
         self.base = site.url.rstrip("/")
         self.limit = self._resolve_limit(DEFAULT_LIMIT)
 
-    def _session(self) -> creq.Session:
-        s = creq.Session(impersonate="chrome")
-        s.headers.update({"User-Agent": self.ua(),
-                          "Accept": "application/xml,text/xml,*/*"})
-        if self.proxy:
-            s.proxies = {"http": self.proxy, "https": self.proxy}
-        return s
+    def _headers(self) -> dict:
+        """构造请求头（proxy 由 CrawlerFetcher 托管，不在此处注入）。"""
+        return {
+            "User-Agent": self.ua(),
+            "Accept": "application/xml,text/xml,*/*",
+        }
+
+    @staticmethod
+    def _blocked(text: str) -> bool:
+        """识别 Akamai sec-if-cpt 假 200 挑战页（HTTP 200 但 body 是挑战内容）。
+
+        overstock 特殊案例：sitemap 端点偶尔返回 HTTP 200 + Akamai JS 挑战页，
+        正常 sitemap XML 体积远超 2KB，挑战页一般 < 3KB 且含特征字符串。
+        """
+        if not text:
+            return True
+        # 挑战页通常很小且包含 Akamai / sec-if-cpt 特征
+        markers = (
+            "akam/",            # Akamai pixel/beacon URL 前缀
+            "ak_bmsc",          # Akamai bot manager cookie
+            "bm_sz",            # Akamai bot manager session cookie
+            "sec-if-cpt",       # Akamai challenge identifier
+            "akamai",           # Akamai 通用关键字
+            "Access Denied",    # 通用拒绝页
+        )
+        sample = text[:4000].lower()
+        return any(m.lower() in sample for m in markers)
 
     # ------------------------------------------------------------------
     # 主流程
     # ------------------------------------------------------------------
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        sess = self._session()
+        fetcher = self.make_fetcher(kind="product", source="overstock")
 
         # ---- Step 1：拿 sitemap_index ----
         try:
-            idx = sess.get(SITEMAP_INDEX, timeout=30)
-            self.guard(idx.status_code, "sitemap_index")
-            if idx.status_code != 200:
+            res = fetcher.get(SITEMAP_INDEX, headers=self._headers(), timeout=30)
+            self.guard(res.status or 0, "sitemap_index")
+            if (res.status or 0) != 200:
                 result.notes.append(
-                    f"⚠ sitemap_index 不可达（{idx.status_code}）")
+                    f"⚠ sitemap_index 不可达（{res.status}）")
                 return result
         except BlockedError:
             raise
@@ -92,12 +116,12 @@ class OverstockCrawler(BaseCrawler):
             result.notes.append(f"⚠ sitemap_index 异常: {exc}")
             return result
 
-        sub_sitemaps = [u for u in _SITEMAP_LOC_RE.findall(idx.text)
+        sub_sitemaps = [u for u in _SITEMAP_LOC_RE.findall(res.text)
                         if "products" in u and u.endswith(".xml")
                         and "taxonomy" not in u]
         result.notes.append(
             f"sitemap_index 命中 {len(sub_sitemaps)} 个子 sitemap")
-        self.snapshot("sitemap_index", idx.text)
+        self.snapshot("sitemap_index", res.text)
 
         # ---- Step 2：依序拉子 sitemap，逐条解析商品 ----
         seen: set[str] = set()
@@ -105,11 +129,16 @@ class OverstockCrawler(BaseCrawler):
             if len(result.products) >= self.limit:
                 break
             try:
-                sm = sess.get(sm_url, timeout=60)
-                self.guard(sm.status_code, f"sub:{sm_url}")
-                if sm.status_code != 200:
+                sm = fetcher.get(sm_url, headers=self._headers(), timeout=60)
+                self.guard(sm.status or 0, f"sub:{sm_url}")
+                if (sm.status or 0) != 200:
                     result.notes.append(
-                        f"⚠ {sm_url.rsplit('/',1)[-1]} {sm.status_code}")
+                        f"⚠ {sm_url.rsplit('/',1)[-1]} {sm.status}")
+                    continue
+                # 假 200 挑战页检测（Akamai sec-if-cpt）
+                if self._blocked(sm.text):
+                    result.notes.append(
+                        f"⚠ {sm_url.rsplit('/',1)[-1]} 假200挑战页，跳过")
                     continue
             except BlockedError:
                 raise
@@ -139,7 +168,7 @@ class OverstockCrawler(BaseCrawler):
 
         # ---- Step 3（可选）：PDP 兜底丰富（默认关，Akamai 拦截严重）----
         if TRY_PDP_ENRICH and result.products:
-            enriched = self._enrich_from_pdp(sess, result.products[:50])
+            enriched = self._enrich_from_pdp(result.products[:50])
             result.notes.append(f"PDP 兜底尝试 {len(result.products[:50])}, "
                                 f"成功 {enriched}")
 
@@ -202,9 +231,13 @@ class OverstockCrawler(BaseCrawler):
     # ------------------------------------------------------------------
     # PDP 兜底（默认关）—— 如未来打通 Akamai，价格/评分从 JSON-LD 提
     # ------------------------------------------------------------------
-    def _enrich_from_pdp(self, sess: creq.Session,
-                         rows: list[dict]) -> int:
-        """尝试用 StealthyFetcher 进 PDP 抓 JSON-LD，补价格/评分。"""
+    def _enrich_from_pdp(self, rows: list[dict]) -> int:
+        """尝试用 StealthyFetcher 进 PDP 抓 JSON-LD，补价格/评分。
+
+        批C：StealthyFetcher.fetch 调用用 count_browser_fetch 包裹，
+        成功时自动 browser_opens += 1。stealth kw 参数 / persist_profile /
+        profile 目录逻辑全部原样保留，只在最外层套计数。
+        """
         try:
             from scrapling.fetchers import StealthyFetcher
             from ._stealth_config import stealth_kwargs
@@ -221,7 +254,16 @@ class OverstockCrawler(BaseCrawler):
         )
         for row in rows:
             try:
-                page = StealthyFetcher.fetch(row["product_url"], **kw)
+                def _do_fetch(url=row["product_url"]):
+                    return StealthyFetcher.fetch(url, **kw)
+
+                def _success(page) -> bool:
+                    status = getattr(page, "status", None)
+                    content = getattr(page, "html_content", "") or ""
+                    return status == 200 and len(content) >= 5000
+
+                page = self.count_browser_fetch(_do_fetch, success=_success)
+
                 status = getattr(page, "status", None)
                 content = getattr(page, "html_content", "") or ""
                 if status != 200 or len(content) < 5000:
