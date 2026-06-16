@@ -15,19 +15,23 @@ JSON-LD 里是 `AggregateOffer` 而非 `Offer`，含 lowPrice / highPrice / offe
   1. 拉首页 → 抽出种子商品 URL（一次 60+ 条起步）
   2. 对每个种子页解析 JSON-LD Product/AggregateOffer
   3. 同时从该页正文里扫到 20+ 个相关商品 URL，入队继续 BFS
-  4. 直到队列耗尽或抓到 limit 条，curl_cffi(impersonate=chrome) 跑全程
+  4. 直到队列耗尽或抓到 limit 条，make_fetcher(source="idealo").get() 跑全程
   5. 一旦命中 Akamai 挑战 stub（body < 10KB 且含 sec-if-cpt-container）
      → fallback 到 StealthyFetcher（带 solve_cloudflare 等反爬全套）
 
 Idealo 反爬等级评估：2 级（不算狠，关键是别去碰 Liste/Category）。
+
+批C 收编（2026-06）：
+  - curl 段改用 make_fetcher().get()，自动计 api_calls
+  - stealth 段用 count_browser_fetch 包裹，成功计 browser_opens
+  - 删 proxy 自管（_session 中 s.proxies）；_session() → _headers()
+  - 删不用的 creq import
 """
 from __future__ import annotations
 
 import json
 import os
 import re
-
-from curl_cffi import requests as creq
 
 from .base import BaseCrawler, CrawlResult
 
@@ -51,33 +55,42 @@ class IdealoCrawler(BaseCrawler):
         self.limit = self._resolve_limit(DEFAULT_LIMIT)
         self.scan_cap = SCAN_CAP
 
-    # ---------- session ----------
-    def _session(self) -> creq.Session:
-        s = creq.Session(impersonate="chrome")
-        s.headers.update({
+    # ---------- headers ----------
+    def _headers(self, referer: str | None = None) -> dict:
+        """构造定制请求头（每请求透传给 make_fetcher().get()）。"""
+        h = {
             "User-Agent": self.ua(),
             "Accept-Language": "de-DE,de;q=0.9,en;q=0.6",
             "Accept": ("text/html,application/xhtml+xml,application/xml;"
                        "q=0.9,image/webp,*/*;q=0.8"),
-        })
-        if self.proxy:
-            s.proxies = {"http": self.proxy, "https": self.proxy}
-        return s
+        }
+        if referer:
+            h["Referer"] = referer
+        return h
 
     # ---------- core ----------
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        sess = self._session()
+        fetcher = self.make_fetcher(kind="product", source="idealo")
 
         # 1) 首页种子
         try:
-            home_html = self._fetch(sess, _HOME, result, referer=None)
+            res = fetcher.get(_HOME, headers=self._headers(), timeout=30)
+            self.guard(res.status or 0, _HOME)
+            home_html = res.text if (res.status or 0) == 200 and res.text else None
         except Exception as exc:
             result.notes.append(f"⚠ 首页不可达: {exc}")
             return result
-        if not home_html:
-            result.notes.append("⚠ 首页被 Akamai 挑战且 stealth 兜底失败")
-            return result
+
+        if not home_html or _AKAMAI_MARK in home_html or len(home_html) < 10_000:
+            # 首页被 Akamai 挑战 → stealth 兜底
+            stealth_html = self._fetch_via_stealth(_HOME)
+            if stealth_html and _AKAMAI_MARK not in stealth_html:
+                home_html = stealth_html
+                result.notes.append("  · stealth 解锁首页")
+            else:
+                result.notes.append("⚠ 首页被 Akamai 挑战且 stealth 兜底失败")
+                return result
 
         seeds = self._extract_product_urls(home_html)
         result.notes.append(f"首页种子 {len(seeds)} 个商品 URL")
@@ -103,7 +116,8 @@ class IdealoCrawler(BaseCrawler):
             scanned += 1
 
             try:
-                html = self._fetch(sess, url, result, referer=self.base + "/")
+                html = self._fetch(fetcher, url, result,
+                                   referer=self.base + "/")
             except Exception as exc:
                 if scanned <= 5 or scanned % 100 == 0:
                     result.notes.append(f"  · 抓取异常 {pid}: {exc}")
@@ -146,37 +160,36 @@ class IdealoCrawler(BaseCrawler):
         return result
 
     # ---------- HTTP 兜底层 ----------
-    def _fetch(self, sess: creq.Session, url: str,
+    def _fetch(self, fetcher, url: str,
                result: CrawlResult, referer: str | None) -> str | None:
         """单次 GET。Akamai 挑战 → 自动走 StealthyFetcher。
 
         Returns:
             干净 HTML（含 JSON-LD）。None = 即使 stealth 兜底也拿不到。
         """
-        headers = {}
-        if referer:
-            headers["Referer"] = referer
-        resp = sess.get(url, timeout=30, headers=headers)
+        res = fetcher.get(url, headers=self._headers(referer), timeout=30)
         # 熔断点（IP 用量记 / 封禁状态码抛 BlockedError）
-        try:
-            self.guard(resp.status_code, url)
-        except Exception:
-            raise
+        self.guard(res.status or 0, url)
 
-        html = resp.text
-        if resp.status_code == 200 and _AKAMAI_MARK not in html and len(html) > 10_000:
+        html = res.text
+        if (res.status or 0) == 200 and _AKAMAI_MARK not in html and len(html) > 10_000:
             return html
 
         # —— curl_cffi 命中挑战 / 503 / 短 body：StealthyFetcher 兜底
         stealth_html = self._fetch_via_stealth(url)
         if stealth_html and _AKAMAI_MARK not in stealth_html:
             result.notes.append(
-                f"  · stealth 解锁 {url[-60:]} (curl status {resp.status_code})")
+                f"  · stealth 解锁 {url[-60:]} (curl status {res.status or 0})")
             return stealth_html
         return None
 
     def _fetch_via_stealth(self, url: str) -> str | None:
-        """Scrapling StealthyFetcher 兜底 —— Camoufox 真浏览器 + 全套反爬开关。"""
+        """Scrapling StealthyFetcher 兜底 —— Camoufox 真浏览器 + 全套反爬开关。
+
+        批C：StealthyFetcher.fetch 调用用 count_browser_fetch 包裹，
+        成功时自动 browser_opens += 1。stealth kw 参数 / persist_profile /
+        profile 目录逻辑全部原样保留，只在最外层套计数。
+        """
         try:
             from scrapling.fetchers import StealthyFetcher
             from ._stealth_config import stealth_kwargs
@@ -189,7 +202,21 @@ class IdealoCrawler(BaseCrawler):
                 persist_profile_key=f"idealo_{self.site.site}",
                 timeout_ms=45000,
             )
-            page = StealthyFetcher.fetch(url, **kw)
+
+            def _do_fetch():
+                return StealthyFetcher.fetch(url, **kw)
+
+            # 成功标准：status == 200 且有 html_content 或 body（idealo 原判断）
+            def _success(page) -> bool:
+                return (
+                    getattr(page, "status", None) == 200
+                    and bool(
+                        getattr(page, "html_content", None)
+                        or getattr(page, "body", None)
+                    )
+                )
+
+            page = self.count_browser_fetch(_do_fetch, success=_success)
             if getattr(page, "status", None) == 200:
                 return page.html_content or page.body or ""
         except Exception:
