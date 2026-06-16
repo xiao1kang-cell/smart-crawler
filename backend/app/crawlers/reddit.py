@@ -11,8 +11,12 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 import requests as _requests
+
+if TYPE_CHECKING:
+    from ..fetching import CrawlCounter
 
 _REDDIT_BASE = "https://www.reddit.com"
 _ARCTIC_BASE = "https://arctic-shift.photon-reddit.com/api"
@@ -27,11 +31,13 @@ _SLEEP = 1.2
 
 
 class RedditFetcher:
-    def __init__(self, proxy: str | None = None):
+    def __init__(self, proxy: str | None = None, *,
+                 counter: "CrawlCounter | None" = None):
         self.sess = _requests.Session()
         self.sess.headers.update(_HEADERS)
         if proxy:
             self.sess.proxies = {"http": proxy, "https": proxy}
+        self._counter = counter
 
     def _get(self, url: str, params: dict | None = None,
              base: str = _REDDIT_BASE) -> dict | list:
@@ -42,6 +48,9 @@ class RedditFetcher:
             timeout=30,
         )
         r.raise_for_status()
+        # count_api_fetch equivalent: each successful (status 200) call → api_calls += 1
+        if self._counter is not None and getattr(r, "status_code", None) == 200:
+            self._counter.api_calls += 1
         time.sleep(_SLEEP)
         return r.json()
 
