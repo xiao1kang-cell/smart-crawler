@@ -24,6 +24,11 @@ PDP 字段提取（window.runParams.data 路径）：
 建议代理 tier：residential（CN/HK/US 三选一，US 段最稳）。
 
 反爬等级：5/5（DataDome 之上，阿里自研 nc）。
+
+批C 收编（2026-06）：
+  - SRP/PDP curl 段改用 make_fetcher().get()，自动计 api_calls
+  - stealth 段用 count_browser_fetch 包裹，成功计 browser_opens
+  - 删 proxy 自管(_session → _headers)；保留 guard/_blocked/snapshot/解析/sleep/熔断/翻页
 """
 from __future__ import annotations
 
@@ -31,8 +36,6 @@ import json
 import os
 import re
 import time
-
-from curl_cffi import requests as creq
 
 from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
@@ -74,28 +77,20 @@ class AliExpressCrawler(BaseCrawler):
         self.limit = self._resolve_limit(DEFAULT_LIMIT, limit)
         self.delay = max(self.delay, DELAY)
 
-    def _session(self, warmup: bool = True) -> creq.Session:
-        s = creq.Session(impersonate="chrome131")
-        s.headers.update({
+    def _headers(self) -> dict:
+        """构造定制请求头（每请求透传给 make_fetcher().get()）。"""
+        return {
             "User-Agent": self.ua(),
             "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
             "Referer": self.base + "/",
             "Sec-Fetch-Dest": "document",
             "Sec-Fetch-Mode": "navigate",
-        })
-        if self.proxy:
-            s.proxies = {"http": self.proxy, "https": self.proxy}
-        if warmup:
-            try:
-                s.get(self.base + "/", timeout=20)
-            except Exception:
-                pass
-        return s
+        }
 
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        sess = self._session()
+        fetcher = self.make_fetcher(kind="srp", source="aliexpress")
         urls: list[str] = []
         seen: set[str] = set()
 
@@ -108,16 +103,16 @@ class AliExpressCrawler(BaseCrawler):
                      f"{kw.replace(' ', '-')}.html?page={pg}")
                 body = None
                 try:
-                    r = sess.get(u, timeout=30)
-                    if r.status_code == 200 and not self._blocked(r.text):
-                        body = r.text
+                    res = fetcher.get(u, headers=self._headers(), timeout=30)
+                    if (res.status or 0) == 200 and not self._blocked(res.text):
+                        body = res.text
                 except Exception:
                     pass
                 if not body:
                     body = self._fetch_via_stealth(u)
                 if not body:
                     time.sleep(60)
-                    sess = self._session()
+                    fetcher = self.make_fetcher(kind="srp", source="aliexpress")
                     break
                 new = 0
                 for iid in _ITEM_RE.findall(body):
@@ -141,17 +136,18 @@ class AliExpressCrawler(BaseCrawler):
             return result
 
         # ---------- PDP 阶段：解析 window.runParams ----------
+        pdp_fetcher = self.make_fetcher(kind="product", source="aliexpress")
         ok = denied = 0
         for i, url in enumerate(urls[: self.limit * 2]):
             if ok >= self.limit:
                 break
             if i and i % 25 == 0:
-                sess = self._session()
+                pdp_fetcher = self.make_fetcher(kind="product", source="aliexpress")
             html = None
             try:
-                r = sess.get(url, timeout=30)
-                if r.status_code == 200 and not self._blocked(r.text):
-                    html = r.text
+                res = pdp_fetcher.get(url, headers=self._headers(), timeout=30)
+                if (res.status or 0) == 200 and not self._blocked(res.text):
+                    html = res.text
             except Exception:
                 pass
             if not html:
@@ -177,6 +173,14 @@ class AliExpressCrawler(BaseCrawler):
         return False
 
     def _fetch_via_stealth(self, url: str) -> str | None:
+        """curl_cffi 触发反爬时走 StealthyFetcher（Camoufox）。
+
+        批C：StealthyFetcher.fetch 调用用 count_browser_fetch 包裹，
+        成功时自动 browser_opens += 1。stealth kw 参数 / persist_profile /
+        profile 目录逻辑全部原样保留，只在最外层套计数。
+
+        success 判断：原标准反面 —— body 足够长(>=20K)且不含 _BLOCK_MARKS。
+        """
         try:
             from scrapling.fetchers import StealthyFetcher
             from ._stealth_config import stealth_kwargs
@@ -190,7 +194,18 @@ class AliExpressCrawler(BaseCrawler):
                 timeout_ms=60000,
             )
             kw["solve_cloudflare"] = False    # nc != Cloudflare
-            page = StealthyFetcher.fetch(url, **kw)
+
+            def _do_fetch():
+                return StealthyFetcher.fetch(url, **kw)
+
+            def _success(page) -> bool:
+                """成功标准：原 _blocked() 反面 —— body >= 20K 且不含 _BLOCK_MARKS。"""
+                if getattr(page, "status", None) != 200:
+                    return False
+                html = getattr(page, "html_content", None) or getattr(page, "body", None) or ""
+                return not self._blocked(html)
+
+            page = self.count_browser_fetch(_do_fetch, success=_success)
             if getattr(page, "status", None) == 200:
                 html = page.html_content or page.body or ""
                 if not self._blocked(html):
