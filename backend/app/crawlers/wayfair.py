@@ -29,8 +29,13 @@
   1. 顺序读 seo-pdp-index.xml → 列出 1000+ 个子 sitemap
   2. 顺序读子 sitemap，累积 product URL（默认 limit 1000）
   3. curl_cffi(impersonate=chrome) + homepage warmup + 浏览器头
-  4. 命中 429/403 → sleep 90s + 重建 session（不走 stealth）
+  4. 命中 429/403 → sleep 90s + 重建 fetcher（不走 stealth）
   5. WAYFAIR_USE_STEALTH=1 显式启用 StealthyFetcher 兜底
+
+批C 收编（2026-06）：
+  - curl 段改用 make_fetcher().get()，自动计 api_calls
+  - stealth 段用 count_browser_fetch 包裹，成功计 browser_opens
+  - 删 proxy 自管(_session 中 s.proxies)；保留 _headers() + guard / _is_blocked_body / parse
 """
 from __future__ import annotations
 
@@ -38,7 +43,6 @@ import json
 import os
 import re
 
-from curl_cffi import requests as creq
 from selectolax.parser import HTMLParser
 
 from ..antiban import BlockedError
@@ -75,16 +79,15 @@ class WayfairCrawler(BaseCrawler):
         # 用 env WAYFAIR_DELAY 可调（NAS 走代理时可放回 1.5）。
         self.delay = float(os.environ.get("WAYFAIR_DELAY", "3.5"))
 
-    # ---------- session ----------
-    def _session(self, warmup: bool = False) -> creq.Session:
-        """构建 curl_cffi session。
+    # ---------- headers  (replaces old _session — proxy handled by CrawlerFetcher) ----------
+    def _headers(self) -> dict:
+        """构造定制请求头（每请求透传给 make_fetcher().get()）。
 
         Wayfair 实测：不带 Sec-Fetch-* 和 Referer 的"裸"请求会被 PerimeterX
         识别为 bot → 第二次请求即触发 429。补全浏览器头 + 首次访问首页拿到
         _px3 cookie 后，可稳定连发 25+ 次（实测 24/25 OK，单次 404）。
         """
-        s = creq.Session(impersonate="chrome")
-        s.headers.update({
+        return {
             "User-Agent": self.ua(),
             "Accept": "text/html,application/xhtml+xml,application/xml;"
                       "q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -96,22 +99,24 @@ class WayfairCrawler(BaseCrawler):
             "Sec-Fetch-Site": "same-origin",
             "Sec-Fetch-User": "?1",
             "Upgrade-Insecure-Requests": "1",
-        })
-        if self.proxy:
-            s.proxies = {"http": self.proxy, "https": self.proxy}
-        if warmup:
-            try:
-                s.get(self.base + "/", timeout=30)   # 取 _px3 / _pxvid cookie
-            except Exception:
-                pass
-        return s
+        }
 
     # ---------- main ----------
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        sess = self._session(warmup=True)
+        fetcher = self.make_fetcher(kind="product", source="wayfair")
 
-        urls = self._collect_pdp_urls(sess, result)
+        # Warmup：访问首页建立会话 / 预热 PerimeterX cookie（计入 api_calls）
+        try:
+            fetcher.get(
+                self.base + "/",
+                headers=self._headers(),
+                timeout=30,
+            )
+        except Exception:
+            pass
+
+        urls = self._collect_pdp_urls(fetcher, result)
         if not urls:
             result.notes.append("⚠ 未能收集到任何 PDP URL —— 中止")
             return result
@@ -127,22 +132,22 @@ class WayfairCrawler(BaseCrawler):
         # 反爬节奏（实测 2026-05-24，本机直连无代理）：
         #   curl_cffi 可稳定连发 ~30-40 个 PDP → 触发 429 → 等待 ~60-90s 后恢复
         #   StealthyFetcher (Camoufox) 每页 ~60s，对 1000 SKU 不可行 → 不开
-        #   策略：被封时 sleep 90s + 重建 session，最多 5 个 block 周期
+        #   策略：被封时 sleep 90s + 重建 fetcher，最多 5 个 block 周期
         BLOCK_BREAK = 6               # 第 6 个 block 周期仍失败 → 熔断
         STEALTH_USE = (os.environ.get("WAYFAIR_USE_STEALTH", "0") == "1")
         STEALTH_BUDGET = 5            # 默认不开 stealth；显式打开后预算 5 次
-        SESSION_ROTATE = 100          # 每 100 次请求主动 rotate session
+        SESSION_ROTATE = 100          # 每 100 次请求主动 rotate fetcher
         BLOCK_COOLDOWN_S = 90         # 单次封锁后的 IP 冷却
 
         for i, url in enumerate(targets):
-            # 周期性 session rotation —— 防长尾被打入观察名单
+            # 周期性 fetcher rotate（make_fetcher 每次创建新 CrawlerFetcher 实例）
             if i > 0 and i % SESSION_ROTATE == 0:
-                sess = self._session(warmup=True)
+                fetcher = self.make_fetcher(kind="product", source="wayfair")
                 result.notes.append(
-                    f"… 第 {i} 条，主动 rotate session（已抓 {ok}）")
+                    f"… 第 {i} 条，主动 rotate fetcher（已抓 {ok}）")
 
             try:
-                html, code = self._fetch_pdp(sess, url)
+                html, code = self._fetch_pdp(fetcher, url)
 
                 # 404 = 商品已下架，不是反爬 → 静默跳过
                 if code == 404:
@@ -161,12 +166,12 @@ class WayfairCrawler(BaseCrawler):
                             f"⚠ {code or 'body-block'} (连击 {consecutive_block}) "
                             f"@ ok={ok}/{i} {url[-50:]}")
 
-                    # 第 1 次封锁 → 长睡眠（让 PerimeterX 衰减）+ 重建 session
+                    # 第 1 次封锁 → 长睡眠（让 PerimeterX 衰减）+ 重建 fetcher
                     if consecutive_block == 1:
                         result.notes.append(
-                            f"  → sleep {BLOCK_COOLDOWN_S}s + 重建 session")
+                            f"  → sleep {BLOCK_COOLDOWN_S}s + 重建 fetcher")
                         _t.sleep(BLOCK_COOLDOWN_S)
-                        sess = self._session(warmup=True)
+                        fetcher = self.make_fetcher(kind="product", source="wayfair")
                         # 该 URL 不重试，继续向后扫描（容忍小漏）
                         fail += 1
                         continue
@@ -175,7 +180,7 @@ class WayfairCrawler(BaseCrawler):
                         result.notes.append(
                             f"  → 连续 block，sleep {BLOCK_COOLDOWN_S*2}s")
                         _t.sleep(BLOCK_COOLDOWN_S * 2)
-                        sess = self._session(warmup=True)
+                        fetcher = self.make_fetcher(kind="product", source="wayfair")
                         fail += 1
                         continue
                     # 第 3+ 次 → 走 stealth（如果允许）否则熔断
@@ -201,7 +206,7 @@ class WayfairCrawler(BaseCrawler):
                                 f"（已抓 {ok}）")
                         # 还有 budget，继续长睡
                         _t.sleep(BLOCK_COOLDOWN_S * consecutive_block)
-                        sess = self._session(warmup=True)
+                        fetcher = self.make_fetcher(kind="product", source="wayfair")
                         continue
                 elif code == 200:
                     consecutive_block = 0
@@ -236,14 +241,14 @@ class WayfairCrawler(BaseCrawler):
         return result
 
     # ---------- sitemap ----------
-    def _collect_pdp_urls(self, sess: creq.Session, result: CrawlResult) -> list[str]:
+    def _collect_pdp_urls(self, fetcher, result: CrawlResult) -> list[str]:
         """读取 PDP sitemap_index → 子 sitemap → product URL（增量直到 limit）。"""
         try:
-            idx = sess.get(SITEMAP_INDEX, timeout=30)
-            self.guard(idx.status_code, "seo-pdp-index")
-            if idx.status_code != 200:
+            res = fetcher.get(SITEMAP_INDEX, headers=self._headers(), timeout=30)
+            self.guard(res.status or 0, "seo-pdp-index")
+            if (res.status or 0) != 200:
                 result.notes.append(
-                    f"⚠ seo-pdp-index 返回 {idx.status_code}")
+                    f"⚠ seo-pdp-index 返回 {res.status}")
                 return []
         except BlockedError:
             raise
@@ -251,7 +256,7 @@ class WayfairCrawler(BaseCrawler):
             result.notes.append(f"⚠ seo-pdp-index 不可达: {exc}")
             return []
 
-        subs = _LOC_RE.findall(idx.text)
+        subs = _LOC_RE.findall(res.text)
         result.notes.append(f"PDP sitemap_index: {len(subs)} 个子 sitemap")
 
         urls: list[str] = []
@@ -260,8 +265,8 @@ class WayfairCrawler(BaseCrawler):
             if len(urls) >= self.limit:
                 break
             try:
-                r = sess.get(sm, timeout=40)
-                if r.status_code != 200:
+                r = fetcher.get(sm, headers=self._headers(), timeout=40)
+                if (r.status or 0) != 200:
                     continue
                 for u in _LOC_RE.findall(r.text):
                     if "/pdp/" not in u or u in seen:
@@ -276,21 +281,26 @@ class WayfairCrawler(BaseCrawler):
         return urls
 
     # ---------- fetch ----------
-    def _fetch_pdp(self, sess: creq.Session, url: str) -> tuple[str | None, int]:
-        """单页抓取。返回 (html_or_None, status_code)。
+    def _fetch_pdp(self, fetcher, url: str) -> tuple[str | None, int]:
+        """単页抓取。返回 (html_or_None, status_code)。
 
         不在这里直接 guard() —— Wayfair 偶发 429 是常态，连续 429 才视为封禁。
         由上层调用方累计 block 次数后再决定熔断 / stealth fallback。"""
         try:
-            r = sess.get(url, timeout=30)
+            res = fetcher.get(url, headers=self._headers(), timeout=30)
         except Exception:
             return None, 0
-        if r.status_code == 200:
-            return r.text, 200
-        return None, r.status_code
+        if (res.status or 0) == 200:
+            return res.text, 200
+        return None, res.status or 0
 
     def _fetch_via_stealth(self, url: str) -> str | None:
-        """curl_cffi 被反爬时（403/451 或返回 challenge）走 StealthyFetcher。"""
+        """curl_cffi 被反爬时（403/451 或返回 challenge）走 StealthyFetcher。
+
+        批C：StealthyFetcher.fetch 调用用 count_browser_fetch 包裹，
+        成功时自动 browser_opens += 1。stealth kw 参数 / persist_profile /
+        profile 目录逻辑全部原样保留，只在最外层套计数。
+        """
         try:
             from scrapling.fetchers import StealthyFetcher
             from ._stealth_config import stealth_kwargs
@@ -303,7 +313,21 @@ class WayfairCrawler(BaseCrawler):
                 persist_profile_key=f"wayfair_{self.site.site}",
                 timeout_ms=60000,
             )
-            page = StealthyFetcher.fetch(url, **kw)
+
+            def _do_fetch():
+                return StealthyFetcher.fetch(url, **kw)
+
+            # 成功标准：status == 200 且有 html_content 或 body（wayfair 原判断）
+            def _success(page) -> bool:
+                return (
+                    getattr(page, "status", None) == 200
+                    and bool(
+                        getattr(page, "html_content", None)
+                        or getattr(page, "body", None)
+                    )
+                )
+
+            page = self.count_browser_fetch(_do_fetch, success=_success)
             if getattr(page, "status", None) == 200:
                 return page.html_content or page.body or ""
         except Exception:
