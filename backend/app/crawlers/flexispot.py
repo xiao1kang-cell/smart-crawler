@@ -12,8 +12,6 @@ import json
 import os
 import re
 
-from curl_cffi import requests as creq
-
 from .base import BaseCrawler, CrawlResult
 
 DEFAULT_LIMIT = int(os.environ.get("FLEXISPOT_LIMIT", "120"))
@@ -33,10 +31,12 @@ class FlexispotCrawler(BaseCrawler):
         self.currency = _CURRENCY.get(site.country, "USD")
 
     def _product_slugs(self) -> list[str]:
-        """从 sitemap 取根级单段商品 slug。"""
-        s = creq.Session(impersonate="chrome")
+        """从 sitemap 取根级单段商品 slug（通过统一 fetcher，计 api_calls）。"""
+        fetcher = self.make_fetcher(kind="sitemap", source="flexispot")
+        sitemap_url = self.base + "/sitemap.xml"
         try:
-            xml = s.get(self.base + "/sitemap.xml", timeout=30).text
+            res = fetcher.get(sitemap_url)
+            xml = res.text if res.ok else ""
         except Exception:
             return []
         slugs, seen = [], set()
@@ -53,8 +53,11 @@ class FlexispotCrawler(BaseCrawler):
                 slugs.append(slug)
         return slugs
 
-    def _bootstrap_token(self) -> tuple[str | None, str | None]:
-        """用 Playwright 打开首页，截获 SPA 的 /sapi/ 请求拿 Bearer token。"""
+    def _do_bootstrap(self) -> tuple[str | None, str | None]:
+        """用 Playwright 打开首页，截获 SPA 的 /sapi/ 请求拿 Bearer token。
+
+        逻辑原样保留，抽为独立方法供 count_browser_fetch 包裹。
+        """
         from playwright.sync_api import sync_playwright
 
         captured: dict = {}
@@ -92,15 +95,17 @@ class FlexispotCrawler(BaseCrawler):
             result.notes.append("⚠ 未发现商品 slug")
             return result
 
-        token, appid = self._bootstrap_token()
+        # 用 count_browser_fetch 包裹 _do_bootstrap：成功拿到 token 计 1 次 browser_open
+        token, appid = self.count_browser_fetch(
+            self._do_bootstrap,
+            success=lambda r: bool(r and r[0]),
+        )
         if not token:
             result.notes.append("⚠ 未能获取 Flexispot API token")
             return result
 
-        # 拿到 token 后用 curl_cffi 批量调 API（快）
-        sess = creq.Session(impersonate="chrome")
-        if self.proxy:
-            sess.proxies = {"http": self.proxy, "https": self.proxy}
+        # 拿到 token 后用统一 fetcher 批量调 API（计 api_calls）
+        fetcher = self.make_fetcher(kind="product", source="flexispot")
         headers = {
             "appid": appid or "10001", "authorization": token,
             "site": self.site.country, "role": "0",
@@ -112,12 +117,12 @@ class FlexispotCrawler(BaseCrawler):
         ok = 0
         for slug in targets:
             try:
-                resp = sess.post(api, data=json.dumps({"urlKey": slug}),
-                                 headers=headers, timeout=25)
-                if resp.status_code != 200:
+                res = fetcher.post(api, data=json.dumps({"urlKey": slug}),
+                                   headers=headers)
+                if not res.ok:
                     continue
-                self.snapshot(slug, resp.text)
-                data = (resp.json() or {}).get("data") or {}
+                self.snapshot(slug, res.text)
+                data = (res.json() or {}).get("data") or {}
                 rows = self._parse(data, slug)
                 if rows:
                     result.products.extend(rows)
