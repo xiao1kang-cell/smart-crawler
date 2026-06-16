@@ -52,8 +52,6 @@ import os
 import re
 import time
 
-from curl_cffi import requests as creq
-
 from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
 
@@ -128,10 +126,13 @@ class EbayCrawler(BaseCrawler):
         # 实测 1.5s 间隔在第 5-10 个 PDP 就触发 Akamai → 强制 ≥5s
         self.delay = max(self.delay, DELAY)
 
-    # ---------------- session ----------------
-    def _session(self, warmup: bool = True) -> creq.Session:
-        s = creq.Session(impersonate="chrome131")
-        s.headers.update({
+    # ---------------- headers ----------------
+    def _headers(self) -> dict:
+        """构造定制请求头（每请求透传给 CrawlerFetcher.get）。
+
+        ebay Akamai 4/5 反爬对指纹敏感 —— 透传 impersonate=chrome131 保留。
+        """
+        return {
             "User-Agent": self.ua(),
             "Accept": "text/html,application/xhtml+xml,application/xml;"
                       "q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -143,25 +144,28 @@ class EbayCrawler(BaseCrawler):
             "Sec-Fetch-Site": "same-origin",
             "Sec-Fetch-User": "?1",
             "Upgrade-Insecure-Requests": "1",
-        })
-        if self.proxy:
-            s.proxies = {"http": self.proxy, "https": self.proxy}
-        if warmup:
-            try:
-                s.get(self.base + "/", timeout=20)
-            except Exception:
-                pass
-        return s
+        }
+
+    def _warmup(self, fetcher) -> None:
+        """向首页发一次 warmup GET（计入 api_calls）。"""
+        try:
+            fetcher.get(self.base + "/",
+                        headers=self._headers(),
+                        impersonate="chrome131",
+                        timeout=20)
+        except Exception:
+            pass
 
     # ---------------- main ----------------
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        sess = self._session(warmup=True)
+        fetcher = self.make_fetcher(kind="product", source="ebay")
+        self._warmup(fetcher)
 
         # ---- Step 1: 收集 PDP URL ----
-        urls = self._collect_urls_from_srp(sess, result)
+        urls = self._collect_urls_from_srp(fetcher, result)
         if len(urls) < self.limit and USE_SITEMAP:
-            urls += self._collect_urls_from_sitemap(sess, result,
+            urls += self._collect_urls_from_sitemap(fetcher, result,
                                                     need=self.limit - len(urls))
         urls = urls[: self.limit * 2]   # 留点 buffer，扣掉 404 / block
         result.notes.append(
@@ -175,22 +179,24 @@ class EbayCrawler(BaseCrawler):
         ok = blocked = denied = parse_fail = 0
         consecutive_block = 0
         BLOCK_BREAK = 8           # 连续 8 次 Access Denied → 熔断
-        SESSION_ROTATE = 30       # 每 30 个 PDP 主动换 session
+        SESSION_ROTATE = 30       # 每 30 个 PDP 主动换 warmup
         BLOCK_COOLDOWN_S = 90
 
         for i, url in enumerate(urls):
             if ok >= self.limit:
                 break
             if i > 0 and i % SESSION_ROTATE == 0:
-                sess = self._session(warmup=True)
+                self._warmup(fetcher)
                 result.notes.append(
-                    f"  rotate session @ {i} (ok={ok}, denied={denied})")
+                    f"  rotate warmup @ {i} (ok={ok}, denied={denied})")
 
             try:
-                r = sess.get(url, timeout=30,
-                             headers={"Referer": "https://www.ebay.com/"})
-                code = r.status_code
-                html = r.text or ""
+                res = fetcher.get(url, timeout=30,
+                                  impersonate="chrome131",
+                                  headers={**self._headers(),
+                                           "Referer": "https://www.ebay.com/"})
+                code = res.status or 0
+                html = res.text or ""
             except BlockedError:
                 raise
             except Exception as exc:
@@ -210,16 +216,16 @@ class EbayCrawler(BaseCrawler):
                     result.notes.append(
                         f"⚠ block code={code} len={len(html)} "
                         f"(连击 {consecutive_block}) @ ok={ok}/{i}")
-                # 第 1 次封锁 → 长睡眠 + 重建 session
+                # 第 1 次封锁 → 长睡眠 + warmup
                 if consecutive_block == 1:
                     time.sleep(BLOCK_COOLDOWN_S)
-                    sess = self._session(warmup=True)
+                    self._warmup(fetcher)
                     blocked += 1
                     continue
                 # 第 2 次（仍封锁）→ 更长睡眠
                 if consecutive_block == 2:
                     time.sleep(BLOCK_COOLDOWN_S * 2)
-                    sess = self._session(warmup=True)
+                    self._warmup(fetcher)
                     blocked += 1
                     continue
                 # 第 3+ 次 → 继续退避，达到熔断阈值则抛
@@ -228,7 +234,7 @@ class EbayCrawler(BaseCrawler):
                         f"ebay 连续 {consecutive_block} 次 Access Denied，"
                         f"熔断（已抓 {ok}）")
                 time.sleep(BLOCK_COOLDOWN_S * consecutive_block)
-                sess = self._session(warmup=True)
+                self._warmup(fetcher)
                 blocked += 1
                 continue
             else:
@@ -252,7 +258,7 @@ class EbayCrawler(BaseCrawler):
         return result
 
     # ---------------- URL discovery: SRP ----------------
-    def _collect_urls_from_srp(self, sess: creq.Session,
+    def _collect_urls_from_srp(self, fetcher,
                                result: CrawlResult) -> list[str]:
         """搜索结果页拉 itm URL。多关键词 × 多子类 → 取并集去重。"""
         urls: list[str] = []
@@ -278,22 +284,24 @@ class EbayCrawler(BaseCrawler):
                 srp_url = (f"{self.base}/sch/i.html?_nkw={kw.replace(' ', '+')}"
                            f"&_sacat={cat}&_pgn={page}&_ipg=240")
                 try:
-                    r = sess.get(srp_url, timeout=30,
-                                 headers={"Referer": self.base + "/"})
+                    res = fetcher.get(srp_url, timeout=30,
+                                      impersonate="chrome131",
+                                      headers={**self._headers(),
+                                               "Referer": self.base + "/"})
                 except Exception as exc:
                     result.notes.append(f"⚠ SRP fail {kw}/p{page}: {exc}")
                     kw_blocked = True
                     break
-                if r.status_code != 200 or self._is_blocked_body(r.text):
+                if (res.status or 0) != 200 or self._is_blocked_body(res.text or ""):
                     result.notes.append(
                         f"⚠ SRP block kw={kw} cat={cat} p={page} "
-                        f"code={r.status_code} len={len(r.text or '')}")
-                    # SRP 被封 → 长睡眠重建 session
+                        f"code={res.status or 0} len={len(res.text or '')}")
+                    # SRP 被封 → 长睡眠 + warmup
                     time.sleep(45)
-                    sess = self._session(warmup=True)
+                    self._warmup(fetcher)
                     kw_blocked = True
                     break
-                found = _ITM_RE.findall(r.text)
+                found = _ITM_RE.findall(res.text or "")
                 new = 0
                 for iid in found:
                     iurl = f"{self.base}/itm/{iid}"
@@ -317,28 +325,33 @@ class EbayCrawler(BaseCrawler):
         return urls
 
     # ---------------- URL discovery: VIS sitemap (兜底) ----------------
-    def _collect_urls_from_sitemap(self, sess: creq.Session,
+    def _collect_urls_from_sitemap(self, fetcher,
                                    result: CrawlResult, need: int) -> list[str]:
         """VIS-0-index → GTC-0_N.xml.gz → itm URL。无类目过滤，慎用。"""
         import gzip
         urls: list[str] = []
         try:
-            r = sess.get(f"{self.base}/lst/VIS-0-index.xml", timeout=30)
-            if r.status_code != 200:
-                result.notes.append(f"⚠ sitemap index {r.status_code}")
+            res = fetcher.get(f"{self.base}/lst/VIS-0-index.xml", timeout=30,
+                              impersonate="chrome131",
+                              headers=self._headers())
+            if (res.status or 0) != 200:
+                result.notes.append(f"⚠ sitemap index {res.status or 0}")
                 return urls
         except Exception as exc:
             result.notes.append(f"⚠ sitemap index 不可达: {exc}")
             return urls
-        subs = _LOC_RE.findall(r.text)
+        subs = _LOC_RE.findall(res.text or "")
         result.notes.append(f"sitemap index: {len(subs)} 个 gz 子文件")
         for sm in subs:
             if len(urls) >= need:
                 break
             try:
-                sub = sess.get(sm, timeout=60)
-                if sub.status_code != 200:
+                sub = fetcher.get(sm, timeout=60,
+                                  impersonate="chrome131",
+                                  headers=self._headers())
+                if (sub.status or 0) != 200:
                     continue
+                # 用 res.content（bytes）做 gzip 解压，res.text 是已解码文本
                 txt = gzip.decompress(sub.content).decode("utf-8",
                                                           errors="replace")
             except Exception:
