@@ -26,15 +26,19 @@ Allegro 反爬现状（实测 2026-05-24，本机 + 数据中心代理 + 真 Fir
 + 反爬告警，不会假装成功。
 
 Allegro 反爬等级评估：3 级（DataDome + 自研指纹，比 Idealo 严，
-比 Wayfair 仍可解；关键瓶颈是 IP 信誉而非 JS 挑战）。
+比 Wayfair 仍可解；关键瓶颈是 IP 信誉而非 JS 挑战）
+
+批C 收编（2026-06）：
+  - curl 探针段改用 make_fetcher().get()，自动计 api_calls
+  - stealth harvest 段用 count_browser_fetch 包裹，成功计 browser_opens
+  - 删 proxy 自管（_session 改为 _headers）；保留 guard/_blocked/snapshot/解析/sleep/熔断
+  - BFS 队列遍历逻辑原样保留
 """
 from __future__ import annotations
 
 import json
 import os
 import re
-
-from curl_cffi import requests as creq
 
 from .base import BaseCrawler, CrawlResult
 
@@ -74,27 +78,23 @@ class AllegroCrawler(BaseCrawler):
         self.limit = self._resolve_limit(DEFAULT_LIMIT)
         self.scan_cap = SCAN_CAP
 
-    # ---------- session（curl_cffi —— Allegro 几乎必败，仅作探针）----------
-    def _session(self) -> creq.Session:
-        s = creq.Session(impersonate="chrome")
-        s.headers.update({
+    # ---------- headers（curl 探针段，proxy 由 CrawlerFetcher 自管）----------
+    def _headers(self) -> dict:
+        return {
             "User-Agent": self.ua(),
             "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.6",
             "Accept": ("text/html,application/xhtml+xml,application/xml;"
                        "q=0.9,image/webp,*/*;q=0.8"),
             "Referer": "https://www.google.pl/",
-        })
-        if self.proxy:
-            s.proxies = {"http": self.proxy, "https": self.proxy}
-        return s
+        }
 
     # ---------- core ----------
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        sess = self._session()
+        fetcher = self.make_fetcher(kind="product", source="allegro")
 
-        # 1) 首页种子 —— curl_cffi 99% 失败、stealth 兜底
-        home_html = self._fetch(sess, _HOME, result, referer=None)
+        # 1) 首页种子 —— curl_cffi 探针（99% 失败），stealth 兜底
+        home_html = self._fetch(fetcher, _HOME, result, referer=None)
         if not home_html:
             result.notes.append(
                 "⚠ DataDome 阻拦首页：curl_cffi + StealthyFetcher 均被 403。"
@@ -111,7 +111,7 @@ class AllegroCrawler(BaseCrawler):
         # 2) 家居类目预扩展 —— 先扫几个家居类目页拉更多种子
         for cat in cat_seeds[:8]:
             if any(kw in cat.lower() for kw in _HOMEWARE_PL):
-                cat_html = self._fetch(sess, self.base + cat, result,
+                cat_html = self._fetch(fetcher, self.base + cat, result,
                                        referer=_HOME)
                 if cat_html:
                     new_offers = self._extract_oferta(cat_html)
@@ -151,7 +151,7 @@ class AllegroCrawler(BaseCrawler):
             seen_ids.add(key)
             scanned += 1
 
-            html = self._fetch(sess, url, result, referer=_HOME)
+            html = self._fetch(fetcher, url, result, referer=_HOME)
             if not html:
                 blocked_hits += 1
                 self.sleep()
@@ -187,30 +187,34 @@ class AllegroCrawler(BaseCrawler):
         return result
 
     # ---------- HTTP 兜底层 ----------
-    def _fetch(self, sess: creq.Session, url: str,
+    def _fetch(self, fetcher, url: str,
                result: CrawlResult, referer: str | None) -> str | None:
         """单次 GET。DataDome 拦截 → 自动 StealthyFetcher 兜底。
+
+        curl 探针段：fetcher.get() → api_calls 自动累计。
+        stealth 兜底段：count_browser_fetch 包裹 → browser_opens 累计。
 
         Returns:
             干净 HTML（不含 DataDome stub）；None = 兜底也失败。
         """
-        headers = {}
+        headers = dict(self._headers())
         if referer:
             headers["Referer"] = referer
         try:
-            resp = sess.get(url, timeout=30, headers=headers)
+            res = fetcher.get(url, headers=headers, timeout=30)
         except Exception:
             # 网络层失败也走 stealth 兜底
             return self._fetch_via_stealth(url)
+
         # 熔断（429 / 401）—— 403 是 DataDome 常态，不熔断、走 stealth
         try:
-            if resp.status_code in (401, 429):
-                self.guard(resp.status_code, url)
+            if (res.status or 0) in (401, 429):
+                self.guard(res.status or 0, url)
         except Exception:
             raise
 
-        html = resp.text
-        if (resp.status_code == 200
+        html = res.text
+        if ((res.status or 0) == 200
                 and not self._is_blocked(html)
                 and len(html) > 10_000):
             return html
@@ -219,7 +223,7 @@ class AllegroCrawler(BaseCrawler):
         stealth_html = self._fetch_via_stealth(url)
         if stealth_html and not self._is_blocked(stealth_html):
             result.notes.append(
-                f"  · stealth 解锁 {url[-70:]} (curl status {resp.status_code})")
+                f"  · stealth 解锁 {url[-70:]} (curl status {res.status or 0})")
             return stealth_html
         return None
 
@@ -229,6 +233,10 @@ class AllegroCrawler(BaseCrawler):
         关键差异：DataDome 不是 Cloudflare，关闭 solve_cloudflare 避免
         Camoufox 卡在找不到 CF challenge 的报错；DataDome 自家挑战靠
         浏览器指纹 + cookie 持久化（per-site user_data_dir）解决。
+
+        批C：最外层用 count_browser_fetch 包裹，成功时 browser_opens += 1。
+        stealth 定制参数（kw/solve_cloudflare/persist_profile）原样保留。
+        success 标准：page.status == 200 且 html 非空非 DataDome stub。
         """
         try:
             from scrapling.fetchers import StealthyFetcher
@@ -243,7 +251,18 @@ class AllegroCrawler(BaseCrawler):
                 timeout_ms=60000,
             )
             kw["solve_cloudflare"] = False     # DataDome != Cloudflare
-            page = StealthyFetcher.fetch(url, **kw)
+
+            def _do_fetch():
+                return StealthyFetcher.fetch(url, **kw)
+
+            # success 标准：status == 200 且 html 非空非 DataDome stub
+            def _success(page) -> bool:
+                if getattr(page, "status", None) != 200:
+                    return False
+                html = getattr(page, "html_content", None) or getattr(page, "body", None) or ""
+                return bool(html) and not self._is_blocked(html)
+
+            page = self.count_browser_fetch(_do_fetch, success=_success)
             if getattr(page, "status", None) == 200:
                 html = page.html_content or page.body or ""
                 if not self._is_blocked(html):
