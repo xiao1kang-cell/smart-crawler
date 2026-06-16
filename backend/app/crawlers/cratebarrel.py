@@ -43,15 +43,18 @@
   site / brand    → 站点配置
 
 价格 / 描述 / 分类路径 / 库存：sitemap 不带，PDP 兜底打开时才有。
+
+批C 收编（2026-06）：
+  - curl 段改用 make_fetcher().get()，自动计 api_calls
+  - stealth 段用 count_browser_fetch 包裹，成功计 browser_opens
+  - 删 proxy 自管(_session 中 s.proxies)；_session() → _headers()
+  - 删 creq import
 """
 from __future__ import annotations
 
 import json
 import os
 import re
-from urllib.parse import urlparse
-
-from curl_cffi import requests as creq
 
 from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
@@ -93,48 +96,41 @@ class CrateBarrelCrawler(BaseCrawler):
         self.limit = self._resolve_limit(DEFAULT_LIMIT, limit)
 
     # ------------------------------------------------------------------
-    # session
+    # headers  (replaces old _session — proxy handled by CrawlerFetcher)
     # ------------------------------------------------------------------
-    def _session(self, warmup: bool = False) -> creq.Session:
-        """Build curl_cffi session. Akamai BMP 只放行带浏览器特征 + warmup 过的 session。
+    def _headers(self) -> dict:
+        """构造定制请求头（每请求透传给 make_fetcher().get()）。
 
-        实测：homepage / sitemap 不挑剔，但裸 session 直接打 PDP 会 100% 挑战。
-        我们走 sitemap-only 路径，所以 warmup 主要为后续 PDP enrich 兜底。
+        Akamai BMP 只放行带浏览器特征的请求。sitemap 请求走 XML accept，
+        PDP 请求走 HTML accept（_enrich_from_pdp 内覆盖）。
         """
-        s = creq.Session(impersonate="chrome")
-        s.headers.update({
+        return {
             "User-Agent": self.ua(),
             "Accept": "text/html,application/xhtml+xml,application/xml;"
                       "q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
             "Accept-Encoding": "gzip, deflate, br",
             "Upgrade-Insecure-Requests": "1",
-        })
-        if self.proxy:
-            s.proxies = {"http": self.proxy, "https": self.proxy}
-        if warmup:
-            try:
-                s.get(self.base + "/", timeout=30)   # 拿 Akamai cookies
-            except Exception:
-                pass
-        # sitemap 请求换 XML accept
-        return s
+        }
 
     # ------------------------------------------------------------------
     # main
     # ------------------------------------------------------------------
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        sess = self._session()
+        fetcher = self.make_fetcher(kind="product", source="cratebarrel")
 
         # ---- Step 1：sitemap_index ----
         try:
-            sess.headers["Accept"] = "application/xml,text/xml,*/*"
-            idx = sess.get(SITEMAP_INDEX, timeout=30)
-            self.guard(idx.status_code, "sitemap_index")
-            if idx.status_code != 200:
+            res = fetcher.get(
+                SITEMAP_INDEX,
+                headers={**self._headers(), "Accept": "application/xml,text/xml,*/*"},
+                timeout=30,
+            )
+            self.guard(res.status or 0, "sitemap_index")
+            if (res.status or 0) != 200:
                 result.notes.append(
-                    f"⚠ sitemap_index 不可达（{idx.status_code}）")
+                    f"⚠ sitemap_index 不可达（{res.status}）")
                 return result
         except BlockedError:
             raise
@@ -142,7 +138,7 @@ class CrateBarrelCrawler(BaseCrawler):
             result.notes.append(f"⚠ sitemap_index 异常: {exc}")
             return result
 
-        all_subs = _LOC_RE.findall(idx.text)
+        all_subs = _LOC_RE.findall(res.text)
         # 先 prefer（在售）再其他 PDP 类，跳过 NLA
         prefer = [u for u in all_subs
                   if u.rsplit("/", 1)[-1] in _PDP_SITEMAP_PREFER]
@@ -155,7 +151,7 @@ class CrateBarrelCrawler(BaseCrawler):
         result.notes.append(
             f"sitemap_index: 共 {len(all_subs)} 个子 sitemap，"
             f"PDP 类 {len(sub_sitemaps)}（跳过 NLA）")
-        self.snapshot("sitemap_index", idx.text)
+        self.snapshot("sitemap_index", res.text)
 
         # ---- Step 2：扫子 sitemap → 商品 dict ----
         seen: set[str] = set()
@@ -163,11 +159,15 @@ class CrateBarrelCrawler(BaseCrawler):
             if len(result.products) >= self.limit:
                 break
             try:
-                sm = sess.get(sm_url, timeout=60)
-                self.guard(sm.status_code, f"sub:{sm_url}")
-                if sm.status_code != 200:
+                sm = fetcher.get(
+                    sm_url,
+                    headers={**self._headers(), "Accept": "application/xml,text/xml,*/*"},
+                    timeout=60,
+                )
+                self.guard(sm.status or 0, f"sub:{sm_url}")
+                if (sm.status or 0) != 200:
                     result.notes.append(
-                        f"⚠ {sm_url.rsplit('/',1)[-1]} {sm.status_code}")
+                        f"⚠ {sm_url.rsplit('/',1)[-1]} {sm.status}")
                     continue
             except BlockedError:
                 raise
@@ -254,13 +254,15 @@ class CrateBarrelCrawler(BaseCrawler):
         }
 
     # ------------------------------------------------------------------
-    # PDP 兜底（默认关）—— 试 curl_cffi → 命中 Akamai 则 StealthyFetcher
+    # PDP 兜底（默认关）—— 试 make_fetcher().get() → 命中 Akamai 则 StealthyFetcher
     # ------------------------------------------------------------------
     def _enrich_from_pdp(self, rows: list[dict]) -> int:
         """对前 N 行尝试进 PDP 抓 JSON-LD，补价格/评分/描述。
 
-        - curl_cffi 99% 拿到 Akamai 挑战页（identified by _is_akamai_challenge）
+        - curl_cffi 段（make_fetcher().get()）99% 拿到 Akamai 挑战页
+          （identified by _is_akamai_challenge）
         - StealthyFetcher (Camoufox) 在住宅代理 + 持久 profile 下可突破
+          （count_browser_fetch 包裹，成功计 browser_opens）
         - 单页平均 30-60s，1000 SKU 全开销 ~10-16h，故默认仅 fallback 前 50 条
         """
         try:
@@ -269,7 +271,7 @@ class CrateBarrelCrawler(BaseCrawler):
         except Exception:
             return 0
 
-        sess = self._session(warmup=True)
+        fetcher = self.make_fetcher(kind="product", source="cratebarrel")
         ok = 0
         kw = stealth_kwargs(
             proxy=self.proxy,
@@ -282,17 +284,28 @@ class CrateBarrelCrawler(BaseCrawler):
         for row in rows:
             html: str | None = None
             url = row["product_url"]
-            # 路径 1：curl_cffi（成本最低）
+            # 路径 1：make_fetcher().get()（成本最低，计 api_calls）
             try:
-                r = sess.get(url, timeout=30)
-                if r.status_code == 200 and not self._is_akamai_challenge(r.text):
-                    html = r.text
+                res = fetcher.get(url, headers=self._headers(), timeout=30)
+                if (res.status or 0) == 200 and not self._is_akamai_challenge(res.text):
+                    html = res.text
             except Exception:
                 pass
-            # 路径 2：StealthyFetcher 兜底
+            # 路径 2：StealthyFetcher 兜底（count_browser_fetch 计 browser_opens）
             if html is None:
                 try:
-                    page = StealthyFetcher.fetch(url, **kw)
+                    def _success(page) -> bool:
+                        return (
+                            getattr(page, "status", None) == 200
+                            and bool(getattr(page, "html_content", None))
+                            and not self._is_akamai_challenge(
+                                getattr(page, "html_content", "") or "")
+                        )
+
+                    page = self.count_browser_fetch(
+                        lambda: StealthyFetcher.fetch(url, **kw),
+                        success=_success,
+                    )
                     if (getattr(page, "status", None) == 200
                             and page.html_content
                             and not self._is_akamai_challenge(page.html_content)):
