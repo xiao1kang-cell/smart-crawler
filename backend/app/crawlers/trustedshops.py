@@ -17,6 +17,13 @@ API 返回 JSON 结构（基于 2026-05-24 实测）：
 }
 
 输出对齐 Review 模型字段。
+
+批C 收编（2026-06）：
+  - 继承 BaseCrawler（从 channel 合成 Site，同 reviews_io 模式）
+  - curl 段改用 make_fetcher().get()，自动计 api_calls
+  - stealth 段用 count_browser_fetch 包裹，成功计 browser_opens
+  - 删 proxy 自管(_session → _headers())，删 creq import
+  - 构造签名 / crawl 返回类型不变（向后兼容 review_runner）
 """
 from __future__ import annotations
 
@@ -24,29 +31,35 @@ import json
 import re
 from datetime import datetime
 
-from curl_cffi import requests as creq
-
-from ..proxy import get_proxy
+from .base import BaseCrawler
+from ..models import Site
 
 
 _TS_ID_RE = re.compile(r"info_([A-F0-9]{32})\.html")
 
 
-class TrustedShopsCrawler:
+class TrustedShopsCrawler(BaseCrawler):
     """通用 TrustedShops 评论抓取器（按 ts_id 抓某商家所有评论）。"""
 
     platform = "trustedshops"
 
     def __init__(self, channel: dict, max_pages: int = 20):
         """channel: {site, ts_id, domain, host, max_pages, country}"""
+        # 从 channel 合成 Site，供 BaseCrawler 使用
+        site = Site(
+            site=channel.get("site") or "trustedshops",
+            url=f"https://{channel.get('host', 'www.trustedshops.com')}",
+            country=channel.get("country"),
+            platform="trustedshops",
+            proxy_tier="residential",
+        )
+        super().__init__(site)
         self.channel = channel
-        self.site = channel.get("site")
         self.ts_id = channel.get("ts_id") or self._extract_ts_id(
             channel.get("info_url", ""))
         self.host = channel.get("host", "www.trustedshops.com")
         self.country = channel.get("country", "DE")
         self.max_pages = channel.get("max_pages", max_pages)
-        self.proxy = get_proxy("residential")
         self.notes: list[str] = []
 
     @staticmethod
@@ -54,23 +67,21 @@ class TrustedShopsCrawler:
         m = _TS_ID_RE.search(url)
         return m.group(1) if m else None
 
-    def _session(self) -> creq.Session:
-        s = creq.Session(impersonate="chrome", timeout=30)
-        s.headers.update({
+    def _headers(self) -> dict:
+        """构造定制请求头（每请求透传给 make_fetcher().get()）。"""
+        return {
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "de-DE,de;q=0.9,en;q=0.5",
-        })
-        if self.proxy:
-            s.proxies = {"http": self.proxy, "https": self.proxy}
-        return s
+        }
 
-    def crawl(self) -> list[dict]:
+    def crawl(self) -> list[dict]:                  # type: ignore[override]
+        """返回标准化的评论 dict 列表（review_runner 直接调用此接口）。"""
         if not self.ts_id:
             self.notes.append(f"⚠ 缺 ts_id（{self.channel}）")
             return []
 
         reviews: list[dict] = []
-        sess = self._session()
+        fetcher = self.make_fetcher(kind="product", source="trustedshops")
         start = 0
         page_size = 50
 
@@ -80,7 +91,7 @@ class TrustedShopsCrawler:
                 f"?start={start}&count={page_size}"
             )
             try:
-                resp = sess.get(url, timeout=30)
+                res = fetcher.get(url, headers=self._headers(), timeout=30)
             except Exception as exc:
                 self.notes.append(f"page{page} fetch 异常: {exc}")
                 # 试 stealth fallback
@@ -93,11 +104,11 @@ class TrustedShopsCrawler:
                 else:
                     break
             else:
-                if resp.status_code != 200:
+                if (res.status or 0) != 200:
                     self.notes.append(
-                        f"page{page} HTTP {resp.status_code}"
-                        + ("（403 → 试 stealth）" if resp.status_code == 403 else ""))
-                    if resp.status_code in (403, 451):
+                        f"page{page} HTTP {res.status or 0}"
+                        + ("（403 → 试 stealth）" if (res.status or 0) == 403 else ""))
+                    if (res.status or 0) in (403, 451):
                         stealth_text = self._fetch_via_stealth(url)
                         if not stealth_text:
                             break
@@ -109,7 +120,7 @@ class TrustedShopsCrawler:
                         break
                 else:
                     try:
-                        data = resp.json()
+                        data = res.json() or {}
                     except Exception:
                         self.notes.append(f"page{page} JSON 解析失败")
                         break
@@ -154,7 +165,7 @@ class TrustedShopsCrawler:
         return {
             "review_id": str(r.get("id") or r.get("review_id") or ""),
             "platform": "trustedshops",
-            "site": self.site or f"trustedshops_{self.ts_id}",
+            "site": self.channel.get("site") or f"trustedshops_{self.ts_id}",
             "reviewer_name": r.get("anonymousAlias") or r.get("anonymous_alias"),
             "reviewer_country": self.country,
             "rating": rating,
@@ -171,17 +182,33 @@ class TrustedShopsCrawler:
         }
 
     def _fetch_via_stealth(self, url: str) -> str | None:
-        """curl_cffi 失败时走 Scrapling StealthyFetcher fallback。"""
+        """curl_cffi 失败时走 Scrapling StealthyFetcher fallback。
+
+        批C：StealthyFetcher.fetch 调用用 count_browser_fetch 包裹，
+        成功时自动 browser_opens += 1。stealth kw 参数 / persist_profile /
+        profile 目录逻辑全部原样保留，只在最外层套计数。
+        """
         try:
             from scrapling.fetchers import StealthyFetcher
             from ._stealth_config import stealth_kwargs
+        except Exception:
+            return None
+        try:
             kw = stealth_kwargs(
                 proxy=self.proxy,
                 country=self.country,
                 persist_profile_key=f"trustedshops_{self.ts_id}",
                 timeout_ms=45000,
             )
-            page = StealthyFetcher.fetch(url, **kw)
+
+            def _do_fetch():
+                return StealthyFetcher.fetch(url, **kw)
+
+            # 成功标准：status == 200（原 _fetch_via_stealth 判断）
+            def _success(page) -> bool:
+                return getattr(page, "status", None) == 200
+
+            page = self.count_browser_fetch(_do_fetch, success=_success)
             if getattr(page, "status", None) == 200:
                 return page.html_content or page.body or ""
         except Exception:
