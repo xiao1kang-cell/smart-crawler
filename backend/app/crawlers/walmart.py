@@ -28,8 +28,6 @@ import os
 import re
 import time
 
-from curl_cffi import requests as creq
-
 from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
 
@@ -80,9 +78,9 @@ class WalmartCrawler(BaseCrawler):
         self.limit = self._resolve_limit(DEFAULT_LIMIT, limit)
         self.delay = max(self.delay, DELAY)
 
-    def _session(self, warmup: bool = True) -> creq.Session:
-        s = creq.Session(impersonate="chrome131")
-        s.headers.update({
+    def _headers(self) -> dict:
+        """构造定制请求头（每请求透传给 CrawlerFetcher.get）。"""
+        return {
             "User-Agent": self.ua(),
             "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
@@ -91,21 +89,20 @@ class WalmartCrawler(BaseCrawler):
             "Sec-Fetch-Mode": "navigate",
             "Sec-Fetch-Site": "none",
             "Upgrade-Insecure-Requests": "1",
-        })
-        if self.proxy:
-            s.proxies = {"http": self.proxy, "https": self.proxy}
-        if warmup:
-            try:
-                s.get(self.base + "/", timeout=20)
-            except Exception:
-                pass
-        return s
+        }
 
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        sess = self._session()
+        fetcher = self.make_fetcher(kind="product", source="walmart")
         urls: list[str] = []
         seen: set[str] = set()
+
+        # ---------- Warmup：建立会话 cookie，计入 api_calls ----------
+        try:
+            fetcher.get(self.base + "/", headers=self._headers(),
+                        timeout=20, impersonate="chrome131")
+        except Exception:
+            pass
 
         # ---------- SRP 阶段：多关键词 × 翻页 ----------
         for kw, cat in _HOME_KEYWORDS:
@@ -115,17 +112,17 @@ class WalmartCrawler(BaseCrawler):
                 u = (f"{self.base}/search?q={kw.replace(' ', '+')}"
                      f"&cat_id={cat}&page={pg}")
                 try:
-                    r = sess.get(u, timeout=30)
+                    res = fetcher.get(u, headers=self._headers(),
+                                      timeout=30, impersonate="chrome131")
                 except Exception:
                     break
-                if r.status_code != 200 or self._blocked(r.text):
+                if (res.status or 0) != 200 or self._blocked(res.text):
                     result.notes.append(
-                        f"  SRP {kw} p{pg} blocked (status {r.status_code})")
+                        f"  SRP {kw} p{pg} blocked (status {res.status or 0})")
                     time.sleep(45)
-                    sess = self._session()
                     break
                 new = 0
-                for m in _IP_RE.findall(r.text):
+                for m in _IP_RE.findall(res.text):
                     pdp = f"{self.base}/ip/{m}"
                     if pdp in seen:
                         continue
@@ -147,21 +144,19 @@ class WalmartCrawler(BaseCrawler):
         for i, url in enumerate(urls[: self.limit * 2]):
             if ok >= self.limit:
                 break
-            if i and i % 30 == 0:
-                sess = self._session()       # 周期性换 session
             try:
-                r = sess.get(url, timeout=30)
-                html = r.text or ""
+                res = fetcher.get(url, headers=self._headers(),
+                                  timeout=30, impersonate="chrome131")
+                html = res.text or ""
             except Exception:
                 self.sleep()
                 continue
-            if r.status_code in (412, 403, 429) or self._blocked(html):
+            if (res.status or 0) in (412, 403, 429) or self._blocked(html):
                 denied += 1
                 streak += 1
                 if streak >= 8:
                     raise BlockedError(f"walmart 熔断 ok={ok} denied={denied}")
                 time.sleep(min(90 * streak, 600))
-                sess = self._session()
                 continue
             streak = 0
             row = self._parse_next(html, url)
