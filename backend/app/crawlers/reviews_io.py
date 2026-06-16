@@ -6,32 +6,49 @@ Reviews.io 提供公开商家评论 API，直连可用、无需代理：
 """
 from __future__ import annotations
 
-from curl_cffi import requests as creq
+from .base import BaseCrawler, CrawlResult
+from ..models import Site
 
 API = "https://api.reviews.io/merchant/reviews"
 
 
-class ReviewsIoCrawler:
+class ReviewsIoCrawler(BaseCrawler):
     platform = "reviews_io"
 
     def __init__(self, channel: dict, max_pages: int = 20):
+        # 从 channel 合成 Site，供 BaseCrawler 使用（store 字段在 channel 中管理）
+        site = Site(
+            site=channel["site"],
+            url="https://api.reviews.io",
+            country=None,
+            platform="reviews_io",
+            proxy_tier="none",
+        )
+        super().__init__(site)
         self.channel = channel
         self.store = channel["store"]              # 如 aosom-uk
-        self.site = channel["site"]
         self.max_pages = channel.get("max_pages", max_pages)
         self.notes: list[str] = []
 
-    def crawl(self) -> list[dict]:
-        sess = creq.Session(impersonate="chrome")
+    def crawl(self) -> list[dict]:                 # type: ignore[override]
+        """返回标准化的评论 dict 列表（review_runner 直接调用此接口）。"""
+        fetcher = self.make_fetcher(
+            kind="product", source="reviews_io", use_proxy=False
+        )
         out: list[dict] = []
+        data: dict = {}
         for page in range(1, self.max_pages + 1):
             try:
-                resp = sess.get(API, params={"store": self.store,
-                                "per_page": 100, "page": page}, timeout=30)
-                if resp.status_code != 200:
-                    self.notes.append(f"page{page} HTTP {resp.status_code}")
+                res = fetcher.get(
+                    API,
+                    headers={"Accept": "application/json"},
+                    params={"store": self.store, "per_page": 100, "page": page},
+                    timeout=30,
+                )
+                if (res.status or 0) != 200:
+                    self.notes.append(f"page{page} HTTP {res.status or 0}")
                     break
-                data = resp.json()
+                data = res.json() or {}
             except Exception as exc:
                 self.notes.append(f"page{page} 异常: {exc}")
                 break
@@ -44,7 +61,7 @@ class ReviewsIoCrawler:
                     out.append(row)
             if page >= (data.get("total_pages") or 1):
                 break
-        stats = (data.get("stats") or {}) if "data" in dir() else {}
+        stats = (data.get("stats") or {}) if data else {}
         self.notes.append(f"采集 {len(out)} 条评论"
                           + (f"（平台共 {stats.get('total_reviews')} 条）"
                              if stats.get("total_reviews") else ""))
@@ -65,7 +82,7 @@ class ReviewsIoCrawler:
         reply = replies[0] if replies else {}
         return {
             "review_id": str(rid), "platform": "reviews_io",
-            "site": self.site,
+            "site": self.channel["site"],
             "reviewer_name": name,
             "rating": r.get("rating"),
             "title": r.get("title"),
