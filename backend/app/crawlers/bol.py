@@ -29,6 +29,12 @@
 
 如未来拿到 Bol Affiliate API token 或住宅代理 + 长 cookie warmup 方案，
 可在 _enrich_from_pdp() 激活 JSON-LD 兜底（offers.price / aggregateRating）。
+
+批C 收编：
+  - curl 段改用 make_fetcher().get()，自动计 api_calls
+  - stealth 段（_fetch_via_stealth / _enrich_from_pdp）用 count_browser_fetch 包裹，成功计 browser_opens
+  - 删 proxy 自管（_session 中 s.proxies）；改 _headers()；proxy 由 CrawlerFetcher 托管
+  - 保留 TRY_PDP_ENRICH 开关、guard/_blocked/snapshot/解析/sleep/熔断
 """
 from __future__ import annotations
 
@@ -36,8 +42,6 @@ import os
 import re
 from datetime import datetime
 from urllib.parse import unquote
-
-from curl_cffi import requests as creq
 
 from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
@@ -76,33 +80,30 @@ class BolCrawler(BaseCrawler):
         cc = (site.country or "NL").upper()
         self.sitemap_root = _SITEMAP_ROOT.get(cc, _SITEMAP_ROOT["NL"])
 
-    def _session(self) -> creq.Session:
-        s = creq.Session(impersonate="chrome")
-        s.headers.update({
+    def _headers(self) -> dict:
+        """构造定制请求头（每请求透传给 make_fetcher().get()）。"""
+        return {
             "User-Agent": self.ua(),
             "Accept": "application/xml,text/xml,*/*",
             "Accept-Language": "nl-NL,nl;q=0.9,en;q=0.8",
-        })
-        if self.proxy:
-            s.proxies = {"http": self.proxy, "https": self.proxy}
-        return s
+        }
 
     # ------------------------------------------------------------------
     # 主流程
     # ------------------------------------------------------------------
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        sess = self._session()
+        fetcher = self.make_fetcher(kind="product", source="bol")
 
         # ---- Step 1：拿 sitemap_index ----
         try:
-            idx = sess.get(self.sitemap_root, timeout=30)
-            self.guard(idx.status_code, "sitemap_index")
-            if idx.status_code != 200:
+            res = fetcher.get(self.sitemap_root, headers=self._headers(), timeout=30)
+            self.guard(res.status or 0, "sitemap_index")
+            if (res.status or 0) != 200:
                 result.notes.append(
-                    f"⚠ sitemap_index 不可达（{idx.status_code}）")
+                    f"⚠ sitemap_index 不可达（{res.status or 0}）")
                 # 被 Akamai 挑战时 fallback 到 StealthyFetcher 抓 sitemap
-                if idx.status_code in (401, 403, 451):
+                if (res.status or 0) in (401, 403, 451):
                     txt = self._fetch_via_stealth(self.sitemap_root)
                     if not txt:
                         return result
@@ -112,7 +113,7 @@ class BolCrawler(BaseCrawler):
                 else:
                     return result
             else:
-                idx_text = idx.text
+                idx_text = res.text
         except BlockedError:
             raise
         except Exception as exc:
@@ -136,11 +137,11 @@ class BolCrawler(BaseCrawler):
             if len(result.products) >= self.limit:
                 break
             try:
-                sm = sess.get(sm_url, timeout=60)
-                self.guard(sm.status_code, f"sub:{sm_url}")
-                if sm.status_code != 200:
+                sm = fetcher.get(sm_url, headers=self._headers(), timeout=60)
+                self.guard(sm.status or 0, f"sub:{sm_url}")
+                if (sm.status or 0) != 200:
                     result.notes.append(
-                        f"⚠ {sm_url.rsplit('/',1)[-1]} {sm.status_code}")
+                        f"⚠ {sm_url.rsplit('/',1)[-1]} {sm.status or 0}")
                     continue
                 sm_text = sm.text
             except BlockedError:
@@ -235,6 +236,10 @@ class BolCrawler(BaseCrawler):
 
     # ------------------------------------------------------------------
     # StealthyFetcher 兜底 —— curl_cffi 拿 sitemap 被拦时用
+    #
+    # 批C：StealthyFetcher.fetch 调用用 count_browser_fetch 包裹，
+    # 成功时自动 browser_opens += 1。stealth kw 参数 / persist_profile /
+    # profile 目录逻辑全部原样保留，只在最外层套计数。
     # ------------------------------------------------------------------
     def _fetch_via_stealth(self, url: str) -> str | None:
         try:
@@ -251,7 +256,21 @@ class BolCrawler(BaseCrawler):
                 real_chrome=False,
                 solve_cloudflare=False,    # Akamai，不是 Cloudflare Turnstile
             )
-            page = StealthyFetcher.fetch(url, **kw)
+
+            def _do_fetch():
+                return StealthyFetcher.fetch(url, **kw)
+
+            # 成功标准：status == 200 且有 html_content 或 body（sitemap 兜底原判断）
+            def _success(page) -> bool:
+                return (
+                    getattr(page, "status", None) == 200
+                    and bool(
+                        getattr(page, "html_content", None)
+                        or getattr(page, "body", None)
+                    )
+                )
+
+            page = self.count_browser_fetch(_do_fetch, success=_success)
             if getattr(page, "status", None) == 200:
                 return page.html_content or page.body or ""
         except Exception:
@@ -260,6 +279,9 @@ class BolCrawler(BaseCrawler):
 
     # ------------------------------------------------------------------
     # PDP 兜底（默认关）—— Akamai 长期挑战，留接口给未来代理 + warmup
+    #
+    # 批C：StealthyFetcher.fetch 调用用 count_browser_fetch 包裹，
+    # 成功时自动 browser_opens += 1。stealth kw 参数/profile 逻辑原样保留。
     # ------------------------------------------------------------------
     def _enrich_from_pdp(self, rows: list[dict]) -> int:
         try:
@@ -278,7 +300,18 @@ class BolCrawler(BaseCrawler):
         )
         for row in rows:
             try:
-                page = StealthyFetcher.fetch(row["product_url"], **kw)
+                url = row["product_url"]
+
+                def _do_fetch():
+                    return StealthyFetcher.fetch(url, **kw)
+
+                # 成功标准：status == 200 且 content >= 5000（bol 原判断）
+                def _success(page) -> bool:
+                    status = getattr(page, "status", None)
+                    content = getattr(page, "html_content", "") or ""
+                    return status == 200 and len(content) >= 5000
+
+                page = self.count_browser_fetch(_do_fetch, success=_success)
                 status = getattr(page, "status", None)
                 content = getattr(page, "html_content", "") or ""
                 if status != 200 or len(content) < 5000:
