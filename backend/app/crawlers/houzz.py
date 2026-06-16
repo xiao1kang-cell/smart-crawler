@@ -66,8 +66,6 @@ import os
 import re
 from urllib.parse import unquote
 
-from curl_cffi import requests as creq
-
 from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
 
@@ -96,11 +94,11 @@ class HouzzCrawler(BaseCrawler):
         self.limit = self._resolve_limit(DEFAULT_LIMIT, limit)
 
     # ------------------------------------------------------------------
-    # session
+    # headers  (replaces old _session — proxy handled by CrawlerFetcher)
     # ------------------------------------------------------------------
-    def _session(self) -> creq.Session:
-        s = creq.Session(impersonate="chrome")
-        s.headers.update({
+    def _headers(self) -> dict:
+        """构造定制请求头（每请求透传给 make_fetcher().get()）。"""
+        return {
             "User-Agent": self.ua(),
             "Accept": "text/html,application/xhtml+xml,application/xml;"
                       "q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -110,20 +108,17 @@ class HouzzCrawler(BaseCrawler):
             "Sec-Fetch-Mode": "navigate",
             "Sec-Fetch-Site": "none",
             "Upgrade-Insecure-Requests": "1",
-        })
-        if self.proxy:
-            s.proxies = {"http": self.proxy, "https": self.proxy}
-        return s
+        }
 
     # ------------------------------------------------------------------
     # main
     # ------------------------------------------------------------------
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        sess = self._session()
+        fetcher = self.make_fetcher(kind="product", source="houzz")
 
         # ---- Step 1：从 Wayback CDX 拉历史 PDP URL 池 ----
-        urls = self._collect_pdp_urls(sess, result)
+        urls = self._collect_pdp_urls(fetcher, result)
         if not urls:
             result.notes.append(
                 "⚠ 未能从 Wayback CDX 收集到任何 PDP URL —— 中止")
@@ -138,7 +133,7 @@ class HouzzCrawler(BaseCrawler):
         sunset = blocked = ok = fail = stealth_used = with_price = 0
         for i, url in enumerate(targets):
             try:
-                html, code = self._fetch(sess, url)
+                html, code = self._fetch(fetcher, url)
 
                 # Cloudflare 整站 403 或 PerimeterX 短身体 → stealth 兜底
                 is_block = code in (401, 403, 429, 451) or (
@@ -205,7 +200,7 @@ class HouzzCrawler(BaseCrawler):
     # ------------------------------------------------------------------
     # Wayback CDX 拉 PDP URL 池
     # ------------------------------------------------------------------
-    def _collect_pdp_urls(self, sess: creq.Session,
+    def _collect_pdp_urls(self, fetcher,
                           result: CrawlResult) -> list[str]:
         """从 Wayback Machine CDX 索引拉 Houzz 历史 PDP URL。
 
@@ -220,10 +215,10 @@ class HouzzCrawler(BaseCrawler):
             f"&filter=urlkey:.*prvw-vr.*&collapse=urlkey&limit={need}"
         )
         try:
-            r = sess.get(cdx_url, timeout=60)
-            if r.status_code != 200:
+            res = fetcher.get(cdx_url, headers=self._headers(), timeout=60)
+            if (res.status or 0) != 200:
                 result.notes.append(
-                    f"⚠ Wayback CDX 返回 {r.status_code}")
+                    f"⚠ Wayback CDX 返回 {res.status}")
                 return []
         except Exception as exc:
             result.notes.append(f"⚠ Wayback CDX 不可达: {exc}")
@@ -231,7 +226,7 @@ class HouzzCrawler(BaseCrawler):
 
         urls: list[str] = []
         seen: set[str] = set()
-        for line in r.text.splitlines():
+        for line in res.text.splitlines():
             # CDX text 行：urlkey timestamp original mimetype statuscode digest length
             parts = line.split()
             if len(parts) < 3:
@@ -252,25 +247,29 @@ class HouzzCrawler(BaseCrawler):
             urls.append(original)
 
         result.notes.append(f"Wayback CDX 解析 {len(urls)} 个去重 vr_id")
-        self.snapshot("wayback_cdx", r.text[:300_000])
+        self.snapshot("wayback_cdx", res.text[:300_000])
         return urls
 
     # ------------------------------------------------------------------
     # fetch
     # ------------------------------------------------------------------
-    def _fetch(self, sess: creq.Session,
-               url: str) -> tuple[str | None, int]:
+    def _fetch(self, fetcher, url: str) -> tuple[str | None, int]:
         """单页抓取。Houzz sunset 页返回 HTTP 404 + 1.4 MB body —— 这是
         正常情况，body 仍要解析（拿 slug + vr_id）。"""
         try:
-            r = sess.get(url, timeout=30)
+            res = fetcher.get(url, headers=self._headers(), timeout=30)
         except Exception:
             return None, 0
         # 200 / 404 都返回 body —— 由上层解析决定是 sunset 还是真活页
-        return (r.text if r.text else None), r.status_code
+        return (res.text if res.text else None), (res.status or 0)
 
     def _fetch_via_stealth(self, url: str) -> str | None:
-        """Cloudflare 403 兜底 —— scrapling StealthyFetcher。"""
+        """Cloudflare 403 兜底 —— scrapling StealthyFetcher。
+
+        批C：StealthyFetcher.fetch 调用用 count_browser_fetch 包裹，
+        成功时自动 browser_opens += 1。stealth kw 参数 / persist_profile /
+        profile 目录逻辑全部原样保留，只在最外层套计数。
+        """
         try:
             from scrapling.fetchers import StealthyFetcher
             from ._stealth_config import stealth_kwargs
@@ -284,7 +283,22 @@ class HouzzCrawler(BaseCrawler):
                 timeout_ms=60000,
                 solve_cloudflare=True,
             )
-            page = StealthyFetcher.fetch(url, **kw)
+
+            def _do_fetch():
+                return StealthyFetcher.fetch(url, **kw)
+
+            # 成功标准：houzz 原标准 — status in (200, 404) and html_content/body
+            # （sunset 页返回 404 + 大 body，也是有效响应）
+            def _success(page) -> bool:
+                return (
+                    getattr(page, "status", None) in (200, 404)
+                    and bool(
+                        getattr(page, "html_content", None)
+                        or getattr(page, "body", None)
+                    )
+                )
+
+            page = self.count_browser_fetch(_do_fetch, success=_success)
             if getattr(page, "status", None) in (200, 404):
                 return page.html_content or page.body or ""
         except Exception:
