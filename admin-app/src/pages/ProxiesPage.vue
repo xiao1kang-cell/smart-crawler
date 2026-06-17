@@ -16,6 +16,7 @@ import {
   proxyEndpointUpdate,
   proxyImportFile,
   proxyMaintenance,
+  proxyNetworkDiagnostics,
   proxyPoolCreate,
   proxyPoolMemberUpsert,
   proxyPoolUpdate,
@@ -287,6 +288,19 @@ function recheckUnhealthyEndpoints(endpointType = '') {
   )
 }
 
+function runNetworkDiagnostics(endpointType = 'residential') {
+  return runAction(
+    `network-diagnostics:${endpointType || 'all'}`,
+    () => proxyNetworkDiagnostics({
+      endpoint_type: endpointType || undefined,
+      active_only: true,
+      limit: 20,
+      timeout: Math.max(1, Math.min(15, Number(probeForm.value.timeout || 5)))
+    }),
+    endpointType ? `${endpointType} 网络链路诊断已完成` : '网络链路诊断已完成'
+  )
+}
+
 function createPool() {
   const payload = { ...poolForm.value }
   return runAction('pool:create', () => proxyPoolCreate(payload), '代理池已保存').then((data) => {
@@ -388,6 +402,21 @@ function sampleEndpointSummary(row: Record<string, any>) {
     .join(' · ')
 }
 
+function networkStatusLabel(status?: string) {
+  return ({
+    tcp_unreachable: 'TCP 不可达',
+    tcp_reachable: 'TCP 可达',
+    partial: '部分可达',
+    empty: '无端点'
+  } as Record<string, string>)[status || ''] || status || '-'
+}
+
+function networkStatusClass(status?: string) {
+  if (status === 'tcp_reachable') return 'ok'
+  if (status === 'partial') return 'warn'
+  return 'bad'
+}
+
 function rulePoolSummary(row: Record<string, any>) {
   if (row.effective_status === 'direct') return '不使用代理'
   const primary = row.primary_pool_slug
@@ -470,7 +499,30 @@ watch(() => route.fullPath, applyRouteContext)
           <span v-if="row.fallback_pool_slug">备用 {{ row.fallback_pool_slug }}: {{ fmtNumber(row.fallback_available_count) }}</span>
           <span>{{ failureSummary(row) }}</span>
           <span v-if="row.latest_checked_at">最近 {{ fmtDate(row.latest_checked_at) }}</span>
+          <button class="btn small" :disabled="!!busy" @click="runNetworkDiagnostics(row.pool_type || row.pool_slug)">
+            {{ busy === `network-diagnostics:${row.pool_type || row.pool_slug}` ? '诊断中' : '链路诊断' }}
+          </button>
         </div>
+      </div>
+    </div>
+
+    <div v-if="info.network" class="network-panel">
+      <div>
+        <b>网络链路诊断</b>
+        <span>
+          <span class="badge" :class="networkStatusClass(info.network.status)">
+            {{ networkStatusLabel(info.network.status) }}
+          </span>
+          来源 IP {{ info.network.source_egress?.ip || '-' }} ·
+          TCP {{ fmtNumber(info.network.tcp_ok) }}/{{ fmtNumber(info.network.checked) }} 可达
+        </span>
+        <span>{{ info.network.suggested_action }}</span>
+      </div>
+      <div class="diagnostic-meta">
+        <span>{{ info.network.endpoint_type || 'all' }} · {{ fmtDate(info.network.checked_at) }}</span>
+        <span v-for="row in (info.network.results || []).slice(0, 3)" :key="row.endpoint_id">
+          {{ row.host }}:{{ row.port }} · {{ row.tcp_ok ? 'ok' : row.error || 'failed' }}
+        </span>
       </div>
     </div>
 
@@ -543,6 +595,9 @@ watch(() => route.fullPath, applyRouteContext)
         <button class="btn small primary" :disabled="!!busy" @click="doCheck">
           <ShieldCheck class="size-4" />
           <span>{{ busy === 'check' ? '检测中' : '预检' }}</span>
+        </button>
+        <button class="btn small" :disabled="!!busy" @click="runNetworkDiagnostics(probeForm.tier === 'datacenter' ? 'datacenter' : 'residential')">
+          <span>{{ busy.startsWith('network-diagnostics') ? '诊断中' : '链路诊断' }}</span>
         </button>
       </div>
       <div v-if="info.probe" class="probe-result" :class="info.probe.ok ? 'ok' : 'bad'">
@@ -919,6 +974,35 @@ watch(() => route.fullPath, applyRouteContext)
   font-size: 12px;
 }
 
+.network-panel {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(59, 130, 246, 0.30);
+  background: rgba(59, 130, 246, 0.08);
+  font-size: 12px;
+}
+
+.network-panel > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.network-panel b {
+  font-size: 13px;
+  color: var(--ui-text, #e5e7eb);
+}
+
+.network-panel span {
+  color: var(--ui-muted, #9ca3af);
+  line-height: 1.45;
+}
+
 .diagnostic-panel.warn {
   border-color: rgba(245, 158, 11, 0.32);
   background: rgba(245, 158, 11, 0.08);
@@ -976,7 +1060,7 @@ watch(() => route.fullPath, applyRouteContext)
 }
 
 .probe-grid {
-  grid-template-columns: 180px 180px minmax(280px, 1fr) 90px auto;
+  grid-template-columns: 180px 180px minmax(280px, 1fr) 90px auto auto;
 }
 
 .endpoint-grid,
@@ -1304,6 +1388,10 @@ watch(() => route.fullPath, applyRouteContext)
   }
 
   .diagnostic-panel {
+    flex-direction: column;
+  }
+
+  .network-panel {
     flex-direction: column;
   }
 

@@ -536,6 +536,80 @@ def test_admin_proxy_endpoint_check_batch_filters_and_records(monkeypatch):
     s.close()
 
 
+def test_admin_proxy_network_diagnostics_reports_tcp_and_source(monkeypatch):
+    init_db()
+    from app.api import admin_spine
+    from app.models import ProxyHealth
+    from app.proxy_config import upsert_proxy_endpoint
+
+    s = SessionLocal()
+    _clean_proxy_config(s)
+    ok = upsert_proxy_endpoint(
+        s,
+        proxy_url="socks5h://u:p@108.95.61.130:1080",
+        endpoint_type="residential",
+        source="test",
+    )
+    down = upsert_proxy_endpoint(
+        s,
+        proxy_url="socks5h://u:p@108.95.61.131:1080",
+        endpoint_type="residential",
+        source="test",
+    )
+    upsert_proxy_endpoint(
+        s,
+        proxy_url="http://u:p@10.0.6.2:3128",
+        endpoint_type="datacenter",
+        source="test",
+    )
+    s.commit()
+
+    monkeypatch.setattr(
+        admin_spine,
+        "_direct_egress_ip",
+        lambda url, timeout: {
+            "ok": True,
+            "ip": "99.0.84.158",
+            "url": url,
+            "latency_ms": 12,
+            "error": None,
+        },
+    )
+
+    def fake_tcp(host, port, timeout):
+        return {
+            "ok": host == "108.95.61.130",
+            "latency_ms": 3,
+            "error": None if host == "108.95.61.130" else "timed out",
+        }
+
+    monkeypatch.setattr(admin_spine, "_tcp_connect_check", fake_tcp)
+
+    out = admin_spine.proxy_network_diagnostics(
+        {
+            "endpoint_type": "residential",
+            "limit": 10,
+            "timeout": 2,
+        },
+        user="admin",
+        db=s,
+        ip="127.0.0.1",
+    )
+
+    network = out["network"]
+    assert network["source_egress"]["ip"] == "99.0.84.158"
+    assert network["checked"] == 2
+    assert network["tcp_ok"] == 1
+    assert network["tcp_failed"] == 1
+    assert network["status"] == "partial"
+    by_id = {row["endpoint_id"]: row for row in network["results"]}
+    assert by_id[ok.id]["tcp_ok"] is True
+    assert by_id[down.id]["tcp_ok"] is False
+    assert s.query(ProxyHealth).count() == 0
+
+    s.close()
+
+
 def test_admin_proxy_maintenance_rechecks_ready_unhealthy_endpoints(monkeypatch):
     init_db()
     from datetime import datetime, timedelta

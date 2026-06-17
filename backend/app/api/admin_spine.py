@@ -10,9 +10,11 @@ from datetime import date, datetime, timedelta
 import csv
 import ipaddress
 import io
+import socket
 import time
 from types import SimpleNamespace
 from urllib.parse import urlparse
+from urllib.request import urlopen
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import and_, func, or_
@@ -3091,6 +3093,52 @@ def _proxy_endpoint_probe_detail(
     }
 
 
+def _direct_egress_ip(url: str = "https://api.ipify.org", timeout: int = 8) -> dict:
+    started = time.monotonic()
+    try:
+        with urlopen(url, timeout=timeout) as resp:
+            body = resp.read(128).decode("utf-8", "ignore").strip()
+        return {
+            "ok": True,
+            "ip": body or None,
+            "url": url,
+            "latency_ms": int((time.monotonic() - started) * 1000),
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "ip": None,
+            "url": url,
+            "latency_ms": int((time.monotonic() - started) * 1000),
+            "error": str(exc),
+        }
+
+
+def _tcp_connect_check(host: str | None, port: int | None, timeout: float) -> dict:
+    started = time.monotonic()
+    if not host or not port:
+        return {
+            "ok": False,
+            "latency_ms": 0,
+            "error": "missing_host_or_port",
+        }
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            pass
+        return {
+            "ok": True,
+            "latency_ms": int((time.monotonic() - started) * 1000),
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "latency_ms": int((time.monotonic() - started) * 1000),
+            "error": str(exc),
+        }
+
+
 def _ip_literal(value: str | None) -> str | None:
     text = (value or "").strip()
     if not text:
@@ -3190,6 +3238,90 @@ def proxy_endpoint_check(endpoint_id: int, payload: dict | None = None,
     _reload_pool_safely()
     db.expire_all()
     return {"probe": detail, **_proxy_admin_payload(db)}
+
+
+@router.post("/proxies/network-diagnostics")
+def proxy_network_diagnostics(payload: dict | None = None,
+                              user: str = Depends(require_user),
+                              db: Session = Depends(get_db),
+                              ip: str = Header(default="", alias="X-Forwarded-For")) -> dict:
+    """Check raw network reachability from this server to proxy endpoints.
+
+    This does not authenticate to the proxy or mutate proxy health.  It answers
+    the operational question: can the production host open TCP to the proxy
+    service port, and what public source IP should be whitelisted?
+    """
+    actor = _require_super_admin(user, db)
+    payload = payload or {}
+    endpoint_type = (payload.get("endpoint_type") or payload.get("tier") or "residential").strip()
+    active_only = bool(payload.get("active_only", True))
+    timeout = max(1, min(15, int(payload.get("timeout") or 5)))
+    limit = max(1, min(100, int(payload.get("limit") or 20)))
+    egress_url = payload.get("egress_url") or "https://api.ipify.org"
+
+    q = db.query(ProxyEndpoint).filter(ProxyEndpoint.proxy_url.isnot(None))
+    if active_only:
+        q = q.filter(ProxyEndpoint.active.is_(True))
+    if endpoint_type:
+        q = q.filter(ProxyEndpoint.endpoint_type == endpoint_type)
+    rows = (q.order_by(ProxyEndpoint.endpoint_type.asc(), ProxyEndpoint.id.asc())
+            .limit(limit)
+            .all())
+
+    source = _direct_egress_ip(str(egress_url), timeout=timeout)
+    results = []
+    for row in rows:
+        tcp = _tcp_connect_check(row.host, row.port, timeout)
+        results.append({
+            "endpoint_id": row.id,
+            "endpoint_type": row.endpoint_type,
+            "name": row.name,
+            "proxy": row.proxy_redacted,
+            "host": row.host,
+            "port": row.port,
+            "scheme": row.scheme,
+            "provider": row.provider,
+            "country": row.country,
+            "tcp_ok": tcp["ok"],
+            "latency_ms": tcp["latency_ms"],
+            "error": tcp["error"],
+        })
+    tcp_ok = sum(1 for row in results if row["tcp_ok"])
+    tcp_failed = len(results) - tcp_ok
+    if results and tcp_ok == 0:
+        suggested_action = "生产机到代理端口 TCP 全部失败；优先检查来源 IP 白名单、防火墙和路由。"
+        status = "tcp_unreachable"
+    elif tcp_failed > 0:
+        suggested_action = "部分代理端口不可达；检查失败端点所在设备、端口映射或代理服务状态。"
+        status = "partial"
+    elif results:
+        suggested_action = "TCP 链路可达；若协议检测仍失败，再检查代理账号密码、协议类型或目标站限制。"
+        status = "tcp_reachable"
+    else:
+        suggested_action = "没有符合条件的代理端点；请检查代理池配置。"
+        status = "empty"
+    detail = {
+        "endpoint_type": endpoint_type or None,
+        "active_only": active_only,
+        "timeout": timeout,
+        "limit": limit,
+        "source_egress": source,
+        "checked": len(results),
+        "tcp_ok": tcp_ok,
+        "tcp_failed": tcp_failed,
+        "status": status,
+        "suggested_action": suggested_action,
+        "results": results,
+        "checked_at": datetime.utcnow().isoformat(),
+    }
+    record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
+                 action="proxy.network_diagnostics",
+                 target_type="proxy_endpoint",
+                 target_id=endpoint_type or "all",
+                 detail={k: v for k, v in detail.items() if k != "results"},
+                 ip=ip or None)
+    db.commit()
+    return {"network": detail, **_proxy_admin_payload(db)}
 
 
 @router.post("/proxies/maintenance")
