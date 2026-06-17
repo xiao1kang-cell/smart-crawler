@@ -15,7 +15,7 @@ from typing import Protocol
 from curl_cffi import requests as creq
 
 from . import proxy_pool
-from .antiban import BlockedError
+from .antiban import BlockedError, acquire_rate
 from .crawl_diagnostics import (
     ANTI_BOT_CHALLENGE,
     FailureInfo,
@@ -152,6 +152,8 @@ class CrawlerFetcher:
         last: FetchResult | None = None
         for attempt in range(1, attempts + 1):
             request_kwargs = dict(kwargs)
+            acquire_rate(self.context.site.site,
+                         self.context.site.platform or "")
             for mw in self.middlewares:
                 mw.before_request(self, url, request_kwargs)
             result = self._request_once(method, url, attempt=attempt, **request_kwargs)

@@ -52,3 +52,25 @@ def test_acquire_respects_max_wait():
     rl.acquire("s3", interval=100.0, max_wait=0.2)  # 本应等 100s，被 max_wait 截断
     elapsed = time.monotonic() - started
     assert elapsed <= 0.5
+
+
+def test_fetcher_calls_acquire_before_request(monkeypatch):
+    """CrawlerFetcher 每次请求前调用一次限速。"""
+    import app.fetching as fetching
+    from app.fetching import CrawlerFetcher, FetchContext, FetchResult
+    from app.models import Site
+
+    calls = []
+    monkeypatch.setattr(fetching, "acquire_rate",
+                        lambda site, platform, **kw: calls.append((site, platform)))
+
+    site = Site(site="costway_it", platform="magento", proxy_tier="none",
+                country="IT", url="https://www.costway.it/")
+    fetcher = CrawlerFetcher(FetchContext(site=site, use_proxy=False))
+    # 桩掉真实网络：直接返回成功
+    monkeypatch.setattr(
+        fetcher, "_request_once",
+        lambda method, url, **kw: FetchResult(ok=True, url=url, status=200, text="ok"))
+
+    fetcher.get("https://www.costway.it/p/123")
+    assert calls == [("costway_it", "magento")]
