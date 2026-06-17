@@ -36,6 +36,8 @@ BROWSER_DEPENDENCY_MISSING = "browser_dependency_missing"
 UNSUPPORTED_PLATFORM = "unsupported_platform"
 RESOURCE_EXHAUSTED = "resource_exhausted"
 WORKER_INTERRUPTED = "worker_interrupted"
+QUEUE_STALLED = "queue_stalled"
+MANUAL_MAINTENANCE = "manual_maintenance"
 UNKNOWN = "unknown"
 
 STAGE_DISCOVER = "discover"
@@ -108,7 +110,8 @@ def classify_exception(exc: Exception, *, stage: str = STAGE_JOB) -> FailureInfo
             BROWSER_DEPENDENCY_MISSING, STAGE_JOB, text, False,
             "运行 playwright install chromium 安装浏览器依赖后重跑")
     if ("未知平台" in text or "unknown platform" in low
-            or "unsupported platform" in low):
+            or "unsupported platform" in low
+            or "unsupported crawler platform" in low):
         return FailureInfo(
             UNSUPPORTED_PLATFORM, STAGE_JOB, text, False,
             "修正站点 platform 配置，或在 crawler registry 中补充平台适配")
@@ -120,6 +123,10 @@ def classify_exception(exc: Exception, *, stage: str = STAGE_JOB) -> FailureInfo
         return FailureInfo(
             RESOURCE_EXHAUSTED, STAGE_JOB, text, True,
             "worker 线程/资源耗尽；降低并发、重启 worker 后重跑")
+    if "worker did not consume" in low or ("queued job" in low and "worker" in low):
+        return FailureInfo(
+            QUEUE_STALLED, STAGE_JOB, text, True,
+            "队列入队后未被 worker 消费；检查 worker 存活、触发类型白名单和队列积压")
     if (
         "broken pipe" in low
         or "manual rerun interrupted" in low
@@ -136,6 +143,14 @@ def classify_exception(exc: Exception, *, stage: str = STAGE_JOB) -> FailureInfo
         return FailureInfo(
             WORKER_INTERRUPTED, STAGE_JOB, text, True,
             "任务被重启/清理/人工中断；确认当前 worker 正常后重跑")
+    if (
+        "reschedule after fix" in low
+        or "regex fix retry" in low
+        or "fix retry" in low
+    ):
+        return FailureInfo(
+            MANUAL_MAINTENANCE, STAGE_JOB, text, True,
+            "历史人工维护/重排记录；如该站点仍缺数据，可从后台重跑")
     if "proxy" in low and ("auth" in low or "credentials" in low):
         return FailureInfo(
             PROXY_AUTH_FAILED, STAGE_FETCH, text, False,

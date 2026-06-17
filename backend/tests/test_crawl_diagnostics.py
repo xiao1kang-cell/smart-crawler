@@ -10,6 +10,8 @@ from app.crawl_diagnostics import (
     NETWORK_TIMEOUT,
     JOB_TIMEOUT,
     HTTP_5XX,
+    MANUAL_MAINTENANCE,
+    QUEUE_STALLED,
     RESOURCE_EXHAUSTED,
     UNSUPPORTED_PLATFORM,
     WORKER_INTERRUPTED,
@@ -108,3 +110,24 @@ def test_classifies_http_error_503_text():
 
     assert info.code == HTTP_5XX
     assert info.http_status == 503
+
+
+def test_classifies_queue_stalled_verification_message():
+    info = classify_exception(RuntimeError("verification: trigger API queued job, but worker did not consume it within 4 minutes"))
+
+    assert info.code == QUEUE_STALLED
+    assert info.retryable is True
+
+
+def test_classifies_manual_maintenance_retry_notes():
+    info = classify_exception(RuntimeError("reschedule after fix"))
+
+    assert info.code == MANUAL_MAINTENANCE
+    assert info.retryable is True
+
+
+def test_classifies_unsupported_crawler_platform_note():
+    info = classify_exception(RuntimeError("manual rerun: unsupported crawler platform"))
+
+    assert info.code == UNSUPPORTED_PLATFORM
+    assert info.retryable is False
