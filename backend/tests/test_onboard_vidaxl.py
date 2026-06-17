@@ -192,6 +192,79 @@ def test_vidaxl_api_path_counts_api_calls(monkeypatch):
     assert p["site"] == "vidaxl_api"
 
 
+def test_vidaxl_feed_path_reads_local_csv(monkeypatch, tmp_path):
+    """无 API 凭据时，VIDAXL_US_FEED_URL 可直接作为 US fallback 数据源。"""
+    monkeypatch.delenv("VIDAXL_API_EMAIL", raising=False)
+    monkeypatch.delenv("VIDAXL_API_TOKEN", raising=False)
+    feed = tmp_path / "vidaxl_us.csv"
+    feed.write_text(
+        "sku,title,price,srp,currency,stock,image_url,category,url\n"
+        "US123,vidaXL US Patio Chair,49.99,69.99,USD,12,"
+        "https://cdn.example.com/us123.jpg,Patio,"
+        "https://www.vidaxl.com/e/us123.html\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VIDAXL_US_FEED_URL", str(feed))
+
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    crawler = VidaxlCrawler(Site(
+        site="vidaxl_us",
+        brand="Vidaxl",
+        country="US",
+        url="https://www.vidaxl.com/",
+        platform="vidaxl",
+        proxy_tier="residential",
+    ))
+
+    result = crawler.crawl()
+
+    assert len(result.products) == 1
+    row = result.products[0]
+    assert row["sku"] == "US123"
+    assert row["title"] == "vidaXL US Patio Chair"
+    assert row["currency"] == "USD"
+    assert row["sale_price"] == 49.99
+    assert row["original_price"] == 69.99
+    assert row["inventory"] == 12
+    assert row["site"] == "vidaxl_us"
+    assert "官方 Feed" in " ".join(result.notes)
+
+
+def test_vidaxl_feed_path_reads_site_crawler_config(monkeypatch, tmp_path):
+    """站点 crawler_config.feed_url 可作为后台配置的 vidaXL feed 入口。"""
+    monkeypatch.delenv("VIDAXL_API_EMAIL", raising=False)
+    monkeypatch.delenv("VIDAXL_API_TOKEN", raising=False)
+    monkeypatch.delenv("VIDAXL_US_FEED_URL", raising=False)
+    monkeypatch.delenv("VIDAXL_FEED_URL", raising=False)
+    feed = tmp_path / "vidaxl_us_config.csv"
+    feed.write_text(
+        "ean,name,price,currency,quantity,image,category\n"
+        "CFG123,Configured Feed Chair,39.50,USD,7,"
+        "https://cdn.example.com/cfg123.jpg,Outdoor\n",
+        encoding="utf-8",
+    )
+
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    crawler = VidaxlCrawler(Site(
+        site="vidaxl_us",
+        brand="Vidaxl",
+        country="US",
+        url="https://www.vidaxl.com/",
+        platform="vidaxl",
+        proxy_tier="residential",
+        crawler_config={"feed_url": str(feed)},
+    ))
+
+    result = crawler.crawl()
+
+    assert len(result.products) == 1
+    assert result.products[0]["sku"] == "CFG123"
+    assert result.products[0]["inventory"] == 7
+    assert result.products[0]["category_path"] == "Outdoor"
+
+
 # ---------------------------------------------------------------------------
 # Test 2: _map_api 直接单元测试（解析不退化）
 # ---------------------------------------------------------------------------

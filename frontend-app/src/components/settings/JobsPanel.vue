@@ -12,23 +12,45 @@ defineProps<{
 
 const jobs = ref<Record<string, any>[]>([])
 const diagnostics = ref<Record<string, any> | null>(null)
+const jobSummary = ref<Record<string, any>>({})
+const jobTotal = ref(0)
 const error = ref('')
 const loading = ref(false)
 const pageSize = ref(80)
-const runningCount = computed(() => jobs.value.filter((j) => j.status === 'running').length)
-const successCount = computed(() => jobs.value.filter((j) => ['success', 'completed'].includes(j.status)).length)
+const page = ref(1)
+const runningCount = computed(() => Number(jobSummary.value.running ?? jobs.value.filter((j) => j.status === 'running').length))
+const successCount = computed(() => Number(jobSummary.value.success ?? jobs.value.filter((j) => ['success', 'completed'].includes(j.status)).length))
+const totalPages = computed(() => Math.max(1, Math.ceil(jobTotal.value / Number(pageSize.value || 80))))
+const pageStart = computed(() => jobs.value.length ? (page.value - 1) * Number(pageSize.value || 80) + 1 : 0)
+const pageEnd = computed(() => jobs.value.length ? pageStart.value + jobs.value.length - 1 : 0)
 
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    jobs.value = asList(await listJobs({ limit: pageSize.value }), ['jobs', 'items'])
+    const jobData = await listJobs({ limit: pageSize.value, page: page.value })
+    jobs.value = asList(jobData, ['jobs', 'items'])
+    jobTotal.value = Number(jobData?.total ?? jobs.value.length)
+    page.value = Math.min(Math.max(1, Number(jobData?.page ?? page.value)), totalPages.value)
+    jobSummary.value = jobData?.summary || {}
     diagnostics.value = await crawlDiagnostics({ limit: 8 }).catch(() => null)
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
     loading.value = false
   }
+}
+
+function resetPageAndLoad() {
+  page.value = 1
+  load()
+}
+
+function changePage(delta: number) {
+  const next = Math.min(totalPages.value, Math.max(1, page.value + delta))
+  if (next === page.value) return
+  page.value = next
+  load()
 }
 
 function fmtJobTime(value?: string | null) {
@@ -51,15 +73,24 @@ onMounted(load)
 <template>
   <section :class="{ 'jobs-panel-embedded': embedded }">
     <div v-if="!embedded" class="lead">采集任务 · 进程状态</div>
-    <div class="sub">{{ runningCount }} 跑中 · {{ successCount }} 成功 · 共 {{ jobs.length }} 显示</div>
+    <div class="sub">
+      {{ runningCount }} 跑中 · {{ successCount }} 成功 · 共 {{ jobTotal }} 条 ·
+      当前 {{ pageStart }}-{{ pageEnd }} 条 · 第 {{ page }} / {{ totalPages }} 页
+    </div>
     <UAlert v-if="error" color="error" variant="soft" :title="error" class="mb-4" />
     <div class="jobs-toolbar">
       <button class="btn-go" :disabled="loading" @click="load">{{ loading ? '刷新中...' : '刷新' }}</button>
-      <select v-model="pageSize" @change="load">
-        <option :value="40">最近 40 条</option>
-        <option :value="80">最近 80 条</option>
-        <option :value="120">最近 120 条</option>
+      <select v-model="pageSize" @change="resetPageAndLoad">
+        <option :value="40">每页 40 条</option>
+        <option :value="80">每页 80 条</option>
+        <option :value="120">每页 120 条</option>
+        <option :value="200">每页 200 条</option>
       </select>
+      <div class="jobs-pager">
+        <button type="button" :disabled="loading || page <= 1" @click="changePage(-1)">上一页</button>
+        <span>{{ page }} / {{ totalPages }}</span>
+        <button type="button" :disabled="loading || page >= totalPages" @click="changePage(1)">下一页</button>
+      </div>
     </div>
     <div v-if="diagnostics?.failure_counts && Object.keys(diagnostics.failure_counts).length" class="diag-strip">
       <span class="diag-title">失败分布</span>
@@ -109,6 +140,25 @@ onMounted(load)
   background: var(--ui-card-soft);
   color: var(--ui-heading);
   padding: 0 10px;
+}
+.jobs-pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ui-muted);
+  font-size: 13px;
+}
+.jobs-pager button {
+  height: 34px;
+  border: 1px solid var(--ui-border);
+  border-radius: 7px;
+  background: var(--ui-card-soft);
+  color: var(--ui-heading);
+  padding: 0 10px;
+}
+.jobs-pager button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
 }
 .job-row {
   grid-template-columns: 70px minmax(120px, 1fr) 110px 80px 85px minmax(120px, .9fr) minmax(260px, 1.5fr) minmax(150px, 1fr);

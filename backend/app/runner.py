@@ -24,13 +24,49 @@ from .crawl_diagnostics import (
 from .crawlers.registry import get_crawler
 from .db import session_scope
 from .models import Category, CrawlJob, Product, Promotion, Site
+from .pipeline import parse_dt, to_price
+from .price_sources import enrich_products_from_site_config
 
 _PROMO_KEYWORDS = re.compile(
     r"\b("
     r"sale|deal|discount|promo|promotion|coupon|clearance|save|off|"
-    r"black\s*friday|cyber\s*monday|flash|limited|特价|促销|优惠|折扣|券"
+    r"black\s*friday|cyber\s*monday|flash|limited|"
+    r"rabatt|aktion|angebot|gutschein|"
+    r"remise|soldes|réduction|reduction|"
+    r"sconto|offerta|descuento|oferta|cupon|cupón|"
+    r"korting|aanbieding|promoção|promocao|desconto|"
+    r"rabat|zniżka|znizka|wyprzedaż|wyprzedaz|"
+    r"特价|促销|优惠|折扣|券"
     r")\b",
     re.IGNORECASE,
+)
+_PROMO_ATTR_KEY = re.compile(
+    r"(promo|promotion|coupon|discount|deal|sale|offer|badge|label|"
+    r"savings|saving)",
+    re.IGNORECASE,
+)
+_PERCENT_DISCOUNT_RE = re.compile(r"(\d{1,2}(?:\.\d+)?)\s*%\s*(?:off|discount|save)?", re.I)
+_PROMO_NAME_KEYS = (
+    "promotion_name", "promo_name", "campaign_name", "offer_name",
+    "coupon_name", "deal_name", "sale_name", "badge", "label",
+)
+_PROMO_TYPE_KEYS = (
+    "promotion_type", "promo_type", "offer_type", "coupon_type",
+    "deal_type", "discount_type",
+)
+_PROMO_THRESHOLD_KEYS = (
+    "threshold", "promotion_threshold", "promo_threshold",
+    "minimum_order", "minimum_order_value", "min_order", "min_spend",
+    "condition", "conditions", "coupon_condition", "offer_condition",
+)
+_PROMO_START_KEYS = (
+    "start_time", "starts_at", "start_at", "start_date",
+    "promotion_start", "promo_start", "valid_from", "validfrom", "from_date",
+)
+_PROMO_END_KEYS = (
+    "end_time", "ends_at", "end_at", "end_date",
+    "promotion_end", "promo_end", "valid_until", "valid_to",
+    "valid_through", "validthrough", "to_date",
 )
 
 HIGH_PRIORITY_TRIGGERS = ("manual", "admin_quality_rerun", "admin_retry")
@@ -159,7 +195,20 @@ def execute_job(job_id: int) -> dict:
 
     with session_scope() as s:
         from .pipeline import upsert_products
-        stats = upsert_products(s, site_name, result.products)
+        site = s.query(Site).filter(Site.site == site_name).first()
+        products, price_source_stats = enrich_products_from_site_config(
+            site, result.products, counter=getattr(crawler, "counter", None))
+        if price_source_stats.get("applied"):
+            result.notes.append(
+                "configured_price_source: "
+                f"matched={price_source_stats['matched']}, "
+                f"updated={price_source_stats['updated']}, "
+                f"rows={price_source_stats['rows']}"
+            )
+        elif price_source_stats.get("error"):
+            result.notes.append(
+                f"configured_price_source_failed: {price_source_stats['error']}")
+        stats = upsert_products(s, site_name, products)
         _save_categories(s, site_name, result.categories)
         s.flush()
         promo_count = _detect_promotions(s, site_name)
@@ -176,7 +225,6 @@ def execute_job(job_id: int) -> dict:
             (stats["inserted"] + stats["updated"]) / total * 100, 1)
         duration = job.duration_sec
 
-        site = s.query(Site).filter(Site.site == site_name).first()
         site.last_crawled = datetime.utcnow()
         site.updated_at = datetime.utcnow()
         produced = stats["inserted"] + stats["updated"]
@@ -195,6 +243,8 @@ def execute_job(job_id: int) -> dict:
                 "; ".join(result.notes[-3:]) if result.notes else "",
             )
             record_failure(s, site=site_name, job_id=job_id, info=info)
+        if produced > 0 and job.failure_code:
+            job.status = "partial"
         ws_id = job.requested_by_workspace_id
 
     counter = getattr(crawler, "counter", None)
@@ -205,12 +255,22 @@ def execute_job(job_id: int) -> dict:
         api_calls=getattr(counter, "api_calls", 0),
         browser_opens=getattr(counter, "browser_opens", 0),
     )
-    return {
+    payload = {
         "job_id": job_id, "site": site_name, "status": job.status,
         "products": stats["inserted"] + stats["updated"], "new": stats["new"],
         "promotions": promo_count, "notes": result.notes,
         "duration_sec": round(duration, 1),
     }
+    if job.status != "success":
+        payload["error"] = (
+            job.failure_detail or job.error or "; ".join(result.notes[-3:])
+            or "本次抓取未产出有效商品"
+        )
+        payload["failure_code"] = job.failure_code
+        payload["failure_stage"] = job.failure_stage
+        payload["retryable"] = job.retryable
+        payload["suggested_action"] = job.suggested_action
+    return payload
 
 
 def run_site(site_name: str) -> dict:
@@ -235,7 +295,7 @@ def _save_categories(s, site_name: str, cats: list[dict]) -> None:
 
 
 def _detect_promotions(s, site_name: str) -> int:
-    """促销识别 —— 价格降价 + 站点标签里的明确促销活动。"""
+    """促销识别 —— 价格降价 + 站点标签/属性里的明确促销活动。"""
     s.query(Promotion).filter(Promotion.site == site_name).delete()
     rows = (s.query(Product)
             .filter(Product.site == site_name)
@@ -243,6 +303,7 @@ def _detect_promotions(s, site_name: str) -> int:
                 Product.original_price > Product.sale_price,
                 Product.label.isnot(None),
                 Product.tags.isnot(None),
+                Product.attributes.isnot(None),
             ))
             .all())
     count = 0
@@ -257,19 +318,49 @@ def _detect_promotions(s, site_name: str) -> int:
         discount = None
         if has_price_promo and p.original_price:
             discount = round((p.original_price - p.sale_price) / p.original_price * 100)
+        if discount is None and label:
+            discount = _discount_from_text(label)
+        meta_entries = _promotion_meta_entries(p)
+        if not has_price_promo and not label and not meta_entries:
+            continue
+        meta_entries = meta_entries or [_promotion_meta(p)]
         img = p.image_urls[0] if p.image_urls else None
-        s.add(Promotion(
-            sku=p.sku, site=site_name,
-            promotion_type="price_promotion" if has_price_promo else "site_promotion",
-            promotion_name=label, original_price=p.original_price,
-            promotion_price=p.sale_price, discount_percent=discount,
-            product_title=p.title, product_image=img,
-        ))
-        count += 1
+        for meta in meta_entries:
+            meta_label = meta.get("_label") or label
+            meta_original = meta.get("original_price")
+            meta_promo_price = meta.get("promotion_price")
+            meta_discount = meta.get("discount_percent")
+            promo_type = meta.get("promotion_type") or (
+                "price_promotion" if has_price_promo
+                else _promotion_type_from_text(str(meta_label or ""))
+            )
+            promo_name = meta.get("promotion_name") or meta_label or promo_type
+            s.add(Promotion(
+                sku=p.sku, site=site_name,
+                promotion_type=promo_type,
+                promotion_name=str(promo_name)[:160],
+                original_price=meta_original if meta_original is not None else p.original_price,
+                promotion_price=meta_promo_price if meta_promo_price is not None else p.sale_price,
+                discount_percent=meta_discount if meta_discount is not None else discount,
+                threshold=meta.get("threshold"),
+                start_time=meta.get("start_time"),
+                end_time=meta.get("end_time"),
+                product_title=p.title, product_image=img,
+            ))
+            count += 1
     return count
 
 
 def _promotion_label(product: Product) -> str | None:
+    values = _promotion_values(product)
+    for value in values:
+        text = value.strip()
+        if text and _PROMO_KEYWORDS.search(text):
+            return text[:120]
+    return None
+
+
+def _promotion_values(product: Product) -> list[str]:
     values = []
     if product.label:
         values.append(str(product.label))
@@ -279,9 +370,242 @@ def _promotion_label(product: Product) -> str | None:
     elif isinstance(tags, (list, tuple, set)):
         values.extend(str(v) for v in tags if v)
     elif isinstance(tags, dict):
-        values.extend(str(v) for v in tags.values() if v)
-    for value in values:
-        text = value.strip()
-        if text and _PROMO_KEYWORDS.search(text):
-            return text[:120]
+        for key, value in tags.items():
+            if _PROMO_ATTR_KEY.search(str(key)) or (
+                isinstance(value, str) and _PROMO_KEYWORDS.search(value)
+            ):
+                values.append(str(value))
+    attrs = product.attributes or {}
+    if isinstance(attrs, dict):
+        for key, value in attrs.items():
+            if value in (None, "", [], {}):
+                continue
+            if _PROMO_ATTR_KEY.search(str(key)):
+                if isinstance(value, (list, tuple, set)):
+                    values.extend(str(v) for v in value if v not in (None, ""))
+                elif isinstance(value, dict):
+                    values.extend(str(v) for v in value.values()
+                                  if isinstance(v, str) and _PROMO_KEYWORDS.search(v))
+                else:
+                    values.append(str(value))
+            elif isinstance(value, str) and _PROMO_KEYWORDS.search(value):
+                values.append(value)
+            elif isinstance(value, (list, tuple, set)):
+                values.extend(str(v) for v in value
+                              if isinstance(v, str) and _PROMO_KEYWORDS.search(v))
+    elif isinstance(attrs, str) and _PROMO_KEYWORDS.search(attrs):
+        values.append(attrs)
+    return values
+
+
+def _promotion_meta(product: Product) -> dict:
+    data = _flatten_promo_sources(product)
+    label = _promotion_label(product)
+    return _promotion_meta_from_mapping(data, label)
+
+
+def _promotion_meta_from_mapping(data: dict[str, object],
+                                 label: str | None = None) -> dict:
+    threshold = _first_meta_value(data, _PROMO_THRESHOLD_KEYS)
+    if threshold is None and label:
+        threshold = _threshold_from_text(label)
+    promo_type = _first_meta_value(data, _PROMO_TYPE_KEYS)
+    if promo_type is None and label:
+        promo_type = _promotion_type_from_text(label)
+    return {
+        "promotion_name": _first_meta_value(data, _PROMO_NAME_KEYS),
+        "promotion_type": promo_type,
+        "threshold": str(threshold).strip()[:160] if threshold not in (None, "") else None,
+        "start_time": _first_meta_datetime(data, _PROMO_START_KEYS),
+        "end_time": _first_meta_datetime(data, _PROMO_END_KEYS),
+        "original_price": _first_meta_price(data, (
+            "original_price", "pre_price", "was_price", "high_price",
+            "highprice", "regular_price", "list_price", "compare_at_price",
+            "msrp", "rrp",
+        )),
+        "promotion_price": _first_meta_price(data, (
+            "promotion_price", "post_price", "sale_price", "price",
+            "low_price", "lowprice", "offer_price", "discount_price",
+            "final_price", "current_price",
+        )),
+        "discount_percent": _first_discount_percent(data, label),
+        "_label": label,
+    }
+
+
+def _promotion_meta_entries(product: Product) -> list[dict]:
+    entries = []
+    for item in _explicit_promotion_items(product):
+        data = _flatten_mapping(item)
+        label = _entry_label(item)
+        meta = _promotion_meta_from_mapping(data, label)
+        if not meta.get("promotion_name") and label:
+            meta["promotion_name"] = label
+        if _promotion_meta_has_signal(meta):
+            entries.append(meta)
+    return entries
+
+
+def _explicit_promotion_items(product: Product) -> list[dict]:
+    items: list[dict] = []
+
+    def scan(value) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                key_text = str(key or "").lower()
+                if isinstance(item, list) and (
+                    _PROMO_ATTR_KEY.search(key_text)
+                    or key_text in {"promotions", "promotion", "offers", "coupons", "deals"}
+                ):
+                    for child in item:
+                        if isinstance(child, dict):
+                            items.append(child)
+                elif isinstance(item, dict):
+                    scan(item)
+        elif isinstance(value, list):
+            for child in value:
+                if isinstance(child, dict) and _entry_label(child):
+                    items.append(child)
+
+    scan(product.attributes or {})
+    scan(product.tags or {})
+    return items
+
+
+def _promotion_meta_has_signal(meta: dict) -> bool:
+    original = meta.get("original_price")
+    promo = meta.get("promotion_price")
+    if original is not None and promo is not None and original > promo:
+        return True
+    for key in ("promotion_name", "promotion_type", "threshold",
+                "start_time", "end_time", "discount_percent"):
+        if meta.get(key) not in (None, "", [], {}):
+            return True
+    label = str(meta.get("_label") or "")
+    return bool(label and _PROMO_KEYWORDS.search(label))
+
+
+def _entry_label(item: dict) -> str | None:
+    for key in (*_PROMO_NAME_KEYS, "name", "title", "label", "text", "description"):
+        value = item.get(key)
+        if value not in (None, "", [], {}):
+            return str(value).strip()[:160]
+    text = " ".join(str(v) for v in item.values()
+                    if isinstance(v, (str, int, float)) and v not in (None, ""))
+    return text[:160] if text and _PROMO_KEYWORDS.search(text) else None
+
+
+def _flatten_promo_sources(product: Product) -> dict[str, object]:
+    out: dict[str, object] = {}
+
+    def add_mapping(prefix: str, value) -> None:
+        if not isinstance(value, dict):
+            return
+        for key, item in value.items():
+            key_text = str(key or "").strip().lower()
+            if not key_text:
+                continue
+            out[key_text] = item
+            out[f"{prefix}_{key_text}"] = item
+
+    add_mapping("attr", product.attributes or {})
+    add_mapping("tag", product.tags or {})
+    if product.label:
+        out["label"] = product.label
+    return out
+
+
+def _flatten_mapping(value: dict, prefix: str = "") -> dict[str, object]:
+    out: dict[str, object] = {}
+    for key, item in value.items():
+        key_text = str(key or "").strip().lower()
+        if not key_text:
+            continue
+        full_key = f"{prefix}_{key_text}" if prefix else key_text
+        if isinstance(item, dict):
+            out.update(_flatten_mapping(item, full_key))
+        else:
+            out[key_text] = item
+            out[full_key] = item
+    return out
+
+
+def _first_meta_value(data: dict[str, object], keys: tuple[str, ...]):
+    for key in keys:
+        for candidate in (key, f"promo_{key}", f"promotion_{key}", f"coupon_{key}"):
+            if candidate in data and data[candidate] not in (None, "", [], {}):
+                value = data[candidate]
+                if isinstance(value, (list, tuple, set)):
+                    value = next((v for v in value if v not in (None, "")), None)
+                if isinstance(value, dict):
+                    value = value.get("label") or value.get("name") or value.get("value")
+                if value not in (None, ""):
+                    return value
+    return None
+
+
+def _first_meta_datetime(data: dict[str, object], keys: tuple[str, ...]):
+    value = _first_meta_value(data, keys)
+    return parse_dt(value)
+
+
+def _first_meta_price(data: dict[str, object], keys: tuple[str, ...]) -> float | None:
+    value = _first_meta_value(data, keys)
+    return to_price(value)
+
+
+def _first_discount_percent(data: dict[str, object], label: str | None = None) -> int | None:
+    value = _first_meta_value(data, ("discount_percent", "discount", "saving", "savings"))
+    if isinstance(value, (int, float)) and 0 < float(value) < 100:
+        return round(float(value))
+    text_value = str(value or label or "")
+    return _discount_from_text(text_value)
+
+
+def _promotion_type_from_text(text: str | None) -> str:
+    lowered = (text or "").lower()
+    if (
+        "coupon" in lowered or "code" in lowered or "gutschein" in lowered
+        or "cupón" in lowered or "cupon" in lowered or "券" in lowered
+    ):
+        return "coupon"
+    if "bundle" in lowered or "buy" in lowered:
+        return "bundle"
+    if "clearance" in lowered or "wyprzeda" in lowered or "soldes" in lowered:
+        return "clearance"
+    if (
+        "sale" in lowered or "price" in lowered or "off" in lowered
+        or "rabatt" in lowered or "remise" in lowered
+        or "réduction" in lowered or "reduction" in lowered
+        or "sconto" in lowered or "descuento" in lowered
+        or "korting" in lowered or "desconto" in lowered
+        or "rabat" in lowered or "zniżka" in lowered or "znizka" in lowered
+    ):
+        return "price_promotion"
+    return "site_promotion"
+
+
+def _threshold_from_text(text: str | None) -> str | None:
+    raw = text or ""
+    patterns = (
+        r"(?:orders?|order|spend|minimum|min\.?)\s*(?:over|above|of|from|>=)?\s*([$€£¥]?\s*\d[\d\s\u00a0.,]*)",
+        r"(?:满|订单满)\s*([$€£¥]?\s*\d[\d\s\u00a0.,]*)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, raw, re.I)
+        if match:
+            amount = match.group(1).strip()
+            return f"orders over {amount}"
+    return None
+
+
+def _discount_from_text(text: str) -> int | None:
+    match = _PERCENT_DISCOUNT_RE.search(text or "")
+    if match:
+        try:
+            value = float(match.group(1))
+        except ValueError:
+            value = None
+        if value is not None and 0 < value < 100:
+            return round(value)
     return None

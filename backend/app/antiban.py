@@ -20,6 +20,7 @@ RATE_TIERS = {
     "shopify": 1.0,
     "vue_spa": 1.5,
     "nuxt": 2.0,
+    "shoper": 0.35,
     "generic": 2.0,
     "flexispot": 2.0,
     "vonhaus": 2.0,

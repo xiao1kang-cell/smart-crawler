@@ -7,10 +7,12 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 use([CanvasRenderer, LineChart, GridComponent, LegendComponent, TooltipComponent, DataZoomComponent])
 
+type TrendSeriesMeta = { key: string; name: string; color: string; yAxisIndex?: number }
+
 const props = withDefaults(defineProps<{
   rows: Record<string, any>[]
   height?: number
-  series?: { key: string; name: string; color: string; yAxisIndex?: number }[]
+  series?: TrendSeriesMeta[]
 }>(), {
   height: 320,
 })
@@ -19,13 +21,14 @@ const chartEl = ref<HTMLDivElement | null>(null)
 let chart: ECharts | null = null
 let resizeObserver: ResizeObserver | null = null
 
-const defaultSeriesMeta = [
-  { key: 'sku_count', name: '库存单位', color: '#3b82f6' },
-  { key: 'new_product_count', name: '新SKU', color: '#10b981' },
-  { key: 'estimated_sales', name: '销售', color: '#f59e0b' },
-  { key: 'estimated_revenue', name: '收入', color: '#ef4444' },
-  { key: 'review_total', name: '评论数', color: '#8b5cf6' },
-  { key: 'avg_rating', name: '评分(0-5)', color: '#ec4899', yAxisIndex: 1 },
+const defaultSeriesMeta: TrendSeriesMeta[] = [
+  { key: 'sku_count', name: 'SKU', color: '#3b82f6' },
+  { key: 'new_product_count', name: 'New Products', color: '#10b981' },
+  { key: 'estimated_sales', name: 'Sales', color: '#f59e0b' },
+  { key: 'estimated_revenue', name: 'Revenues', color: '#ef4444' },
+  { key: 'traffic', name: 'Traffic', color: '#14b8a6' },
+  { key: 'conversion_rate', name: 'Conversion Rate', color: '#6366f1' },
+  { key: 'review_total', name: 'Reviews', color: '#8b5cf6' },
 ]
 
 function isDarkTheme() {
@@ -35,8 +38,8 @@ function isDarkTheme() {
 function buildOption(): EChartsCoreOption {
   const seriesMeta = props.series?.length ? props.series : defaultSeriesMeta
   const dark = isDarkTheme()
-  const axisColor = dark ? '#6b6480' : '#9ca3af'
-  const textColor = dark ? '#94a3b8' : '#6b7280'
+  const axisColor = dark ? '#aab4c8' : '#9ca3af'
+  const textColor = dark ? '#d5dcec' : '#6b7280'
   const gridColor = dark ? '#29213a' : '#e5e7eb'
   const tooltipBg = dark ? 'rgba(19,17,31,.96)' : 'rgba(255,255,255,.98)'
   const tooltipBorder = dark ? '#3d2d5a' : '#e5e7eb'

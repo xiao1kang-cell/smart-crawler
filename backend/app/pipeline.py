@@ -10,11 +10,16 @@ from datetime import date, datetime
 
 from sqlalchemy.orm import Session
 
+from .currency import normalize_currency_for_site
 from .models import PriceHistory, Product
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
-_PRICE_RE = re.compile(r"[-+]?\d[\d,]*\.?\d*")
+_PRICE_RE = re.compile(r"[-+]?\d[\d\s\u00a0.,]*")
+_WEAK_TITLE_RE = re.compile(
+    r"^(product|item|sku|untitled|detail|details|view product|shop now)$",
+    re.I,
+)
 _PRESERVE_ON_EMPTY = {
     "title",
     "description",
@@ -40,6 +45,14 @@ _PRESERVE_ON_EMPTY = {
     "return_policy_days",
     "published_at",
 }
+_SALE_PRICE_ALIASES = (
+    "sale_price", "price", "current_price", "final_price",
+    "discount_price", "promotion_price", "promo_price",
+)
+_ORIGINAL_PRICE_ALIASES = (
+    "original_price", "list_price", "was_price", "regular_price",
+    "compare_at_price", "msrp", "rrp", "pre_price",
+)
 
 
 def clean_text(value):
@@ -57,8 +70,45 @@ def to_price(value):
         return None
     if isinstance(value, (int, float)):
         return round(float(value), 2)
-    m = _PRICE_RE.search(str(value).replace(",", ""))
-    return round(float(m.group()), 2) if m else None
+    m = _PRICE_RE.search(str(value))
+    if not m:
+        return None
+    text = m.group().replace("\u00a0", " ").replace(" ", "")
+    if not text or not re.search(r"\d", text):
+        return None
+    sign = "-" if text.startswith("-") else ""
+    text = text.lstrip("+-")
+    comma = text.rfind(",")
+    dot = text.rfind(".")
+    if comma >= 0 and dot >= 0:
+        decimal_sep = "," if comma > dot else "."
+        thousands_sep = "." if decimal_sep == "," else ","
+        text = text.replace(thousands_sep, "")
+        if decimal_sep == ",":
+            text = text.replace(",", ".")
+    elif comma >= 0:
+        text = _normalize_single_separator_price(text, ",")
+    elif dot >= 0:
+        text = _normalize_single_separator_price(text, ".")
+    try:
+        return round(float(f"{sign}{text}"), 2)
+    except ValueError:
+        return None
+
+
+def _normalize_single_separator_price(text: str, sep: str) -> str:
+    parts = text.split(sep)
+    if len(parts) == 2:
+        before, after = parts
+        if len(after) == 3 and 1 <= len(before) <= 3:
+            return before + after
+        if 1 <= len(after) <= 2:
+            return before + "." + after
+    if len(parts) > 2:
+        tail = parts[-1]
+        if 1 <= len(tail) <= 2:
+            return "".join(parts[:-1]) + "." + tail
+    return "".join(parts)
 
 
 def parse_dt(value):
@@ -90,14 +140,21 @@ def normalize(raw: dict) -> dict:
     p = dict(raw)
     p["title"] = clean_text(p.get("title"))
     p["description"] = clean_text(p.get("description"))
-    p["sale_price"] = to_price(p.get("sale_price"))
-    p["original_price"] = to_price(p.get("original_price"))
+    p["sale_price"] = _first_price(p, _SALE_PRICE_ALIASES)
+    p["original_price"] = _first_price(p, _ORIGINAL_PRICE_ALIASES)
     if p["sale_price"] is None and p["original_price"] is not None:
         p["sale_price"] = p["original_price"]
-    if p["original_price"] is None and p["sale_price"] is not None:
-        p["original_price"] = p["sale_price"]
+    p["currency"] = normalize_currency_for_site(p.get("currency"), p.get("site"))
     p["published_at"] = parse_dt(p.get("published_at"))
     return p
+
+
+def _first_price(raw: dict, keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        value = to_price(raw.get(key))
+        if value is not None:
+            return value
+    return None
 
 
 def is_valid(p: dict) -> bool:
@@ -143,6 +200,8 @@ def upsert_products(session: Session, site: str, items: list[dict]) -> dict:
             for k, v in _product_kwargs(p).items():
                 if k in ("created_time",):
                     continue
+                if k == "title":
+                    v = _best_title(getattr(row, k, None), v, sku)
                 if k in _PRESERVE_ON_EMPTY and _is_empty(v):
                     current = getattr(row, k, None)
                     if not _is_empty(current):
@@ -165,6 +224,33 @@ def _product_kwargs(p: dict) -> dict:
 
 def _is_empty(value) -> bool:
     return value is None or value == "" or value == [] or value == {}
+
+
+def _best_title(current, incoming, sku: str | None):
+    if _is_empty(incoming):
+        return current
+    if _is_empty(current):
+        return incoming
+    cur = str(current).strip()
+    new = str(incoming).strip()
+    if _is_weak_title(new, sku) and not _is_weak_title(cur, sku):
+        return current
+    if _is_weak_title(cur, sku) and not _is_weak_title(new, sku):
+        return incoming
+    if len(new) > len(cur) * 1.35 and len(new) - len(cur) >= 12:
+        return incoming
+    return incoming
+
+
+def _is_weak_title(value: str | None, sku: str | None = None) -> bool:
+    if not value:
+        return True
+    text = str(value).strip()
+    if len(text) < 4:
+        return True
+    if sku and text.lower() == str(sku).strip().lower():
+        return True
+    return bool(_WEAK_TITLE_RE.match(text))
 
 
 def _upsert_price_history(

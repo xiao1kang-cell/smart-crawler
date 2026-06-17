@@ -15,7 +15,7 @@ from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import Product, Site, Workspace, WorkspaceMember, WorkspaceSite
+from ..models import CrawlJob, Product, Site, Workspace, WorkspaceMember, WorkspaceSite
 from ..crawlers.detect import detect_platform
 from ..runner import enqueue
 from .routes import (require_user, _current_workspace, _require_dashboard_user,
@@ -35,7 +35,9 @@ def _empty_metrics() -> dict:
         "thirty_day_sales": 0,
         "thirty_day_revenue": 0,
         "sales_signal_count": 0,
+        "revenue_signal_count": 0,
         "sales_available": False,
+        "revenue_available": False,
         "last_product_updated": None,
     }
 
@@ -56,17 +58,21 @@ def _metrics_for_sites(db: Session, sites: list[str]) -> dict[str, dict]:
         func.coalesce(func.sum(Product.thirty_day_sales), 0),
         func.coalesce(func.sum(Product.thirty_day_revenue), 0.0),
         func.count(Product.id).filter(func.coalesce(Product.thirty_day_sales, 0) > 0),
+        func.count(Product.id).filter(func.coalesce(Product.thirty_day_revenue, 0) > 0),
         func.max(Product.updated_time),
     ).filter(Product.site.in_(site_codes)).group_by(Product.site).all()
     out = {site: _empty_metrics() for site in site_codes}
-    for site, sku_count, products, sales, revenue, sales_signal_count, last_updated in rows:
+    for (site, sku_count, products, sales, revenue, sales_signal_count,
+         revenue_signal_count, last_updated) in rows:
         out[site] = {
             "products": int(products or 0),
             "sku_count": int(sku_count or 0),
             "thirty_day_sales": int(sales or 0),
             "thirty_day_revenue": round(revenue or 0, 2),
             "sales_signal_count": int(sales_signal_count or 0),
+            "revenue_signal_count": int(revenue_signal_count or 0),
             "sales_available": bool(sales_signal_count),
+            "revenue_available": bool(revenue_signal_count),
             "last_product_updated": last_updated.isoformat() if last_updated else None,
         }
     return out
@@ -76,8 +82,155 @@ def _metrics(db: Session, site: str) -> dict:
     return _metrics_for_sites(db, [site]).get(site, _empty_metrics())
 
 
+def _compact_error(text: str | None, *, limit: int = 180) -> str | None:
+    if not text:
+        return None
+    first = str(text).strip().splitlines()[0].strip()
+    if len(first) <= limit:
+        return first
+    return first[:limit - 1] + "…"
+
+
+def _latest_jobs_for_sites(db: Session, sites: list[str]) -> dict[str, CrawlJob]:
+    site_codes = sorted(set(sites))
+    if not site_codes:
+        return {}
+    out: dict[str, CrawlJob] = {}
+    for job in (db.query(CrawlJob)
+                .filter(CrawlJob.site.in_(site_codes))
+                .order_by(CrawlJob.site, CrawlJob.id.desc())
+                .all()):
+        out.setdefault(job.site, job)
+    return out
+
+
+def _job_payload(job: CrawlJob | None) -> dict | None:
+    if not job:
+        return None
+    return {
+        "id": job.id,
+        "status": job.status,
+        "trigger": job.trigger,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        "failure_code": job.failure_code,
+        "failure_stage": job.failure_stage,
+        "error": _compact_error(job.failure_detail or job.error),
+        "suggested_action": job.suggested_action,
+    }
+
+
+def _fmt_export_time(value: str | datetime | None) -> str:
+    if not value:
+        return ""
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return str(value)
+    return dt.strftime("%Y-%m-%d %H:%M")
+
+
+_COUNTRY_TLD_ALIASES = {
+    "uk": "UK",
+    "gb": "UK",
+    "ca": "CA",
+    "de": "DE",
+    "fr": "FR",
+    "it": "IT",
+    "es": "ES",
+    "nl": "NL",
+    "ie": "IE",
+    "pt": "PT",
+    "pl": "PL",
+    "ro": "RO",
+    "se": "SE",
+    "ch": "CH",
+    "jp": "JP",
+    "kr": "KR",
+    "cn": "CN",
+    "id": "ID",
+    "mx": "MX",
+    "br": "BR",
+    "au": "AU",
+    "nz": "NZ",
+    "ar": "AR",
+    "cl": "CL",
+    "co": "CO",
+    "my": "MY",
+    "sg": "SG",
+    "vn": "VN",
+    "th": "TH",
+    "ph": "PH",
+    "hk": "HK",
+    "tw": "TW",
+}
+_SECOND_LEVEL_TLDS = {"co", "com", "net", "org", "shop", "store"}
+
+
+def _hostname(url: str) -> str:
+    return urlparse(url if "://" in url else f"https://{url}").netloc.split(":")[0].lower()
+
+
+def _infer_country_from_url(url: str) -> str | None:
+    host = _hostname(url)
+    parts = [part for part in host.split(".") if part]
+    if len(parts) < 2:
+        return None
+    tld = parts[-1]
+    if tld in _COUNTRY_TLD_ALIASES:
+        return _COUNTRY_TLD_ALIASES[tld]
+    if tld == "com":
+        return "US"
+    return None
+
+
+def _infer_brand_from_url(url: str) -> str | None:
+    host = _hostname(url)
+    parts = [part for part in host.split(".") if part]
+    if not parts:
+        return None
+    if parts[0] == "www" and len(parts) > 1:
+        parts = parts[1:]
+    if len(parts) >= 3 and parts[-2] in _SECOND_LEVEL_TLDS:
+        stem = parts[-3]
+    elif len(parts) >= 2:
+        stem = parts[-2]
+    else:
+        stem = parts[0]
+    clean = re.sub(r"[^a-z0-9]+", " ", stem, flags=re.I).strip()
+    return clean[:50] or None
+
+
+def _latest_error_site_codes(db: Session, allowed: list[str]) -> set[str]:
+    allowed_sites = sorted(set(allowed))
+    if not allowed_sites:
+        return set()
+    latest_ids = (
+        db.query(func.max(CrawlJob.id).label("job_id"))
+        .filter(CrawlJob.site.in_(allowed_sites))
+        .group_by(CrawlJob.site)
+        .subquery()
+    )
+    rows = (
+        db.query(CrawlJob.site)
+        .join(latest_ids, CrawlJob.id == latest_ids.c.job_id)
+        .filter(or_(
+            CrawlJob.status.in_(("failed", "blocked")),
+            CrawlJob.failure_code.isnot(None),
+        ))
+        .all()
+    )
+    return {site for (site,) in rows if site}
+
+
 def _apply_tracking_filters(q, search: str | None, market: str | None,
-                            brand: str | None, status: str | None):
+                            brand: str | None, status: str | None,
+                            *, db: Session | None = None,
+                            allowed: list[str] | None = None):
     if search:
         like = f"%{search.strip()}%"
         q = q.filter(or_(Site.url.ilike(like), Site.brand.ilike(like),
@@ -87,7 +240,12 @@ def _apply_tracking_filters(q, search: str | None, market: str | None,
     if brand:
         q = q.filter(Site.brand.ilike(f"%{brand.strip()}%"))
     if status:
-        q = q.filter(Site.track_status == status.strip().lower())
+        normalized = status.strip().lower()
+        if normalized == "error":
+            error_sites = _latest_error_site_codes(db, allowed or []) if db else set()
+            q = q.filter(Site.site.in_(error_sites or ["__no_error_sites__"]))
+        else:
+            q = q.filter(Site.track_status == normalized)
     return q
 
 
@@ -103,11 +261,23 @@ def _tracking_facets(db: Session, allowed: list[str]) -> dict:
     markets = sorted({(country or "").upper() for country, _, _ in rows if country})
     brands = sorted({brand for _, brand, _ in rows if brand}, key=lambda x: x.lower())
     statuses = sorted({(status or "tracking").lower() for _, _, status in rows})
+    if _latest_error_site_codes(db, allowed):
+        statuses = sorted(set(statuses) | {"error"})
     return {"markets": markets, "brands": brands, "statuses": statuses}
 
 
-def tracking_row(db: Session, s: Site, metrics: dict | None = None) -> dict:
+def tracking_row(db: Session, s: Site, metrics: dict | None = None,
+                 latest_job: CrawlJob | None = None) -> dict:
     m = metrics if metrics is not None else _metrics(db, s.site)
+    latest = _job_payload(latest_job)
+    configured_status = s.track_status or "tracking"
+    display_status = (
+        "error"
+        if configured_status != "paused"
+        and latest
+        and (latest.get("status") in {"failed", "blocked"} or latest.get("failure_code"))
+        else configured_status
+    )
     display_updated = (
         s.last_crawled.isoformat() if s.last_crawled else
         m.get("last_product_updated") or
@@ -117,13 +287,17 @@ def tracking_row(db: Session, s: Site, metrics: dict | None = None) -> dict:
         "site": s.site, "brand": s.brand, "country": s.country,
         "url": s.url, "platform": s.platform,
         "currency": _currency_for_site(s.site),
-        "track_status": s.track_status or "tracking",
+        "track_status": configured_status,
+        "display_status": display_status,
         "source": s.source or "yaml", "creator": s.creator,
         "review_rate": s.review_rate,
         "created_at": s.created_at.isoformat() if s.created_at else None,
         "updated_at": s.updated_at.isoformat() if s.updated_at else None,
         "last_crawled": s.last_crawled.isoformat() if s.last_crawled else None,
         "display_updated_at": display_updated,
+        "latest_job": latest,
+        "last_error_code": latest.get("failure_code") if latest else None,
+        "last_error": latest.get("error") if latest else None,
         **m,
     }
 
@@ -155,16 +329,22 @@ def list_tracking(
     db: Session = Depends(get_db),
 ):
     ws = _current_workspace(user, db, x_workspace_id)
-    allowed = _workspace_site_names(db, ws.id, include_hidden=True)
+    allowed = _workspace_site_names(db, ws.id)
     q = db.query(Site).filter(Site.site.in_(allowed))
-    q = _apply_tracking_filters(q, search, market, brand, status)
+    q = _apply_tracking_filters(q, search, market, brand, status,
+                                db=db, allowed=allowed)
     total = q.count()
     rows = (_tracking_order(q)
             .offset((page - 1) * page_size).limit(page_size).all())
-    metrics = _metrics_for_sites(db, [s.site for s in rows])
+    row_sites = [s.site for s in rows]
+    metrics = _metrics_for_sites(db, row_sites)
+    latest_jobs = _latest_jobs_for_sites(db, row_sites)
     return {"total": total, "page": page, "page_size": page_size,
             "facets": _tracking_facets(db, allowed),
-            "items": [tracking_row(db, s, metrics.get(s.site)) for s in rows]}
+            "items": [
+                tracking_row(db, s, metrics.get(s.site), latest_jobs.get(s.site))
+                for s in rows
+            ]}
 
 
 @public_router.get("/tracking/export")
@@ -181,37 +361,35 @@ def export_tracking(
 
     u = _user_from_token(db, token)
     ws = _current_workspace(u.username, db, str(workspace_id) if workspace_id else None)
-    allowed = _workspace_site_names(db, ws.id, include_hidden=True)
+    allowed = _workspace_site_names(db, ws.id)
     q = db.query(Site).filter(Site.site.in_(allowed))
-    q = _apply_tracking_filters(q, search, market, brand, status)
+    q = _apply_tracking_filters(q, search, market, brand, status,
+                                db=db, allowed=allowed)
     rows = _tracking_order(q).all()
-    metrics = _metrics_for_sites(db, [s.site for s in rows])
+    row_sites = [s.site for s in rows]
+    metrics = _metrics_for_sites(db, row_sites)
+    latest_jobs = _latest_jobs_for_sites(db, row_sites)
 
     wb = Workbook(); sh = wb.active; sh.title = "Tracking"
-    headers = ["Market", "Brand", "URL", "Status", "Products", "SKU Rows",
+    headers = ["Market", "Brand", "URL", "Status", "Products",
                "30-Day Sales", "30-Day Revenue", "Updated Time",
-               "Created Time", "Creator", "Source"]
+               "Created Time", "Creator", "Last Error"]
     sh.append(headers)
     for s in rows:
+        row = tracking_row(db, s, metrics.get(s.site), latest_jobs.get(s.site))
         m = metrics.get(s.site, _empty_metrics())
-        display_updated = (
-            s.last_crawled.isoformat() if s.last_crawled else
-            m.get("last_product_updated") or
-            (s.updated_at.isoformat() if s.updated_at else "")
-        )
-        source = "手动" if (s.source or "yaml") == "user" else "种子"
+        latest = row.get("latest_job")
         currency = _currency_for_site(s.site) or ""
         revenue = ""
-        if m["sales_available"]:
+        if m.get("revenue_available"):
             revenue = f"{currency} {m['thirty_day_revenue']}".strip()
-        sh.append([s.country, s.brand, s.url, s.track_status or "tracking", m["products"],
-                   m["sku_count"],
+        sh.append([s.country, s.brand, s.url, row.get("display_status") or "tracking", m["products"],
                    m["thirty_day_sales"] if m["sales_available"] else "",
                    revenue,
-                   display_updated,
-                   s.created_at.isoformat() if s.created_at else "",
-                   s.creator or "系统",
-                   source])
+                   _fmt_export_time(row.get("display_updated_at")),
+                   _fmt_export_time(row.get("created_at")),
+                   row.get("creator") or "系统",
+                   latest.get("failure_code") if latest else ""])
     buf = io.BytesIO(); wb.save(buf); buf.seek(0)
     return StreamingResponse(
         buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -244,14 +422,14 @@ def add_tracking(
     raw_url = (payload.get("url") or "").strip()
     if not raw_url:
         raise HTTPException(400, "url 不能为空")
-    if len(raw_url) > 150:
-        raise HTTPException(400, "URL 上限 150 字符")
-    brand = (payload.get("brand") or "").strip()[:50] or None
-    country = (payload.get("country") or "").strip()[:8] or None
 
     platform, base = detect_platform(raw_url)
+    if len(base) > 150:
+        raise HTTPException(400, "URL 固定部分上限 150 字符")
     if platform is None:
         platform = "generic"
+    brand = (payload.get("brand") or "").strip()[:50] or _infer_brand_from_url(base)
+    country = (payload.get("country") or "").strip()[:8].upper() or _infer_country_from_url(base)
 
     code = _gen_site_code(db, base, country)
     now = datetime.utcnow()

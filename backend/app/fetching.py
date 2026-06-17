@@ -30,19 +30,35 @@ from .crawl_diagnostics import (
 )
 from .db import SessionLocal
 from .models import Site
-from .proxy_health import record_proxy_result
+from .proxy_health import is_proxy_health_failure, record_proxy_result
 
-_ANTI_BOT_MARKERS = (
-    "captcha",
+_ANTI_BOT_STRONG_MARKERS = (
     "cf-chl",
-    "cloudflare",
-    "access denied",
-    "akamai",
-    "datadome",
-    "robot or human",
-    "verify you are human",
-    "unusual traffic",
+    "/cdn-cgi/challenge-platform/",
     "challenge-platform",
+    "just a moment",
+    "verify you are human",
+    "robot or human",
+    "access denied",
+    "pardon our interruption",
+    "please enable cookies",
+    "px-captcha",
+    "sec-if-cpt",
+    "datadome",
+)
+_ANTI_BOT_WEAK_MARKERS = (
+    "captcha",
+    "cloudflare",
+    "akamai",
+    "unusual traffic",
+)
+_NORMAL_PRODUCT_MARKERS = (
+    "application/ld+json",
+    "schema.org/product",
+    "product:price",
+    "data-price",
+    "__next_data__",
+    "window.__initial_state__",
 )
 
 _STEALTH_FETCHER = "scrapling"
@@ -196,7 +212,10 @@ class CrawlerFetcher:
                 attempt=attempt,
             )
             _record_fetch(ctx, result, kind=kind, source=source)
-            if failure and ctx.fail_fast_blocked and resp.status_code in (401, 403, 429):
+            if failure and ctx.fail_fast_blocked and (
+                resp.status_code in (401, 403, 429)
+                or failure.code == ANTI_BOT_CHALLENGE
+            ):
                 raise BlockedError(f"{url} 返回 {resp.status_code} —— {failure.code}")
             return result
         except BlockedError:
@@ -294,8 +313,9 @@ class ProxyMiddleware:
                        result: FetchResult) -> None:
         if not result.proxy:
             return
-        hard = bool(result.failure and result.failure.http_status in (401, 403, 429))
-        if result.ok:
+        proxy_failed = is_proxy_health_failure(result.failure)
+        hard = bool(result.failure and result.failure.code == "proxy_auth_failed")
+        if result.ok or not proxy_failed:
             proxy_pool.report_success(result.proxy)
         else:
             proxy_pool.report_failure(result.proxy, hard=hard)
@@ -305,7 +325,7 @@ class ProxyMiddleware:
                 db,
                 proxy_url=result.proxy,
                 tier=fetcher.context.site.proxy_tier,
-                success=result.ok,
+                success=result.ok or not proxy_failed,
                 failure=result.failure,
             )
             db.commit()
@@ -386,8 +406,15 @@ def _record_fetch(ctx: FetchContext, result: FetchResult,
 def _looks_like_anti_bot(text: str) -> bool:
     if not text:
         return True
-    sample = text[:8000].lower()
-    return any(marker in sample for marker in _ANTI_BOT_MARKERS)
+    sample = text[:20000].lower()
+    if any(marker in sample for marker in _ANTI_BOT_STRONG_MARKERS):
+        return True
+    has_weak_marker = any(marker in sample for marker in _ANTI_BOT_WEAK_MARKERS)
+    if not has_weak_marker:
+        return False
+    if len(text) >= 80_000:
+        return False
+    return not any(marker in sample for marker in _NORMAL_PRODUCT_MARKERS)
 
 
 def _should_retry(ctx: FetchContext, result: FetchResult,

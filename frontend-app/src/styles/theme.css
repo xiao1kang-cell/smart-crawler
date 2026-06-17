@@ -440,7 +440,7 @@ html[data-theme="dark"] .report-tile .country,html[data-theme="dark"] .report-ti
 html[data-theme="dark"] .report-tile .nums .v.dim{color:#b0a6c7}
 html[data-theme="dark"] .cat-table td,html[data-theme="dark"] .sc-table td,html[data-theme="dark"] .od-table td,html[data-theme="dark"] .job-row,html[data-theme="dark"] .inf-bio,html[data-theme="dark"] .post-info .cap{color:#edf0fb}
 html[data-theme="dark"] input,html[data-theme="dark"] select,html[data-theme="dark"] textarea{color:#fff}
-html[data-theme="dark"] input::placeholder,html[data-theme="dark"] textarea::placeholder{color:#8f86a5}
+html[data-theme="dark"] input::placeholder,html[data-theme="dark"] textarea::placeholder{color:#aab4c8}
 html[data-theme="dark"] .sc-link,html[data-theme="dark"] .key-prefix,html[data-theme="dark"] .cat-table code,html[data-theme="dark"] .cov-tile .num,html[data-theme="dark"] .entry-arrow,html[data-theme="dark"] .answer-head span,html[data-theme="dark"] .docs-list a,html[data-theme="dark"] .inf-contact b{color:#dccfff}
 html[data-theme="dark"] .mini-btn,html[data-theme="dark"] .cov-tile button{color:#dccfff;border-color:rgba(185,148,255,.44);background:rgba(185,148,255,.20)}
 html[data-theme="dark"] .mini-btn:hover,html[data-theme="dark"] .cov-tile button:hover{background:rgba(185,148,255,.30)}
@@ -487,7 +487,7 @@ html[data-theme="dark"] .inf-chip:hover{background:rgba(167,139,250,.10)}
 html[data-theme="dark"] .inf-line{background:#3a2f56}
 html[data-theme="dark"] .report-page{background:#0a0612;color:#e5e7eb}
 html[data-theme="dark"] .crumb{color:#94a3b8}
-html[data-theme="dark"] .last-update{color:#6b6480}
+html[data-theme="dark"] .last-update{color:#b5bfd2}
 html[data-theme="dark"] .site-card{background:linear-gradient(135deg,rgba(167,139,250,.12),rgba(59,124,229,.06));border-color:rgba(167,139,250,.30)}
 html[data-theme="dark"] .site-card h2,html[data-theme="dark"] .site-card .meta b{color:#fff}
 html[data-theme="dark"] .site-card .url{color:#c4b5fd}
@@ -500,20 +500,20 @@ html[data-theme="dark"] .report-page .tab-row button.active{color:#ffffff;border
 html[data-theme="dark"] .report-page .stat{background:#13111f;border-color:#29213a}
 html[data-theme="dark"] .report-page .stat .lbl{color:#94a3b8}
 html[data-theme="dark"] .report-page .stat .val{color:#fff}
-html[data-theme="dark"] .report-page .stat .sub{color:#6b6480}
+html[data-theme="dark"] .report-page .stat .sub{color:#b5bfd2}
 html[data-theme="dark"] .section{background:#13111f;border-color:#29213a}
 html[data-theme="dark"] .section-head{border-bottom-color:#29213a}
 html[data-theme="dark"] .section-head h3{color:#fff}
-html[data-theme="dark"] .section-head .desc{color:#6b6480}
+html[data-theme="dark"] .section-head .desc{color:#b5bfd2}
 html[data-theme="dark"] .legend{color:#94a3b8}
 html[data-theme="dark"] .chart-svg{background:#0d0a17}
 html[data-theme="dark"] .chart-svg .grid{stroke:#29213a}
-html[data-theme="dark"] .chart-svg .axis-label{fill:#6b6480}
-html[data-theme="dark"] .loading{color:#6b6480}
+html[data-theme="dark"] .chart-svg .axis-label{fill:#aab4c8}
+html[data-theme="dark"] .loading{color:#b5bfd2}
 html[data-theme="dark"] .sub-tabs button{background:#13111f;border-color:#29213a;color:#94a3b8}
 html[data-theme="dark"] .sub-tabs button.active{background:rgba(167,139,250,.14);border-color:#a78bfa;color:#c4b5fd}
 html[data-theme="dark"] .search-box{background:#0d0a17;border-color:#29213a;color:#e5e7eb}
-html[data-theme="dark"] .search-box::placeholder{color:#6b6480}
+html[data-theme="dark"] .search-box::placeholder{color:#aab4c8}
 html[data-theme="dark"] .report-page th{background:#0d0a17;color:#94a3b8;border-bottom-color:#29213a}
 html[data-theme="dark"] .report-page td{border-bottom-color:#1f1429;color:#e5e7eb}
 html[data-theme="dark"] .report-page tr:hover td{background:rgba(167,139,250,.05)}
@@ -527,22 +527,39 @@ html[data-theme="dark"] .report-page .filter-grid input,
 html[data-theme="dark"] .report-page .filter-grid select,
 html[data-theme="dark"] .report-page .promo-filters input,
 html[data-theme="dark"] .report-page .promo-filters select,
+html[data-theme="dark"] .report-page .trend-controls input,
+html[data-theme="dark"] .report-page .trend-controls select,
 html[data-theme="dark"] .report-page .filter-actions button{
   background:#0d0a17!important;
   border-color:#3d2d5a!important;
   color:#edf0fb!important;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.03)!important;
 }
-html[data-theme="dark"] .report-page .filter-panel{background:rgba(13,10,23,.82)!important;border-color:#3d2d5a!important}
+html[data-theme="dark"] .report-page .filter-actions button.primary{
+  background:linear-gradient(135deg,#a78bfa,#7c3aed)!important;
+  border-color:transparent!important;
+  color:#fff!important;
+  box-shadow:0 8px 18px rgba(124,58,237,.18)!important;
+}
+html[data-theme="dark"] .report-page .filter-panel,
+html[data-theme="dark"] .report-page .trend-controls,
+html[data-theme="dark"] .report-page .product-trend-kpis div{background:rgba(13,10,23,.82)!important;border-color:#3d2d5a!important}
+html[data-theme="dark"] .report-page .store-trend-table{background:#13111f!important;border-color:#3d2d5a!important}
+html[data-theme="dark"] .report-page .store-trend-table th,
+html[data-theme="dark"] .report-page .store-trend-table .store-trend-title{background:#0d0a17!important;color:#b9aecf!important;border-color:#3d2d5a!important}
+html[data-theme="dark"] .report-page .store-trend-table td{color:#edf0fb!important;border-color:#2c2140!important}
 html[data-theme="dark"] .report-page .promo-filters input::placeholder,
 html[data-theme="dark"] .report-page .filter-grid input::placeholder,
-html[data-theme="dark"] .report-page .search-box::placeholder{color:#8f86a5!important}
+html[data-theme="dark"] .report-page .trend-controls input::placeholder,
+html[data-theme="dark"] .report-page .search-box::placeholder{color:#aab4c8!important}
 html[data-theme="dark"] .report-page .gran-select:focus,
 html[data-theme="dark"] .report-page .search-box:focus,
 html[data-theme="dark"] .report-page .filter-grid input:focus,
 html[data-theme="dark"] .report-page .filter-grid select:focus,
 html[data-theme="dark"] .report-page .promo-filters input:focus,
-html[data-theme="dark"] .report-page .promo-filters select:focus{
+html[data-theme="dark"] .report-page .promo-filters select:focus,
+html[data-theme="dark"] .report-page .trend-controls input:focus,
+html[data-theme="dark"] .report-page .trend-controls select:focus{
   border-color:#a78bfa!important;
   outline:none!important;
 }

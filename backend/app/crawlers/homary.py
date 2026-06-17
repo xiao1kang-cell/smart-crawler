@@ -14,14 +14,17 @@ from __future__ import annotations
 import gzip
 import os
 import re
+import time
 
 from selectolax.parser import HTMLParser
 
+from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
 
 _ID_RE = re.compile(r"-(\d+)\.html")
 _PRICE_RE = re.compile(r"[\d,]+\.?\d*")
 DEFAULT_LIMIT = int(os.environ.get("HOMARY_LIMIT", "150"))
+DEFAULT_MAX_ELAPSED_SEC = int(os.environ.get("HOMARY_MAX_ELAPSED_SEC", "240"))
 
 _CURRENCY = {"US": "USD", "UK": "GBP", "DE": "EUR", "ES": "EUR", "FR": "EUR"}
 
@@ -32,6 +35,7 @@ class HomaryCrawler(BaseCrawler):
     def __init__(self, site, limit: int | None = None):
         super().__init__(site)
         self.limit = self._resolve_limit(DEFAULT_LIMIT, limit)
+        self.max_elapsed_sec = DEFAULT_MAX_ELAPSED_SEC
         self.cc = site.country.lower()
 
     def _headers(self) -> dict:
@@ -43,19 +47,27 @@ class HomaryCrawler(BaseCrawler):
         base = self.site.url.rstrip("/")
         url = f"{base}/sitemaps/google_sitemap_{kind}_{self.cc}.xml.gz"
         try:
-            res = fetcher.get(url, headers=self._headers(), timeout=30)
+            res = fetcher.get(url, headers=self._headers(), timeout=15)
             raw = res.content
             try:
                 xml = gzip.decompress(raw).decode("utf-8", "ignore")
             except (OSError, gzip.BadGzipFile):
                 xml = raw.decode("utf-8", "ignore")
             return re.findall(r"<loc>(.*?)</loc>", xml)
+        except BlockedError:
+            raise
         except Exception:
             return []
 
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        fetcher = self.make_fetcher(kind="product", source="homary")
+        started = time.monotonic()
+        fetcher = self.make_fetcher(
+            kind="product",
+            source="homary",
+            fail_fast_blocked=True,
+            retries=0,
+        )
 
         item_urls = [u for u in self._sitemap_urls(fetcher, "item") if "/item/" in u]
         best_ids = {m.group(1) for u in self._sitemap_urls(fetcher, "best_sellers")
@@ -67,10 +79,17 @@ class HomaryCrawler(BaseCrawler):
             f"（HOMARY_LIMIT={self.limit}）；热销 {len(best_ids)} 款")
 
         for url in targets:
+            if self._elapsed(started) >= self.max_elapsed_sec:
+                result.notes.append(
+                    f"达到 Homary 总耗时上限 {self.max_elapsed_sec}s，"
+                    f"提前停止，已解析 {len(result.products)}/{len(targets)}")
+                break
             try:
                 row = self._parse_product(fetcher, url, best_ids)
                 if row:
                     result.products.append(row)
+            except BlockedError:
+                raise
             except Exception as exc:                # 单页失败不影响整体
                 result.notes.append(f"跳过 {url}: {exc}")
             self.sleep()
@@ -81,7 +100,7 @@ class HomaryCrawler(BaseCrawler):
         if not m:
             return None
         pid = m.group(1)
-        res = fetcher.get(url, headers=self._headers(), timeout=30)
+        res = fetcher.get(url, headers=self._headers(), timeout=15)
         html = res.text or ""
         self.snapshot(pid, html)                   # 原始商品页归档
         tree = HTMLParser(html)
@@ -181,3 +200,7 @@ class HomaryCrawler(BaseCrawler):
             return float(s)
         except ValueError:
             return None
+
+    @staticmethod
+    def _elapsed(started: float) -> float:
+        return time.monotonic() - started

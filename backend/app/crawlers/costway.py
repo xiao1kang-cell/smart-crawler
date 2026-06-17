@@ -13,6 +13,7 @@ API：
 from __future__ import annotations
 
 import os
+import time
 
 from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
@@ -22,6 +23,7 @@ PAGE_SIZE = 48
 # 客户反馈 Costway CA 实际 >1W 商品，调高每分类页数上限
 # 230 分类 × 30 页 × 48 = 33 万 cap，实际按各分类 total 提前 break
 PAGES_PER_CAT = int(os.environ.get("COSTWAY_PAGES_PER_CAT", "30"))
+COSTWAY_MAX_ELAPSED_SEC = int(os.environ.get("COSTWAY_MAX_ELAPSED_SEC", "240"))
 
 _CURRENCY = {"US": "USD", "UK": "GBP", "CA": "CAD", "DE": "EUR", "IT": "EUR",
              "ES": "EUR", "FR": "EUR", "NL": "EUR", "PL": "PLN"}
@@ -40,7 +42,7 @@ class CostwayCrawler(BaseCrawler):
 
     def _api(self, fetcher: CrawlerFetcher, path: str) -> dict:
         url = self.site.url.rstrip("/") + path
-        res = fetcher.get(url, headers=self._headers(), timeout=30)
+        res = fetcher.get(url, headers=self._headers(), timeout=15)
         self.guard(res.status or 0, path)        # 熔断检查
         if not res.ok:
             raise RuntimeError(f"HTTP {res.status or 0} fetching {url}")
@@ -49,7 +51,13 @@ class CostwayCrawler(BaseCrawler):
 
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        fetcher = self.make_fetcher(kind="product", source="costway")
+        started = time.monotonic()
+        fetcher = self.make_fetcher(
+            kind="product",
+            source="costway",
+            fail_fast_blocked=True,
+            retries=0,
+        )
         currency = _CURRENCY.get(self.site.country, "USD")
 
         # ---- 新品 / 热销标记 ----
@@ -78,9 +86,19 @@ class CostwayCrawler(BaseCrawler):
         # ---- 各分类下商品 ----
         seen: set[str] = set()
         for c in cats:
+            if self._elapsed(started) >= COSTWAY_MAX_ELAPSED_SEC:
+                result.notes.append(
+                    f"达到 Costway 总耗时上限 {COSTWAY_MAX_ELAPSED_SEC}s，"
+                    f"提前停止，已采集 {len(result.products)} 个 SKU")
+                break
             cid = c["category_id"]
             cname = c["category_name"]
             for page in range(1, PAGES_PER_CAT + 1):
+                if self._elapsed(started) >= COSTWAY_MAX_ELAPSED_SEC:
+                    result.notes.append(
+                        f"达到 Costway 总耗时上限 {COSTWAY_MAX_ELAPSED_SEC}s，"
+                        f"提前停止在分类 {cname} p{page}")
+                    break
                 try:
                     data = self._api(
                         fetcher, f"/api/products?category_id={cid}"
@@ -108,6 +126,8 @@ class CostwayCrawler(BaseCrawler):
             res = self._api(fetcher, path).get("result")
             items = res if isinstance(res, list) else (res or {}).get("product", [])
             return {str(x.get("sku")) for x in items if x.get("sku")}
+        except BlockedError:
+            raise
         except Exception:
             return set()
 
@@ -166,3 +186,7 @@ class CostwayCrawler(BaseCrawler):
             return float(v)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _elapsed(started: float) -> float:
+        return time.monotonic() - started

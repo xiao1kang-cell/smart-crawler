@@ -46,11 +46,13 @@ import html as _html
 import json
 import os
 import re
+import time
 
 from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
 
 DEFAULT_LIMIT = int(os.environ.get("WESTELM_LIMIT", "1000"))
+MAX_ELAPSED_SEC = float(os.environ.get("WESTELM_MAX_ELAPSED_SEC", "240"))
 SITEMAP_INDEX = ("https://www.westelm.com/netstorage/sitemaps/"
                  "product-sitemap-index.xml")
 ASSETS_CDN = "https://assets.weimgs.com/weimgs/ab/images/wcm/"
@@ -99,6 +101,7 @@ class WestElmCrawler(BaseCrawler):
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
         fetcher = self.make_fetcher(kind="product", source="westelm")
+        started = time.monotonic()
 
         # Warmup：访问首页建立会话 / 预热 Akamai cookie（计入 api_calls）
         try:
@@ -130,6 +133,11 @@ class WestElmCrawler(BaseCrawler):
         STEALTH_BUDGET = 5
 
         for i, url in enumerate(targets):
+            if time.monotonic() - started >= MAX_ELAPSED_SEC:
+                result.notes.append(
+                    f"达到 WESTELM_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
+                    f"提前返回已解析结果（ok={ok}, fail={fail}, blocked={blocked}）")
+                break
             if i > 0 and i % SESSION_ROTATE == 0:
                 fetcher = self.make_fetcher(kind="product", source="westelm")
                 result.notes.append(

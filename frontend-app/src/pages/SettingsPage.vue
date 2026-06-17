@@ -154,6 +154,18 @@ async function toggleWorkspaceSite(site: Record<string, any>) {
   })
 }
 
+async function saveWorkspaceSiteTarget(site: Record<string, any>) {
+  const workspaceId = currentWorkspaceId.value || auth.workspaceId
+  if (!workspaceId || !site.id) return
+  await guarded('site-target', async () => {
+    await updateWorkspaceSite(workspaceId, site.id, {
+      target_sku_count: site.target_sku_count || null,
+    })
+    await load()
+    message.value = '目标 SKU 已保存'
+  })
+}
+
 async function saveUser() {
   await guarded('user', async () => {
     const data = await createUser({ ...userForm.value, workspace_id: currentWorkspaceId.value ? Number(currentWorkspaceId.value) : undefined })
@@ -265,6 +277,11 @@ onMounted(load)
                 <b>{{ s.site || s.name }}</b>
                 <span class="key-prefix">{{ s.brand || '—' }} · {{ s.country || '—' }}</span>
                 <span class="meta">状态={{ s.enabled === false ? '停用' : '启用' }} · 隐藏={{ s.hidden ? '是' : '否' }}</span>
+                <label class="inline-target">
+                  <span>目标 SKU</span>
+                  <input v-model.number="s.target_sku_count" class="set-inp mini" type="number" min="0" placeholder="验收目标" @keyup.enter="saveWorkspaceSiteTarget(s)" />
+                  <button class="mini-btn" :disabled="busy === 'site-target'" @click="saveWorkspaceSiteTarget(s)">保存</button>
+                </label>
               </div>
               <button class="mini-btn" :class="s.enabled === false ? '' : 'bad'" @click="toggleWorkspaceSite(s)">{{ s.enabled === false ? '启用' : '停用' }}</button>
             </div>
@@ -447,3 +464,21 @@ onMounted(load)
     </div>
   </section>
 </template>
+
+<style scoped>
+.inline-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--ui-muted);
+  font-size: .75rem;
+  flex-wrap: wrap;
+}
+.inline-target .set-inp.mini {
+  width: 112px;
+  min-height: 30px;
+  padding: 4px 8px;
+  font-size: .78rem;
+}
+</style>

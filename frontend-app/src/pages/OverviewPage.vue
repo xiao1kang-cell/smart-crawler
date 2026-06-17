@@ -26,7 +26,7 @@ const criticalSites = computed(() => Number(coverageSummary.value.critical_count
 const runningJobs = computed(() => jobs.value.filter((x) => ['queued', 'running'].includes(String(x.status))).length)
 const successJobs = computed(() => jobs.value.filter((x) => ['success', 'completed'].includes(String(x.status))).length)
 const sortedCoverage = computed(() => coverage.value.slice().sort((a, b) => normalizedPct(b) - normalizedPct(a)))
-const totalSku = computed(() => Number(coverageSummary.value.total_current_sku ?? coverage.value.reduce((sum, row) => sum + Number(row.current || row.sku_count || row.products || row.count || 0), 0)))
+const totalSku = computed(() => Number(coverageSummary.value.total_current_sku ?? coverage.value.reduce((sum, row) => sum + currentCount(row), 0)))
 const coveragePct = computed(() => Number(coverageSummary.value.overall_coverage_pct ?? fallbackCoveragePct.value))
 const fallbackCoveragePct = computed(() => {
   const totalEstimated = coverage.value.reduce((sum, row) => sum + Number(row.estimated_full || 0), 0)
@@ -34,12 +34,21 @@ const fallbackCoveragePct = computed(() => {
 })
 
 function normalizedPct(row: Record<string, any>) {
-  const raw = Number(row.coverage_pct || row.coverage || 0)
-  return Math.min(100, raw <= 1 ? raw * 100 : raw)
+  const raw = Number(row.coverage_pct ?? row.coverage ?? 0)
+  const pct = Math.min(100, raw <= 1 ? raw * 100 : raw)
+  return Math.round(pct * 100) / 100
 }
 
 function width(row: Record<string, any>) {
   return `${normalizedPct(row)}%`
+}
+
+function coverageLabel(row: Record<string, any>) {
+  return `${normalizedPct(row)}%`
+}
+
+function currentCount(row: Record<string, any>) {
+  return Number(row.current ?? row.sku_count ?? row.products ?? row.count ?? 0)
 }
 
 async function load() {
@@ -108,8 +117,8 @@ onMounted(load)
         <div v-for="row in sortedCoverage.slice(0, 20)" :key="row.site || row.name" class="cov-tile" :class="row.status">
           <h6>{{ row.site || row.name }}</h6>
           <div class="country">{{ row.brand || '—' }} · {{ row.country || '—' }}</div>
-          <div class="num">{{ fmtNumber(row.current || row.sku_count || row.products || row.count) }}</div>
-          <div class="pct">{{ row.coverage_pct ?? row.coverage ?? '—' }}% · 满 {{ fmtNumber(row.estimated_full || 0) }}</div>
+          <div class="num">{{ fmtNumber(currentCount(row)) }}</div>
+          <div class="pct">{{ coverageLabel(row) }} · 满 {{ fmtNumber(row.estimated_full || 0) }}</div>
           <div class="bar"><div :style="{ width: width(row) }" /></div>
           <button :class="jobTrigger.classFor(siteKey(row))" :disabled="jobTrigger.isBusy(siteKey(row))" @click="trigger(siteKey(row))">{{ jobTrigger.labelFor(siteKey(row), '触发抓取') }}</button>
           <div v-if="jobTrigger.detailFor(siteKey(row))" class="trigger-note" :class="jobTrigger.classFor(siteKey(row))">{{ jobTrigger.detailFor(siteKey(row)) }}</div>

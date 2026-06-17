@@ -19,7 +19,7 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/login', component: LoginPage },
-    { path: '/report', component: SiteReportPage },
+    { path: '/report', component: SiteReportPage, meta: { requiresAuth: true } },
     {
       path: '/app',
       component: AppLayout,

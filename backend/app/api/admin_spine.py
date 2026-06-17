@@ -5,17 +5,22 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+import csv
+import io
 import time
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from .. import spine_queue
 from ..audit import record_audit
+from ..currency import currency_for_site
 from ..db import get_db
+from ..price_sources import enrich_products_from_site_config
 from ..models import (
     AdminAuditLog,
     ApiKey,
@@ -36,6 +41,7 @@ from ..models import (
     Review,
     Site,
     SpineJob,
+    Trend,
     Usage,
     User,
     Workspace,
@@ -43,7 +49,12 @@ from ..models import (
     WorkspaceSite,
 )
 from ..spine_queue import HEARTBEAT_INTERVAL, _backoff
-from .routes import require_user, _build_data_quality_payload, _require_super_admin
+from .routes import (
+    require_user,
+    _ANTI_BOT_FAILURE_CODES,
+    _build_data_quality_payload,
+    _require_super_admin,
+)
 
 router = APIRouter(prefix="/api/admin/spine", tags=["admin · spine"])
 
@@ -53,6 +64,26 @@ _ONDEMAND_STUCK_SEC = 1800
 _INVENTORY_CACHE_TTL = 30
 _INVENTORY_CACHE: dict | None = None
 _INVENTORY_CACHE_TS = 0.0
+_QUALITY_JOB_ISSUES = {
+    "latest_job_failed",
+    "partial_crawl",
+    "job_in_progress",
+    "job_pending_stale",
+    "proxy_unavailable",
+    "proxy_auth_failed",
+    "anti_bot_blocked",
+    "empty_sitemap",
+    "market_paused",
+}
+_QUALITY_SITE_ISSUES = {
+    "no_products",
+    "coverage_low",
+    "sku_deviation_high",
+    "pdp_price_required",
+    "promotions_missing",
+    "sales_history_insufficient",
+    "never_crawled",
+}
 
 
 def _table_count(db: Session, model) -> int:
@@ -69,10 +100,327 @@ def _count_by(db: Session, model, col, *, limit: int = 20) -> list[dict]:
             for key, n in rows]
 
 
+def _weak_product_title_filter():
+    title = func.trim(func.coalesce(Product.title, ""))
+    return or_(
+        func.length(title) == 0,
+        func.length(title) < 4,
+        func.lower(title).in_(
+            ("product", "item", "sku", "untitled", "detail", "details",
+             "view product", "shop now")
+        ),
+        func.lower(title) == func.lower(func.trim(func.coalesce(Product.sku, ""))),
+    )
+
+
+def _product_quality_issues(product: Product) -> list[str]:
+    title = (product.title or "").strip()
+    sku = (product.sku or "").strip()
+    weak_titles = {
+        "product", "item", "sku", "untitled", "detail", "details",
+        "view product", "shop now",
+    }
+    issues: list[str] = []
+    if (not title or len(title) < 4 or title.lower() in weak_titles or
+            (sku and title.lower() == sku.lower())):
+        issues.append("title_weak")
+    if not ((product.sale_price or 0) > 0 or (product.original_price or 0) > 0):
+        issues.append("price_missing")
+    expected_currency = currency_for_site(product.site)
+    currency = (product.currency or "").strip().upper()
+    if expected_currency and not currency:
+        issues.append("currency_missing")
+    elif expected_currency and currency != expected_currency:
+        issues.append("currency_mismatch")
+    if not ((product.thirty_day_sales or 0) > 0):
+        issues.append("sales_missing")
+    if not ((product.thirty_day_revenue or 0) > 0):
+        issues.append("revenue_missing")
+    return issues
+
+
+def _payload_sites(payload: dict, db: Session) -> list[str]:
+    raw_sites = payload.get("sites")
+    if raw_sites is None and payload.get("site"):
+        raw_sites = [payload.get("site")]
+    if not isinstance(raw_sites, list):
+        raise HTTPException(422, {"error": "sites required"})
+    sites = []
+    for item in raw_sites:
+        site = str(item or "").strip()
+        if site and site not in sites:
+            sites.append(site)
+    if not sites:
+        raise HTTPException(422, {"error": "sites required"})
+    existing_sites = {
+        site for (site,) in db.query(Site.site).filter(Site.site.in_(sites)).all()
+    }
+    missing = [site for site in sites if site not in existing_sites]
+    if missing:
+        raise HTTPException(404, {"error": "site_not_found", "sites": missing})
+    return sites
+
+
+def _parse_metric_date(value) -> date:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    text = str(value or "").strip()
+    if not text:
+        raise HTTPException(422, {"error": "date required"})
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(text[:19], fmt).date()
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        raise HTTPException(422, {"error": "invalid_date", "date": text})
+
+
+def _metric_number(value, *, percent: bool = False) -> float | int | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+    else:
+        text = str(value).strip().replace(",", "")
+        if percent:
+            text = text.rstrip("%").strip()
+        if not text:
+            return None
+        try:
+            number = float(text)
+        except ValueError:
+            raise HTTPException(422, {"error": "invalid_metric", "value": value})
+    if percent:
+        return round(number, 4)
+    return int(round(number))
+
+
+def _metric_rows_from_payload(payload: dict) -> list[dict]:
+    rows = payload.get("rows")
+    if rows is None and payload.get("csv"):
+        reader = csv.DictReader(io.StringIO(str(payload.get("csv") or "")))
+        rows = list(reader)
+    if rows is None and any(k in payload for k in ("site", "date", "traffic", "conversion_rate")):
+        rows = [payload]
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(422, {"error": "rows_or_csv_required"})
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def _metric_template_payload(
+    db: Session,
+    *,
+    tenant: int | None = None,
+    include_hidden: bool = False,
+    day: date | None = None,
+) -> dict:
+    day = day or date.today()
+    q = (db.query(WorkspaceSite.site, WorkspaceSite.target_sku_count)
+         .join(Workspace, Workspace.id == WorkspaceSite.workspace_id)
+         .filter(WorkspaceSite.enabled.is_(True), Workspace.status == "active"))
+    if tenant is not None:
+        q = q.filter(WorkspaceSite.workspace_id == tenant)
+    if not include_hidden:
+        q = q.filter(WorkspaceSite.hidden.is_(False))
+    site_codes: list[str] = []
+    target_sku_by_site: dict[str, int] = {}
+    for site, target_sku_count in q.order_by(WorkspaceSite.site).all():
+        if site not in site_codes:
+            site_codes.append(site)
+        if target_sku_count:
+            target_sku_by_site[site] = max(
+                int(target_sku_by_site.get(site, 0)),
+                int(target_sku_count),
+            )
+    sites = db.query(Site).filter(Site.site.in_(site_codes)).all() if site_codes else []
+    quality = _build_data_quality_payload(db, sites, target_sku_by_site)
+    items = []
+    for row in quality.get("items") or []:
+        issues = set(row.get("issues") or [])
+        missing_traffic = "traffic_missing" in issues
+        missing_conversion = "conversion_missing" in issues
+        if not (missing_traffic or missing_conversion):
+            continue
+        items.append({
+            "site": row.get("site"),
+            "date": day.isoformat(),
+            "traffic": "",
+            "conversion_rate": "",
+            "missing_traffic": missing_traffic,
+            "missing_conversion": missing_conversion,
+            "sku_count": row.get("sku_count") or 0,
+            "brand": row.get("brand"),
+            "country": row.get("country"),
+            "note": "fill traffic/conversion_rate; conversion_rate uses percentage, e.g. 2.5",
+        })
+    output = io.StringIO()
+    fieldnames = ["site", "date", "traffic", "conversion_rate", "note"]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for item in items:
+        writer.writerow({key: item.get(key, "") for key in fieldnames})
+    return {
+        "date": day.isoformat(),
+        "count": len(items),
+        "items": items,
+        "csv": output.getvalue(),
+        "summary": {
+            "missing_traffic": sum(1 for item in items if item["missing_traffic"]),
+            "missing_conversion": sum(1 for item in items if item["missing_conversion"]),
+        },
+    }
+
+
+def _validate_metric_rows(db: Session, rows: list[dict]) -> dict:
+    site_codes = sorted({
+        str(row.get("site") or "").strip()
+        for row in rows
+        if str(row.get("site") or "").strip()
+    })
+    existing_sites = {
+        site for (site,) in db.query(Site.site)
+        .filter(Site.site.in_(site_codes)).all()
+    } if site_codes else set()
+    seen: set[tuple[str, date]] = set()
+    valid_rows = []
+    errors = []
+    created = updated = skipped = 0
+    by_site: dict[str, dict] = {}
+    for index, raw in enumerate(rows, start=1):
+        site = str(raw.get("site") or "").strip()
+        row_errors = []
+        parsed_day: date | None = None
+        traffic = None
+        conversion = None
+        if not site:
+            row_errors.append("site required")
+        elif site not in existing_sites:
+            row_errors.append("site_not_found")
+        try:
+            parsed_day = _parse_metric_date(raw.get("date"))
+        except HTTPException as exc:
+            row_errors.append(str(exc.detail))
+        try:
+            traffic = _metric_number(raw.get("traffic"))
+        except HTTPException as exc:
+            row_errors.append(str(exc.detail))
+        try:
+            conversion = _metric_number(
+                raw.get("conversion_rate") or raw.get("conversion") or raw.get("cv_rate"),
+                percent=True,
+            )
+        except HTTPException as exc:
+            row_errors.append(str(exc.detail))
+        if traffic is None and conversion is None:
+            row_errors.append("traffic_or_conversion_required")
+        duplicate = False
+        if site and parsed_day is not None:
+            key = (site, parsed_day)
+            duplicate = key in seen
+            seen.add(key)
+        if row_errors:
+            skipped += 1
+            errors.append({
+                "row": index,
+                "site": site or None,
+                "date": parsed_day.isoformat() if parsed_day else raw.get("date"),
+                "errors": row_errors,
+            })
+            continue
+        assert parsed_day is not None
+        exists = (db.query(Trend.id)
+                  .filter(Trend.site == site, Trend.date == parsed_day)
+                  .first()) is not None
+        if exists:
+            updated += 1
+        else:
+            created += 1
+        by_site.setdefault(site, {"rows": 0, "created": 0, "updated": 0})
+        by_site[site]["rows"] += 1
+        by_site[site]["created"] += 0 if exists else 1
+        by_site[site]["updated"] += 1 if exists else 0
+        valid_rows.append({
+            "row": index,
+            "site": site,
+            "date": parsed_day.isoformat(),
+            "traffic": traffic,
+            "conversion_rate": conversion,
+            "will": "update" if exists else "create",
+            "duplicate_in_payload": duplicate,
+        })
+    return {
+        "valid": not errors and bool(valid_rows),
+        "rows": len(rows),
+        "valid_rows": len(valid_rows),
+        "created": created,
+        "updated": updated,
+        "skipped": skipped,
+        "sites": sorted(by_site),
+        "by_site": by_site,
+        "errors": errors,
+        "items": valid_rows[:100],
+    }
+
+
+def _trend_seed_for_site_date(db: Session, site: str, day: date) -> dict:
+    sku_count = db.query(func.count(Product.id)).filter(Product.site == site).scalar() or 0
+    start = datetime(day.year, day.month, day.day)
+    end = start + timedelta(days=1)
+    new_count = (db.query(func.count(Product.id))
+                 .filter(Product.site == site,
+                         or_(and_(Product.created_time >= start,
+                                  Product.created_time < end),
+                             and_(Product.published_at >= start,
+                                  Product.published_at < end)))
+                 .scalar() or 0)
+    sales, revenue = db.query(
+        func.coalesce(func.sum(Product.thirty_day_sales), 0),
+        func.coalesce(func.sum(Product.thirty_day_revenue), 0.0),
+    ).filter(Product.site == site).first()
+    avg_rating, review_total = db.query(
+        func.avg(Product.ratings),
+        func.coalesce(func.sum(Product.review_count), 0),
+    ).filter(Product.site == site).first()
+    return {
+        "sku_count": int(sku_count or 0),
+        "new_product_count": int(new_count or 0),
+        "estimated_sales": int(sales or 0),
+        "estimated_revenue": round(float(revenue or 0), 2),
+        "avg_rating": round(float(avg_rating), 2) if avg_rating is not None else None,
+        "review_total": int(review_total or 0),
+    }
+
+
 def _group_rows(query, *, limit: int = 20) -> list[dict]:
     rows = query.order_by(func.count().desc()).limit(limit).all()
     return [{"key": key if key is not None else "null", "count": int(n or 0)}
             for key, n in rows]
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
+def _seconds_between(start: datetime | None, end: datetime | None) -> int | None:
+    if not start or not end:
+        return None
+    return max(0, int((end - start).total_seconds()))
+
+
+def _age_sec(created_at: datetime | None, *, now: datetime) -> int | None:
+    return _seconds_between(created_at, now)
+
+
+def _active_sec(started_at: datetime | None, finished_at: datetime | None,
+                *, now: datetime) -> int | None:
+    if not started_at:
+        return None
+    return _seconds_between(started_at, finished_at or now)
 
 
 def _empty_queue_counts() -> dict:
@@ -169,7 +517,41 @@ def _queue_stats(db: Session) -> dict:
             total[key] = int(total.get(key, 0)) + int(value or 0)
     by_queue["crawl"]["stale_pending"] = int(crawl_stale_pending or 0)
     total["stale_pending"] = int(crawl_stale_pending or 0)
+    status_meta = {
+        "spine": {
+            "running_raw": int(by_queue["spine"].get("running", 0) or 0) + int(spine_stuck or 0),
+            "running_active": int(by_queue["spine"].get("running", 0) or 0),
+            "stuck": int(spine_stuck or 0),
+            "stale_pending": 0,
+        },
+        "crawl": {
+            "running_raw": int(by_queue["crawl"].get("running", 0) or 0) + int(crawl_stuck or 0),
+            "running_active": int(by_queue["crawl"].get("running", 0) or 0),
+            "stuck": int(crawl_stuck or 0),
+            "pending_raw": int(by_queue["crawl"].get("pending", 0) or 0),
+            "stale_pending": int(crawl_stale_pending or 0),
+        },
+        "ondemand": {
+            "running_raw": int(by_queue["ondemand"].get("running", 0) or 0) + int(ondemand_stuck or 0),
+            "running_active": int(by_queue["ondemand"].get("running", 0) or 0),
+            "stuck": int(ondemand_stuck or 0),
+            "stale_pending": 0,
+        },
+    }
+    for queue_name, meta in status_meta.items():
+        by_queue[queue_name]["status_meta"] = meta
     total["by_queue"] = by_queue
+    total["status_meta"] = {
+        "running_raw": sum(int(m.get("running_raw", 0) or 0) for m in status_meta.values()),
+        "running_active": sum(int(m.get("running_active", 0) or 0) for m in status_meta.values()),
+        "stuck": sum(int(m.get("stuck", 0) or 0) for m in status_meta.values()),
+        "stale_pending": int(crawl_stale_pending or 0),
+        "by_queue": status_meta,
+    }
+    total["status_count_note"] = (
+        "运行中统计只包含仍在阈值内活跃的任务；超过阈值的 running 会单独归为卡住，"
+        "久排是 pending 中排队超过阈值的子集。"
+    )
     total["updated_at"] = now.isoformat()
     total["stuck_threshold_sec"] = {
         "spine": _STUCK_SEC,
@@ -185,7 +567,9 @@ def _queue_stats(db: Session) -> dict:
         ),
         "crawl_running_by_site": _group_rows(
             db.query(CrawlJob.site, func.count(CrawlJob.id))
-            .filter(CrawlJob.status == "running")
+            .filter(CrawlJob.status == "running",
+                    or_(CrawlJob.started_at.is_(None),
+                        CrawlJob.started_at >= crawl_cutoff))
             .group_by(CrawlJob.site),
             limit=25,
         ),
@@ -221,6 +605,40 @@ def _queue_stats(db: Session) -> dict:
             .group_by(CrawlJob.failure_code),
             limit=25,
         ),
+        "spine_failed_by_dataset": _group_rows(
+            db.query(SpineJob.dataset, func.count(SpineJob.id))
+            .filter(SpineJob.status == "failed")
+            .group_by(SpineJob.dataset),
+            limit=25,
+        ),
+        "spine_running_by_dataset": _group_rows(
+            db.query(SpineJob.dataset, func.count(SpineJob.id))
+            .filter(SpineJob.status == "running",
+                    SpineJob.heartbeat_at.isnot(None),
+                    SpineJob.heartbeat_at >= spine_cutoff)
+            .group_by(SpineJob.dataset),
+            limit=25,
+        ),
+        "spine_stuck_by_dataset": _group_rows(
+            db.query(SpineJob.dataset, func.count(SpineJob.id))
+            .filter(*_spine_stuck_filter(spine_cutoff))
+            .group_by(SpineJob.dataset),
+            limit=25,
+        ),
+        "ondemand_running_by_platform": _group_rows(
+            db.query(OnDemandJob.platform, func.count(OnDemandJob.id))
+            .filter(OnDemandJob.status == "running",
+                    or_(OnDemandJob.created_at.is_(None),
+                        OnDemandJob.created_at >= ondemand_cutoff))
+            .group_by(OnDemandJob.platform),
+            limit=25,
+        ),
+        "ondemand_stuck_by_platform": _group_rows(
+            db.query(OnDemandJob.platform, func.count(OnDemandJob.id))
+            .filter(*_ondemand_stuck_filter(ondemand_cutoff))
+            .group_by(OnDemandJob.platform),
+            limit=25,
+        ),
         "ondemand_failed_by_platform": _group_rows(
             db.query(OnDemandJob.platform, func.count(OnDemandJob.id))
             .filter(OnDemandJob.status == "failed")
@@ -240,6 +658,7 @@ def _spine_job_dict(j: SpineJob, *, now: datetime | None = None) -> dict:
     cutoff = now - timedelta(seconds=_STUCK_SEC)
     is_stuck = (j.status == "running"
                 and (j.heartbeat_at is None or j.heartbeat_at < cutoff))
+    duration_sec = _seconds_between(j.started_at, j.finished_at)
     return {
         **_job_dict(j),
         "source": "spine",
@@ -247,14 +666,32 @@ def _spine_job_dict(j: SpineJob, *, now: datetime | None = None) -> dict:
         "raw_status": j.status,
         "normalized_status": _norm_status("spine", j.status, stuck=is_stuck),
         "target": j.dataset or j.url,
+        "duration_sec": duration_sec,
+        "age_sec": _age_sec(j.created_at, now=now),
+        "active_sec": _active_sec(j.started_at, j.finished_at, now=now),
+        "retryable": bool(j.status == "failed"
+                          and int(j.retries or 0) < int(j.max_retries or 0)),
+        "stuck_reason": (
+            "heartbeat_missing_or_expired"
+            if is_stuck else None
+        ),
+        "suggested_action": (
+            "worker 心跳过期，建议先确认 worker 是否存活；如已终止可重试"
+            if is_stuck else None
+        ),
     }
 
 
 def _crawl_job_dict(j: CrawlJob, *, now: datetime | None = None) -> dict:
     now = now or datetime.utcnow()
     cutoff = now - timedelta(seconds=_CRAWL_STUCK_SEC)
+    pending_cutoff = now - timedelta(seconds=_CRAWL_STUCK_SEC)
     is_stuck = (j.status == "running" and j.started_at is not None
                 and j.started_at < cutoff)
+    is_stale_pending = (
+        j.status == "pending" and j.created_at is not None
+        and j.created_at < pending_cutoff
+    )
     return {
         "id": j.id,
         "source": "crawl",
@@ -275,19 +712,26 @@ def _crawl_job_dict(j: CrawlJob, *, now: datetime | None = None) -> dict:
         "result_record_id": None,
         "workspace_id": j.requested_by_workspace_id,
         "api_key_id": None,
-        "created_at": j.created_at.isoformat() if j.created_at else None,
-        "started_at": j.started_at.isoformat() if j.started_at else None,
-        "finished_at": j.finished_at.isoformat() if j.finished_at else None,
+        "created_at": _iso(j.created_at),
+        "started_at": _iso(j.started_at),
+        "finished_at": _iso(j.finished_at),
         "heartbeat_at": None,
         "products_count": j.products_count or 0,
         "new_count": j.new_count or 0,
         "promotion_count": j.promotion_count or 0,
         "duration_sec": j.duration_sec,
+        "age_sec": _age_sec(j.created_at, now=now),
+        "active_sec": _active_sec(j.started_at, j.finished_at, now=now),
+        "attempts": None,
         "failure_code": j.failure_code,
         "failure_stage": j.failure_stage,
         "failure_detail": j.failure_detail,
         "retryable": j.retryable,
         "suggested_action": j.suggested_action,
+        "is_stale_pending": is_stale_pending,
+        "stuck_reason": "running_timeout" if is_stuck else (
+            "pending_too_long" if is_stale_pending else None
+        ),
     }
 
 
@@ -317,9 +761,9 @@ def _ondemand_job_dict(j: OnDemandJob, *, now: datetime | None = None) -> dict:
         "result_record_id": None,
         "workspace_id": j.workspace_id,
         "api_key_id": None,
-        "created_at": j.created_at.isoformat() if j.created_at else None,
+        "created_at": _iso(j.created_at),
         "started_at": None,
-        "finished_at": j.finished_at.isoformat() if j.finished_at else None,
+        "finished_at": _iso(j.finished_at),
         "heartbeat_at": None,
         "listing_count": j.listing_count or 0,
         "review_count": j.review_count or 0,
@@ -328,6 +772,12 @@ def _ondemand_job_dict(j: OnDemandJob, *, now: datetime | None = None) -> dict:
         "notes": j.notes,
         "max_items": j.max_items,
         "review_limit": j.review_limit,
+        "age_sec": _age_sec(j.created_at, now=now),
+        "active_sec": _active_sec(j.created_at, j.finished_at, now=now) if status == "running" else None,
+        "duration_sec": _seconds_between(j.created_at, j.finished_at),
+        "stuck_reason": "running_timeout" if is_stuck else None,
+        "retryable": status in ("failed", "partial"),
+        "suggested_action": "可在详情页重试该按需任务" if status in ("failed", "partial") else None,
     }
 
 
@@ -339,48 +789,68 @@ def _queue_jobs_list(db: Session, *, status: str | None, dataset: str | None,
     if source not in allowed_sources:
         raise HTTPException(422, {"error": "unknown_job_source", "source": source})
     wanted = {s.strip() for s in (status or "").split(",") if s.strip()}
+    target = (dataset or "").strip()
+    code = (failure_code or "").strip()
+    page = max(1, int(page or 1))
+    size = max(1, min(200, int(size or 20)))
     now = datetime.utcnow()
     rows: list[dict] = []
 
+    def matches_status(row: dict) -> bool:
+        if not wanted:
+            return True
+        if row.get("normalized_status") in wanted:
+            return True
+        return "stale_pending" in wanted and bool(row.get("is_stale_pending"))
+
     if source in ("all", "spine"):
         q = db.query(SpineJob)
-        if dataset:
-            needle = f"%{dataset}%"
-            q = q.filter(or_(SpineJob.dataset == dataset, SpineJob.url.ilike(needle)))
+        if target:
+            needle = f"%{target}%"
+            q = q.filter(or_(SpineJob.dataset.ilike(needle),
+                             SpineJob.url.ilike(needle),
+                             SpineJob.worker.ilike(needle),
+                             SpineJob.error.ilike(needle)))
         if tenant is not None:
             q = q.filter(SpineJob.workspace_id == tenant)
-        if not failure_code:
+        if not code:
             for job in q.order_by(SpineJob.id.desc()).all():
                 row = _spine_job_dict(job, now=now)
-                if not wanted or row["normalized_status"] in wanted:
+                if matches_status(row):
                     rows.append(row)
 
     if source in ("all", "crawl"):
         q = db.query(CrawlJob)
-        if dataset:
-            q = q.filter(CrawlJob.site == dataset)
+        if target:
+            needle = f"%{target}%"
+            q = q.filter(or_(CrawlJob.site.ilike(needle),
+                             CrawlJob.trigger.ilike(needle),
+                             CrawlJob.worker.ilike(needle),
+                             CrawlJob.error.ilike(needle),
+                             CrawlJob.failure_detail.ilike(needle)))
         if tenant is not None:
             q = q.filter(CrawlJob.requested_by_workspace_id == tenant)
-        if failure_code:
-            q = q.filter(CrawlJob.failure_code == failure_code)
+        if code:
+            q = q.filter(CrawlJob.failure_code == code)
         for job in q.order_by(CrawlJob.id.desc()).all():
             row = _crawl_job_dict(job, now=now)
-            if not wanted or row["normalized_status"] in wanted:
+            if matches_status(row):
                 rows.append(row)
 
     if source in ("all", "ondemand"):
         q = db.query(OnDemandJob)
-        if dataset:
-            needle = f"%{dataset}%"
-            q = q.filter((OnDemandJob.batch_id == dataset) |
-                         (OnDemandJob.platform == dataset) |
-                         (OnDemandJob.url.ilike(needle)))
+        if target:
+            needle = f"%{target}%"
+            q = q.filter(or_(OnDemandJob.batch_id.ilike(needle),
+                             OnDemandJob.platform.ilike(needle),
+                             OnDemandJob.url.ilike(needle),
+                             OnDemandJob.error.ilike(needle)))
         if tenant is not None:
             q = q.filter(OnDemandJob.workspace_id == tenant)
-        if not failure_code:
+        if not code:
             for job in q.order_by(OnDemandJob.id.desc()).all():
                 row = _ondemand_job_dict(job, now=now)
-                if not wanted or row["normalized_status"] in wanted:
+                if matches_status(row):
                     rows.append(row)
 
     rows.sort(key=lambda row: row.get("created_at") or "", reverse=True)
@@ -388,6 +858,35 @@ def _queue_jobs_list(db: Session, *, status: str | None, dataset: str | None,
     start = max(0, (page - 1) * size)
     end = start + size
     return {"total": total, "items": rows[start:end]}
+
+
+def _quality_job_issue_filter(issue: str, stale_cutoff: datetime):
+    if issue == "latest_job_failed":
+        return CrawlJob.status.in_(("failed", "blocked"))
+    if issue == "partial_crawl":
+        return or_(
+            CrawlJob.status == "partial",
+            and_(CrawlJob.status == "success",
+                 CrawlJob.failure_code.isnot(None),
+                 CrawlJob.failure_code != ""),
+        )
+    if issue == "job_in_progress":
+        return CrawlJob.status.in_(("pending", "running"))
+    if issue == "job_pending_stale":
+        return and_(
+            CrawlJob.status == "pending",
+            CrawlJob.created_at.isnot(None),
+            CrawlJob.created_at < stale_cutoff,
+        )
+    if issue == "proxy_unavailable":
+        return CrawlJob.failure_code == "proxy_unavailable"
+    if issue == "proxy_auth_failed":
+        return CrawlJob.failure_code == "proxy_auth_failed"
+    if issue == "anti_bot_blocked":
+        return CrawlJob.failure_code.in_(tuple(_ANTI_BOT_FAILURE_CODES))
+    if issue in {"empty_sitemap", "market_paused"}:
+        return CrawlJob.failure_code == issue
+    return None
 
 
 @router.get("/jobs/stats")
@@ -406,7 +905,8 @@ def admin_data_quality(
 ) -> dict:
     """全局站点数据质量明细，供后台定位哪些站点需要重跑。"""
     _require_super_admin(user, db)
-    q = (db.query(WorkspaceSite.site, WorkspaceSite.workspace_id, Workspace.name)
+    q = (db.query(WorkspaceSite.site, WorkspaceSite.workspace_id, Workspace.name,
+                  WorkspaceSite.target_sku_count)
          .join(Workspace, Workspace.id == WorkspaceSite.workspace_id)
          .filter(WorkspaceSite.enabled.is_(True), Workspace.status == "active"))
     if tenant is not None:
@@ -416,15 +916,24 @@ def admin_data_quality(
 
     site_workspace_rows = q.order_by(WorkspaceSite.site, WorkspaceSite.workspace_id).all()
     workspace_by_site: dict[str, list[dict]] = {}
-    for site, workspace_id, workspace_name in site_workspace_rows:
-        workspace_by_site.setdefault(site, []).append({
+    target_sku_by_site: dict[str, int] = {}
+    for site, workspace_id, workspace_name, target_sku_count in site_workspace_rows:
+        workspace_payload = {
             "id": workspace_id,
             "name": workspace_name,
-        })
+        }
+        if target_sku_count:
+            workspace_payload["target_sku_count"] = target_sku_count
+        workspace_by_site.setdefault(site, []).append(workspace_payload)
+        if target_sku_count:
+            target_sku_by_site[site] = max(
+                int(target_sku_by_site.get(site, 0)),
+                int(target_sku_count),
+            )
 
     site_codes = sorted(workspace_by_site)
     sites = db.query(Site).filter(Site.site.in_(site_codes)).all() if site_codes else []
-    payload = _build_data_quality_payload(db, sites)
+    payload = _build_data_quality_payload(db, sites, target_sku_by_site)
     for item in payload["items"]:
         item["workspaces"] = workspace_by_site.get(item["site"], [])
     payload["summary"]["workspace_count"] = len({
@@ -432,6 +941,296 @@ def admin_data_quality(
     })
     payload["summary"]["tenant_id"] = tenant
     return payload
+
+
+@router.get("/data-quality/{site}/products")
+def admin_data_quality_products(
+    site: str,
+    issue: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    page: int = Query(default=1, ge=1),
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """某站点问题商品样例，避免验收/排障时只能人工查库。"""
+    _require_super_admin(user, db)
+    site = (site or "").strip()
+    site_row = db.query(Site).filter(Site.site == site).first()
+    if not site_row:
+        raise HTTPException(404, "site 不存在")
+    issue_value = issue if isinstance(issue, str) else None
+    limit_value = limit if isinstance(limit, int) else 50
+    limit_value = max(1, min(200, limit_value))
+    page_value = page if isinstance(page, int) else 1
+    page_value = max(1, int(page_value or 1))
+
+    weak_title = _weak_product_title_filter()
+    expected_currency = currency_for_site(site)
+    currency_value = func.upper(func.trim(func.coalesce(Product.currency, "")))
+    issue_filters = {
+        "title_weak": weak_title,
+        "price_missing": ~(
+            (func.coalesce(Product.sale_price, 0) > 0) |
+            (func.coalesce(Product.original_price, 0) > 0)
+        ),
+        "sales_missing": func.coalesce(Product.thirty_day_sales, 0) <= 0,
+        "revenue_missing": func.coalesce(Product.thirty_day_revenue, 0) <= 0,
+    }
+    if expected_currency:
+        issue_filters["currency_missing"] = currency_value == ""
+        issue_filters["currency_mismatch"] = and_(
+            currency_value != "",
+            currency_value != expected_currency,
+        )
+    product_count = int(db.query(func.count(Product.id))
+                        .filter(Product.site == site).scalar() or 0)
+    trend_count = int(db.query(func.count(Trend.id))
+                      .filter(Trend.site == site).scalar() or 0)
+    trend_issue_counts = {
+        "traffic_missing": int(
+            db.query(func.count(Trend.id))
+            .filter(Trend.site == site, Trend.traffic.is_(None))
+            .scalar() or 0
+        ),
+        "conversion_missing": int(
+            db.query(func.count(Trend.id))
+            .filter(Trend.site == site, Trend.conversion_rate.is_(None))
+            .scalar() or 0
+        ),
+    }
+    if product_count > 0 and trend_count == 0:
+        trend_issue_counts["traffic_missing"] = 1
+        trend_issue_counts["conversion_missing"] = 1
+    stale_cutoff = datetime.utcnow() - timedelta(seconds=_CRAWL_STUCK_SEC)
+    job_issue_counts = {
+        key: int(db.query(func.count(CrawlJob.id))
+                 .filter(CrawlJob.site == site,
+                         _quality_job_issue_filter(key, stale_cutoff))
+                 .scalar() or 0)
+        for key in _QUALITY_JOB_ISSUES
+    }
+    target_sku = (
+        db.query(func.max(WorkspaceSite.target_sku_count))
+        .filter(WorkspaceSite.site == site,
+                WorkspaceSite.enabled.is_(True))
+        .scalar()
+    )
+    quality_payload = _build_data_quality_payload(
+        db, [site_row], {site: int(target_sku or 0)} if target_sku else None)
+    quality_row = (quality_payload.get("items") or [{}])[0]
+    site_issue_counts = {
+        key: 1 if key in set(quality_row.get("issues") or []) else 0
+        for key in _QUALITY_SITE_ISSUES
+    }
+    issue_counts = {
+        key: int(db.query(func.count(Product.id))
+                 .filter(Product.site == site, expr)
+                 .scalar() or 0)
+        for key, expr in issue_filters.items()
+    }
+    product_issue_total = int(db.query(func.count(Product.id))
+                              .filter(Product.site == site,
+                                      or_(*issue_filters.values()))
+                              .scalar() or 0)
+    issue_counts.update(trend_issue_counts)
+    issue_counts.update(job_issue_counts)
+    issue_counts.update(site_issue_counts)
+
+    if issue_value in _QUALITY_SITE_ISSUES:
+        issues = set(quality_row.get("issues") or [])
+        item = {
+            "id": f"site-{site}",
+            "kind": "site",
+            "site": site,
+            "brand": quality_row.get("brand"),
+            "country": quality_row.get("country"),
+            "url": quality_row.get("url"),
+            "sku_count": quality_row.get("sku_count"),
+            "spu_count": quality_row.get("spu_count"),
+            "fetched_count": quality_row.get("fetched_count"),
+            "estimated_full": quality_row.get("estimated_full"),
+            "target_sku_count": quality_row.get("target_sku_count"),
+            "target_sku_source": quality_row.get("target_sku_source"),
+            "sku_deviation_abs": quality_row.get("sku_deviation_abs"),
+            "sku_deviation_pct": quality_row.get("sku_deviation_pct"),
+            "coverage_pct": quality_row.get("coverage_pct"),
+            "promotion_count": quality_row.get("promotion_count"),
+            "price_source_configured": quality_row.get("price_source_configured"),
+            "price_source_type": quality_row.get("price_source_type"),
+            "price_source": quality_row.get("price_source"),
+            "last_crawled": quality_row.get("last_crawled"),
+            "last_product_updated": quality_row.get("last_product_updated"),
+            "latest_job": quality_row.get("latest_job"),
+            "suggested_action": quality_row.get("suggested_action"),
+            "issues": quality_row.get("issues") or [],
+            "rerun_recommended": quality_row.get("rerun_recommended"),
+            "rerun_ready": quality_row.get("rerun_ready"),
+            "rerun_after_setup": quality_row.get("rerun_after_setup"),
+            "rerun_blocked": quality_row.get("rerun_blocked"),
+            "rerun_preconditions": quality_row.get("rerun_preconditions") or [],
+            "external_data_required": quality_row.get("external_data_required"),
+            "latest_failure": quality_row.get("latest_failure"),
+            "last_error": quality_row.get("last_error"),
+            "last_error_code": quality_row.get("last_error_code"),
+        }
+        return {
+            "site": site,
+            "issue": issue_value,
+            "kind": "site",
+            "limit": limit_value,
+            "page": page_value,
+            "page_size": limit_value,
+            "total": 1 if issue_value in issues else 0,
+            "issue_counts": {
+                "all": product_issue_total,
+                **issue_counts,
+            },
+            "items": [item] if issue_value in issues and page_value == 1 else [],
+        }
+
+    if issue_value in _QUALITY_JOB_ISSUES:
+        issue_filter = _quality_job_issue_filter(issue_value, stale_cutoff)
+        if issue_filter is None:
+            raise HTTPException(422, "未知任务问题类型")
+        q = db.query(CrawlJob).filter(CrawlJob.site == site, issue_filter)
+        total = q.count()
+        rows = (q.order_by(CrawlJob.created_at.desc().nullslast(),
+                           CrawlJob.id.desc())
+                .offset((page_value - 1) * limit_value)
+                .limit(limit_value)
+                .all())
+        return {
+            "site": site,
+            "issue": issue_value,
+            "kind": "job",
+            "limit": limit_value,
+            "page": page_value,
+            "page_size": limit_value,
+            "total": total,
+            "issue_counts": {
+                "all": product_issue_total,
+                **issue_counts,
+            },
+            "items": [_crawl_job_dict(row) for row in rows],
+        }
+
+    if issue_value in {"traffic_missing", "conversion_missing"}:
+        col = Trend.traffic if issue_value == "traffic_missing" else Trend.conversion_rate
+        trend_q = db.query(Trend).filter(Trend.site == site, col.is_(None))
+        total = trend_q.count()
+        rows = (trend_q.order_by(Trend.date.desc(), Trend.id.desc())
+                .offset((page_value - 1) * limit_value)
+                .limit(limit_value)
+                .all())
+        items = [{
+            "id": f"trend-{row.id}",
+            "kind": "trend",
+            "site": row.site,
+            "date": row.date.isoformat() if row.date else None,
+            "sku_count": row.sku_count,
+            "new_product_count": row.new_product_count,
+            "estimated_sales": row.estimated_sales,
+            "estimated_revenue": row.estimated_revenue,
+            "traffic": row.traffic,
+            "conversion_rate": row.conversion_rate,
+            "issues": [
+                key for key, missing in (
+                    ("traffic_missing", row.traffic is None),
+                    ("conversion_missing", row.conversion_rate is None),
+                ) if missing
+            ],
+        } for row in rows]
+        if product_count > 0 and trend_count == 0 and page_value == 1:
+            total = 1
+            items = [{
+                "id": f"trend-missing-{site}",
+                "kind": "trend",
+                "site": site,
+                "date": None,
+                "sku_count": product_count,
+                "new_product_count": None,
+                "estimated_sales": None,
+                "estimated_revenue": None,
+                "traffic": None,
+                "conversion_rate": None,
+                "issues": ["traffic_missing", "conversion_missing"],
+                "note": "该站点暂无趋势/第三方信号行",
+            }]
+        return {
+            "site": site,
+            "issue": issue_value,
+            "kind": "trend",
+            "limit": limit_value,
+            "page": page_value,
+            "page_size": limit_value,
+            "total": total,
+            "issue_counts": {
+                "all": product_issue_total,
+                **issue_counts,
+            },
+            "items": items,
+        }
+
+    q = db.query(Product).filter(Product.site == site)
+    if issue_value:
+        if issue_value not in issue_filters:
+            raise HTTPException(
+                422,
+                "issue 必须是 title_weak/price_missing/currency_missing/"
+                "currency_mismatch/sales_missing/revenue_missing/"
+                "sales_history_insufficient/traffic_missing/conversion_missing/"
+                "latest_job_failed/partial_crawl/"
+                "job_in_progress/job_pending_stale/proxy_unavailable/"
+                "proxy_auth_failed/anti_bot_blocked/empty_sitemap/market_paused/"
+                "no_products/coverage_low/sku_deviation_high/"
+                "promotions_missing/pdp_price_required/never_crawled",
+            )
+        q = q.filter(issue_filters[issue_value])
+    else:
+        q = q.filter(or_(*issue_filters.values()))
+
+    total = q.count()
+    rows = (q.order_by(Product.updated_time.desc(), Product.id.desc())
+            .offset((page_value - 1) * limit_value)
+            .limit(limit_value)
+            .all())
+    return {
+        "site": site,
+        "issue": issue_value or "all",
+        "kind": "product",
+        "limit": limit_value,
+        "page": page_value,
+        "page_size": limit_value,
+        "total": total,
+        "issue_counts": {
+            "all": product_issue_total,
+            **issue_counts,
+        },
+        "items": [{
+            "id": row.id,
+            "site": row.site,
+            "brand": row.brand,
+            "sku": row.sku,
+            "spu": row.spu,
+            "title": row.title,
+            "product_url": row.product_url,
+            "image": (row.image_urls or [None])[0],
+            "category_path": row.category_path,
+            "status": row.status,
+            "sale_price": row.sale_price,
+            "original_price": row.original_price,
+            "currency": row.currency,
+            "expected_currency": currency_for_site(row.site),
+            "thirty_day_sales": row.thirty_day_sales,
+            "thirty_day_revenue": row.thirty_day_revenue,
+            "published_at": row.published_at.isoformat() if row.published_at else None,
+            "created_time": row.created_time.isoformat() if row.created_time else None,
+            "updated_time": row.updated_time.isoformat() if row.updated_time else None,
+            "latest_job": quality_row.get("latest_job"),
+            "suggested_action": quality_row.get("suggested_action"),
+            "issues": _product_quality_issues(row),
+        } for row in rows],
+    }
 
 
 @router.post("/crawl/enqueue")
@@ -443,25 +1242,7 @@ def admin_crawl_enqueue(
 ) -> dict:
     """后台按站点触发采集；复用已有 pending/running，避免重复入队。"""
     actor = _require_super_admin(user, db)
-    raw_sites = payload.get("sites")
-    if raw_sites is None and payload.get("site"):
-        raw_sites = [payload.get("site")]
-    if not isinstance(raw_sites, list):
-        raise HTTPException(422, {"error": "sites required"})
-    sites = []
-    for item in raw_sites:
-        site = str(item or "").strip()
-        if site and site not in sites:
-            sites.append(site)
-    if not sites:
-        raise HTTPException(422, {"error": "sites required"})
-
-    existing_sites = {
-        site for (site,) in db.query(Site.site).filter(Site.site.in_(sites)).all()
-    }
-    missing = [site for site in sites if site not in existing_sites]
-    if missing:
-        raise HTTPException(404, {"error": "site_not_found", "sites": missing})
+    sites = _payload_sites(payload, db)
 
     from ..runner import HIGH_PRIORITY_TRIGGERS, enqueue as enqueue_crawl
 
@@ -523,6 +1304,221 @@ def admin_crawl_enqueue(
     }
 
 
+@router.post("/promotions/rebuild")
+def admin_promotions_rebuild(
+    payload: dict,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+    ip: str = Header(default="", alias="X-Forwarded-For"),
+) -> dict:
+    """按已有商品重新识别促销；用于修复历史数据，不必先全站重抓。"""
+    actor = _require_super_admin(user, db)
+    sites = _payload_sites(payload, db)
+    from ..runner import _detect_promotions
+
+    by_site: dict[str, dict] = {}
+    total_created = 0
+    for site in sites:
+        before = db.query(func.count(Promotion.id)).filter(
+            Promotion.site == site).scalar() or 0
+        created = _detect_promotions(db, site)
+        db.flush()
+        after = db.query(func.count(Promotion.id)).filter(
+            Promotion.site == site).scalar() or 0
+        total_created += int(created or 0)
+        by_site[site] = {
+            "before": int(before),
+            "after": int(after),
+            "created": int(created or 0),
+            "delta": int(after) - int(before),
+        }
+
+    record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
+                 action="promotions.rebuild", target_type="site",
+                 target_id=",".join(sites),
+                 detail={"sites": sites, "by_site": by_site},
+                 ip=ip or None)
+    db.commit()
+    return {
+        "status": "rebuilt",
+        "sites": sites,
+        "count": len(sites),
+        "created": total_created,
+        "by_site": by_site,
+        "rebuilt_at": datetime.utcnow().isoformat(),
+    }
+
+
+@router.post("/analytics/recompute")
+def admin_analytics_recompute(
+    payload: dict,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+    ip: str = Header(default="", alias="X-Forwarded-For"),
+) -> dict:
+    """按已有快照重算销量/收入/趋势；不触发网页抓取。"""
+    actor = _require_super_admin(user, db)
+    sites = _payload_sites(payload, db)
+    from ..analytics import recompute_site
+
+    by_site: dict[str, dict] = {}
+    totals = {
+        "estimated_skus": 0,
+        "estimated_sales": 0,
+        "estimated_revenue": 0.0,
+        "insufficient_history_skus": 0,
+        "trend_days": 0,
+    }
+    for site in sites:
+        result = recompute_site(db, site)
+        by_site[site] = result
+        for key in ("estimated_skus", "estimated_sales",
+                    "insufficient_history_skus", "trend_days"):
+            totals[key] += int(result.get(key) or 0)
+        totals["estimated_revenue"] += float(result.get("estimated_revenue") or 0)
+
+    totals["estimated_revenue"] = round(totals["estimated_revenue"], 2)
+    record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
+                 action="analytics.recompute", target_type="site",
+                 target_id=",".join(sites),
+                 detail={"sites": sites, "by_site": by_site, "totals": totals},
+                 ip=ip or None)
+    db.commit()
+    return {
+        "status": "recomputed",
+        "sites": sites,
+        "count": len(sites),
+        "totals": totals,
+        "by_site": by_site,
+        "recomputed_at": datetime.utcnow().isoformat(),
+    }
+
+
+@router.post("/third-party-metrics/import")
+def admin_third_party_metrics_import(
+    payload: dict,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+    ip: str = Header(default="", alias="X-Forwarded-For"),
+) -> dict:
+    """导入站点级第三方流量/转化率。
+
+    支持 payload.rows=[{site,date,traffic,conversion_rate}] 或 csv 文本。
+    date 为 YYYY-MM-DD；conversion_rate 按页面展示口径存储，如 2.5 表示 2.5%。
+    """
+    actor = _require_super_admin(user, db)
+    rows = _metric_rows_from_payload(payload)
+    validation = _validate_metric_rows(db, rows)
+    if validation["errors"] or not validation["valid_rows"]:
+        raise HTTPException(422, {"error": "invalid_metrics", **validation})
+    site_codes = sorted({
+        str(row.get("site") or payload.get("site") or "").strip()
+        for row in rows
+    })
+    if not site_codes or any(not site for site in site_codes):
+        raise HTTPException(422, {"error": "site required"})
+    existing_sites = {
+        site for (site,) in db.query(Site.site)
+        .filter(Site.site.in_(site_codes)).all()
+    }
+    missing = [site for site in site_codes if site not in existing_sites]
+    if missing:
+        raise HTTPException(404, {"error": "site_not_found", "sites": missing})
+
+    by_site: dict[str, dict] = {}
+    trend_cache: dict[tuple[str, date], tuple[Trend, bool]] = {}
+    imported = 0
+    updated = 0
+    created = 0
+    for raw in rows:
+        site = str(raw.get("site") or payload.get("site") or "").strip()
+        day = _parse_metric_date(raw.get("date") or payload.get("date"))
+        traffic = _metric_number(raw.get("traffic"))
+        conversion = _metric_number(
+            raw.get("conversion_rate") or raw.get("conversion") or raw.get("cv_rate"),
+            percent=True,
+        )
+        if traffic is None and conversion is None:
+            continue
+        cache_key = (site, day)
+        if cache_key in trend_cache:
+            trend, is_new = trend_cache[cache_key]
+            row_created = False
+            row_updated = not is_new
+        else:
+            trend = (db.query(Trend)
+                     .filter(Trend.site == site, Trend.date == day)
+                     .first())
+            is_new = trend is None
+            row_created = is_new
+            row_updated = not is_new
+            if trend is None:
+                trend = Trend(site=site, date=day,
+                              **_trend_seed_for_site_date(db, site, day))
+                db.add(trend)
+                created += 1
+            else:
+                updated += 1
+            trend_cache[cache_key] = (trend, is_new)
+        if traffic is not None:
+            trend.traffic = int(traffic)
+        if conversion is not None:
+            trend.conversion_rate = float(conversion)
+        imported += 1
+        by_site.setdefault(site, {"rows": 0, "created": 0, "updated": 0})
+        by_site[site]["rows"] += 1
+        by_site[site]["created"] += 1 if row_created else 0
+        by_site[site]["updated"] += 1 if row_updated else 0
+
+    if imported == 0:
+        raise HTTPException(422, {"error": "no_metrics_to_import"})
+    db.flush()
+    record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
+                 action="third_party_metrics.import", target_type="site",
+                 target_id=",".join(site_codes),
+                 detail={"sites": site_codes, "rows": imported,
+                         "created": created, "updated": updated},
+                 ip=ip or None)
+    db.commit()
+    return {
+        "status": "imported",
+        "rows": imported,
+        "created": created,
+        "updated": updated,
+        "sites": site_codes,
+        "by_site": by_site,
+        "imported_at": datetime.utcnow().isoformat(),
+    }
+
+
+@router.get("/third-party-metrics/template")
+def admin_third_party_metrics_template(
+    tenant: int | None = None,
+    include_hidden: bool = Query(default=False),
+    date_value: str | None = Query(default=None, alias="date"),
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """按当前数据质量缺口生成第三方指标导入模板。"""
+    _require_super_admin(user, db)
+    date_text = date_value if isinstance(date_value, str) else None
+    day = _parse_metric_date(date_text) if date_text else date.today()
+    return _metric_template_payload(
+        db, tenant=tenant, include_hidden=include_hidden, day=day)
+
+
+@router.post("/third-party-metrics/validate")
+def admin_third_party_metrics_validate(
+    payload: dict,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """预校验第三方指标导入内容，不写库。"""
+    _require_super_admin(user, db)
+    rows = _metric_rows_from_payload(payload)
+    return _validate_metric_rows(db, rows)
+
+
 def _job_dict(j: SpineJob) -> dict:
     return {"id": j.id, "url": j.url, "dataset": j.dataset,
             "entity_type": j.entity_type, "status": j.status,
@@ -530,9 +1526,10 @@ def _job_dict(j: SpineJob) -> dict:
             "error": j.error, "worker": j.worker,
             "result_record_id": j.result_record_id,
             "workspace_id": j.workspace_id, "api_key_id": j.api_key_id,
-            "created_at": j.created_at.isoformat() if j.created_at else None,
-            "finished_at": j.finished_at.isoformat() if j.finished_at else None,
-            "heartbeat_at": j.heartbeat_at.isoformat() if j.heartbeat_at else None}
+            "created_at": _iso(j.created_at),
+            "started_at": _iso(j.started_at),
+            "finished_at": _iso(j.finished_at),
+            "heartbeat_at": _iso(j.heartbeat_at)}
 
 
 @router.get("/jobs")
@@ -588,7 +1585,15 @@ def job_retry(job_id: int, source: str = "spine",
         if j is None:
             raise HTTPException(404, {"error": "job_not_found", "job_id": job_id,
                                       "source": source})
-        if j.status in ("pending", "running"):
+        now = datetime.utcnow()
+        crawl_cutoff = now - timedelta(seconds=_CRAWL_STUCK_SEC)
+        is_stuck = (j.status == "running" and j.started_at is not None
+                    and j.started_at < crawl_cutoff)
+        is_stale_pending = (
+            j.status == "pending" and j.created_at is not None
+            and j.created_at < crawl_cutoff
+        )
+        if j.status in ("pending", "running") and not (is_stuck or is_stale_pending):
             raise HTTPException(409, {"error": "job_not_retryable",
                                       "status": j.status})
         new_id = enqueue_crawl(j.site, trigger="admin_retry",
@@ -608,7 +1613,12 @@ def job_retry(job_id: int, source: str = "spine",
         if j is None:
             raise HTTPException(404, {"error": "job_not_found", "job_id": job_id,
                                       "source": source})
-        if j.status not in ("success", "partial", "failed"):
+        now = datetime.utcnow()
+        is_stuck = (
+            j.status == "running" and j.created_at is not None
+            and j.created_at < now - timedelta(seconds=_ONDEMAND_STUCK_SEC)
+        )
+        if j.status not in ("success", "partial", "failed") and not is_stuck:
             raise HTTPException(409, {"error": "job_not_retryable",
                                       "status": j.status})
         prev = j.status
@@ -911,6 +1921,387 @@ def _proxy_health_dict(row: ProxyHealth | None) -> dict:
     }
 
 
+_SENSITIVE_CONFIG_KEYS = {
+    "api_token",
+    "vidaxl_api_token",
+    "token",
+    "password",
+    "secret",
+    "feed_url",
+    "price_feed_url",
+    "price_feed",
+    "price_api_url",
+    "pdp_price_api_url",
+    "vidaxl_feed_url",
+}
+
+
+def _mask_config_value(key: str, value):
+    if value in (None, ""):
+        return value
+    low = key.lower()
+    if low not in _SENSITIVE_CONFIG_KEYS:
+        return value
+    text = str(value)
+    if len(text) <= 12:
+        return "****"
+    return f"{text[:6]}…{text[-4:]}"
+
+
+def _is_masked_config_value(key: str, value) -> bool:
+    if value in (None, ""):
+        return False
+    low = key.lower()
+    if low not in _SENSITIVE_CONFIG_KEYS:
+        return False
+    text = str(value)
+    return text == "****" or "…" in text
+
+
+def _public_crawler_config(config: dict | None) -> dict:
+    cfg = config or {}
+    return {k: _mask_config_value(k, v) for k, v in cfg.items()}
+
+
+def _merge_crawler_config(existing: dict | None, payload: dict) -> dict:
+    cfg = dict(existing or {})
+    for key, value in (payload or {}).items():
+        if key in {"site", "crawler_config", "proxy_tier"}:
+            continue
+        if _is_masked_config_value(key, value):
+            continue
+        if value is None or value == "":
+            cfg.pop(key, None)
+        else:
+            cfg[key] = value
+    nested = (payload or {}).get("crawler_config")
+    if isinstance(nested, dict):
+        for key, value in nested.items():
+            if _is_masked_config_value(key, value):
+                continue
+            if value is None or value == "":
+                cfg.pop(key, None)
+            else:
+                cfg[key] = value
+    return cfg
+
+
+def _product_price_source_sample(row: Product) -> dict:
+    return {
+        "sku": row.sku,
+        "title": row.title,
+        "sale_price": row.sale_price,
+        "original_price": row.original_price,
+        "currency": row.currency,
+        "product_url": row.product_url,
+    }
+
+
+@router.get("/sites/{site_code}/crawler-config")
+def site_crawler_config(site_code: str,
+                        user: str = Depends(require_user),
+                        db: Session = Depends(get_db)) -> dict:
+    _require_super_admin(user, db)
+    site = db.query(Site).filter(Site.site == site_code).first()
+    if not site:
+        raise HTTPException(404, {"error": "site_not_found", "site": site_code})
+    cfg = site.crawler_config or {}
+    return {
+        "site": site.site,
+        "platform": site.platform,
+        "proxy_tier": site.proxy_tier,
+        "crawler_config": _public_crawler_config(cfg),
+        "configured_keys": sorted(cfg.keys()),
+    }
+
+
+@router.patch("/sites/{site_code}/crawler-config")
+def site_crawler_config_update(site_code: str, payload: dict,
+                               user: str = Depends(require_user),
+                               db: Session = Depends(get_db),
+                               ip: str = Header(default="", alias="X-Forwarded-For")) -> dict:
+    actor = _require_super_admin(user, db)
+    site = db.query(Site).filter(Site.site == site_code).first()
+    if not site:
+        raise HTTPException(404, {"error": "site_not_found", "site": site_code})
+    before_keys = sorted((site.crawler_config or {}).keys())
+    proxy_tier = (payload or {}).get("proxy_tier")
+    if proxy_tier is not None:
+        site.proxy_tier = str(proxy_tier or "none").strip() or "none"
+    site.crawler_config = _merge_crawler_config(site.crawler_config, payload or {})
+    site.updated_at = datetime.utcnow()
+    after_keys = sorted((site.crawler_config or {}).keys())
+    record_audit(
+        db,
+        actor_user_id=actor.id,
+        actor_name=actor.username,
+        action="site.crawler_config.update",
+        target_type="site",
+        target_id=site.site,
+        detail={"before_keys": before_keys, "after_keys": after_keys},
+        ip=ip or None,
+    )
+    db.commit()
+    return {
+        "site": site.site,
+        "proxy_tier": site.proxy_tier,
+        "crawler_config": _public_crawler_config(site.crawler_config),
+        "configured_keys": after_keys,
+    }
+
+
+@router.post("/sites/{site_code}/crawler-config/test-price-source")
+def site_crawler_config_test_price_source(
+    site_code: str,
+    payload: dict | None = None,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Dry-run 当前/待保存价格源配置，避免后台盲配后再跑整站。"""
+    _require_super_admin(user, db)
+    site = db.query(Site).filter(Site.site == site_code).first()
+    if not site:
+        raise HTTPException(404, {"error": "site_not_found", "site": site_code})
+    payload = payload or {}
+    sample_limit = max(1, min(20, int(payload.get("sample_limit") or 5)))
+    config = _merge_crawler_config(site.crawler_config, payload)
+    proxy_tier = str(payload.get("proxy_tier") or site.proxy_tier or "none")
+    sample_rows = (
+        db.query(Product)
+        .filter(Product.site == site_code)
+        .order_by(
+            Product.sale_price.isnot(None),
+            Product.original_price.isnot(None),
+            Product.updated_time.desc().nullslast(),
+            Product.id.desc(),
+        )
+        .limit(sample_limit)
+        .all()
+    )
+    samples = [_product_price_source_sample(row) for row in sample_rows]
+    if not samples:
+        return {
+            "site": site.site,
+            "status": "no_sample_products",
+            "sample_count": 0,
+            "stats": {
+                "applied": False,
+                "rows": 0,
+                "matched": 0,
+                "updated": 0,
+                "error": "该站点暂无商品样例，需先跑出商品列表再测试价格源",
+            },
+            "samples": [],
+        }
+    test_site = SimpleNamespace(
+        site=site.site,
+        brand=site.brand,
+        country=site.country,
+        platform=site.platform,
+        url=site.url,
+        proxy_tier=proxy_tier,
+        crawler_config=config,
+    )
+    before = [dict(item) for item in samples]
+    enriched, stats = enrich_products_from_site_config(test_site, samples)
+    sample_results = []
+    for prev, item in zip(before, enriched):
+        sample_results.append({
+            "sku": item.get("sku"),
+            "product_url": item.get("product_url"),
+            "before": {
+                "title": prev.get("title"),
+                "sale_price": prev.get("sale_price"),
+                "original_price": prev.get("original_price"),
+                "currency": prev.get("currency"),
+            },
+            "after": {
+                "title": item.get("title"),
+                "sale_price": item.get("sale_price"),
+                "original_price": item.get("original_price"),
+                "currency": item.get("currency"),
+            },
+            "changed": any(
+                prev.get(key) != item.get(key)
+                for key in ("title", "sale_price", "original_price", "currency")
+            ),
+        })
+    return {
+        "site": site.site,
+        "status": "ok" if stats.get("applied") and not stats.get("error") else "check_failed",
+        "sample_count": len(sample_results),
+        "proxy_tier": proxy_tier,
+        "stats": stats,
+        "samples": sample_results,
+    }
+
+
+def _proxy_rule_availability(
+    row: ProxyRule,
+    *,
+    pool_available_count: dict[str, int],
+    pool_member_count_by_slug: dict[str, int],
+    pool_fallback_by_slug: dict[str, str | None],
+) -> dict:
+    mode = (row.proxy_mode or "pool").strip().lower()
+    primary_pool_slug: str | None = None
+    if mode == "pool":
+        primary_pool_slug = (row.pool_slug or "").strip() or None
+    elif mode in ("datacenter", "residential"):
+        primary_pool_slug = mode
+
+    fallback_pool_slug = (
+        (row.fallback_pool_slug or "").strip()
+        or (pool_fallback_by_slug.get(primary_pool_slug) if primary_pool_slug else None)
+    )
+    primary_available = (
+        pool_available_count.get(primary_pool_slug, 0) if primary_pool_slug else 0
+    )
+    fallback_available = (
+        pool_available_count.get(fallback_pool_slug, 0) if fallback_pool_slug else 0
+    )
+    if not row.enabled:
+        effective_status = "disabled"
+    elif mode == "none":
+        effective_status = "direct"
+    elif primary_pool_slug and primary_available > 0:
+        effective_status = "primary_available"
+    elif fallback_pool_slug and fallback_available > 0:
+        effective_status = "fallback_available"
+    elif primary_pool_slug or fallback_pool_slug:
+        effective_status = "unavailable"
+    else:
+        effective_status = "misconfigured"
+
+    return {
+        "primary_pool_slug": primary_pool_slug,
+        "fallback_pool_slug": fallback_pool_slug,
+        "primary_member_count": (
+            pool_member_count_by_slug.get(primary_pool_slug, 0)
+            if primary_pool_slug else 0
+        ),
+        "fallback_member_count": (
+            pool_member_count_by_slug.get(fallback_pool_slug, 0)
+            if fallback_pool_slug else 0
+        ),
+        "primary_available_count": primary_available,
+        "fallback_available_count": fallback_available,
+        "effective_status": effective_status,
+    }
+
+
+def _proxy_rule_matches_site(row: ProxyRule, site: str) -> bool:
+    pattern = (row.site_pattern or "").strip().lower()
+    value = (site or "").strip().lower()
+    if not pattern or not value:
+        return False
+    match_type = (row.match_type or "contains").strip().lower()
+    if match_type == "exact":
+        return value == pattern
+    if match_type == "prefix":
+        return value.startswith(pattern)
+    return pattern in value
+
+
+def _recommended_proxy_rule(site: str, issue: str) -> dict:
+    return {
+        "site_pattern": site,
+        "match_type": "exact",
+        "proxy_mode": "pool",
+        "pool_slug": "residential",
+        "fallback_pool_slug": "datacenter",
+        "priority": 90 if issue == "anti_bot_blocked" else 85,
+        "notes": f"数据质量自动建议：{issue}",
+    }
+
+
+def _anti_bot_quality_payload(db: Session, *, tenant: int | None,
+                              include_hidden: bool) -> dict:
+    q = (db.query(WorkspaceSite.site, WorkspaceSite.target_sku_count)
+         .join(Workspace, Workspace.id == WorkspaceSite.workspace_id)
+         .filter(WorkspaceSite.enabled.is_(True), Workspace.status == "active"))
+    if tenant is not None:
+        q = q.filter(WorkspaceSite.workspace_id == tenant)
+    if not include_hidden:
+        q = q.filter(WorkspaceSite.hidden.is_(False))
+    site_codes: list[str] = []
+    target_sku_by_site: dict[str, int] = {}
+    for site, target_sku_count in q.order_by(WorkspaceSite.site).all():
+        if site not in site_codes:
+            site_codes.append(site)
+        if target_sku_count:
+            target_sku_by_site[site] = max(
+                int(target_sku_by_site.get(site, 0)),
+                int(target_sku_count),
+            )
+    sites = db.query(Site).filter(Site.site.in_(site_codes)).all() if site_codes else []
+    return _build_data_quality_payload(db, sites, target_sku_by_site)
+
+
+def _anti_bot_diagnostics_payload(
+    db: Session,
+    *,
+    tenant: int | None = None,
+    include_hidden: bool = False,
+) -> dict:
+    quality = _anti_bot_quality_payload(
+        db, tenant=tenant, include_hidden=include_hidden)
+    proxy_payload = _proxy_admin_payload(db)
+    rule_rows = db.query(ProxyRule).order_by(
+        ProxyRule.priority.asc(), ProxyRule.id.asc()).all()
+    rule_payload_by_id = {row.get("id"): row for row in proxy_payload.get("rules", [])}
+    items = []
+    issue_keys = {"anti_bot_blocked", "proxy_unavailable", "proxy_auth_failed"}
+    for row in quality.get("items") or []:
+        issues = [issue for issue in row.get("issues") or [] if issue in issue_keys]
+        if not issues:
+            continue
+        site = str(row.get("site") or "")
+        matched_rule = next(
+            (rule for rule in rule_rows if rule.enabled and _proxy_rule_matches_site(rule, site)),
+            None,
+        )
+        matched_payload = rule_payload_by_id.get(matched_rule.id) if matched_rule else None
+        issue = issues[0]
+        items.append({
+            "site": site,
+            "brand": row.get("brand"),
+            "country": row.get("country"),
+            "url": row.get("url"),
+            "issues": issues,
+            "latest_job": row.get("latest_job"),
+            "latest_failure": row.get("latest_failure"),
+            "last_error_code": row.get("last_error_code"),
+            "last_error": row.get("last_error"),
+            "suggested_action": row.get("suggested_action"),
+            "current_rule": matched_payload,
+            "rule_status": (matched_payload or {}).get("effective_status"),
+            "recommended_rule": _recommended_proxy_rule(site, issue),
+            "probe": None,
+        })
+    return {
+        "items": items,
+        "count": len(items),
+        "summary": {
+            "anti_bot_blocked": sum(1 for item in items if "anti_bot_blocked" in item["issues"]),
+            "proxy_unavailable": sum(1 for item in items if "proxy_unavailable" in item["issues"]),
+            "proxy_auth_failed": sum(1 for item in items if "proxy_auth_failed" in item["issues"]),
+            "with_available_rule": sum(
+                1 for item in items
+                if item.get("rule_status") in {"primary_available", "fallback_available", "direct"}
+            ),
+            "needs_rule": sum(1 for item in items if not item.get("current_rule")),
+        },
+        "proxy": {
+            "available": sum(
+                int(row.get("available_count") or 0)
+                for row in proxy_payload.get("pools", [])
+            ),
+            "pools": proxy_payload.get("pools", []),
+        },
+    }
+
+
 def _proxy_admin_payload(db: Session) -> dict:
     from ..proxy_pool import pool_status
     from ..proxy_health import proxy_health_summary
@@ -939,6 +2330,14 @@ def _proxy_admin_payload(db: Session) -> dict:
             for slug in row.get("pools") or []:
                 pool_available_count[slug] = pool_available_count.get(slug, 0) + 1
     pool_configs = db.query(ProxyPoolConfig).order_by(ProxyPoolConfig.slug.asc()).all()
+    pool_member_count_by_slug = {
+        row.slug: pool_member_count.get(row.id, 0)
+        for row in pool_configs
+    }
+    pool_fallback_by_slug = {
+        row.slug: row.fallback_pool_slug
+        for row in pool_configs
+    }
     rules = db.query(ProxyRule).order_by(ProxyRule.priority.asc(), ProxyRule.id.asc()).all()
 
     ordered_hashes: list[str] = []
@@ -998,7 +2397,18 @@ def _proxy_admin_payload(db: Session) -> dict:
                       available=pool_available_count.get(row.slug, 0))
             for row in pool_configs
         ],
-        "rules": [rule_dict(row) for row in rules],
+        "rules": [
+            {
+                **rule_dict(row),
+                **_proxy_rule_availability(
+                    row,
+                    pool_available_count=pool_available_count,
+                    pool_member_count_by_slug=pool_member_count_by_slug,
+                    pool_fallback_by_slug=pool_fallback_by_slug,
+                ),
+            }
+            for row in rules
+        ],
         "updated_at": datetime.utcnow().isoformat(),
     }
 
@@ -1366,6 +2776,170 @@ def proxies_check(payload: dict | None = None,
                  target_id=tier, detail=detail, ip=ip or None)
     db.commit()
     return {"probe": detail, **_proxy_admin_payload(db)}
+
+
+@router.get("/proxies/anti-bot")
+def proxies_anti_bot_diagnostics(
+    tenant: int | None = None,
+    include_hidden: bool = Query(default=False),
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """从数据质量结果生成反爬/代理问题站点清单。"""
+    _require_super_admin(user, db)
+    return _anti_bot_diagnostics_payload(
+        db, tenant=tenant, include_hidden=include_hidden)
+
+
+@router.post("/proxies/anti-bot/check")
+def proxies_anti_bot_check(
+    payload: dict | None = None,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+    ip: str = Header(default="", alias="X-Forwarded-For"),
+) -> dict:
+    """批量预检当前反爬站点的推荐代理路径。"""
+    actor = _require_super_admin(user, db)
+    payload = payload or {}
+    tenant = payload.get("tenant")
+    tenant_id = int(tenant) if tenant not in (None, "") else None
+    limit = max(1, min(20, int(payload.get("limit") or 10)))
+    timeout = max(3, min(30, int(payload.get("timeout") or 8)))
+    requested_sites = {
+        str(site).strip() for site in (payload.get("sites") or [])
+        if str(site).strip()
+    }
+    diagnostics = _anti_bot_diagnostics_payload(
+        db,
+        tenant=tenant_id,
+        include_hidden=bool(payload.get("include_hidden")),
+    )
+    targets = diagnostics.get("items") or []
+    if requested_sites:
+        targets = [row for row in targets if row.get("site") in requested_sites]
+    targets = targets[:limit]
+    from ..proxy_probe import probe_proxy_for_url
+
+    results = []
+    for row in targets:
+        site = row.get("site")
+        rule = row.get("current_rule") or row.get("recommended_rule") or {}
+        tier = (
+            f"pool:{rule.get('pool_slug')}"
+            if rule.get("proxy_mode") == "pool" and rule.get("pool_slug")
+            else rule.get("proxy_mode") or "residential"
+        )
+        url = row.get("url") or "https://example.com"
+        result = probe_proxy_for_url(
+            tier=tier,
+            site=site,
+            url=url,
+            timeout=timeout,
+        )
+        failure = result.failure
+        probe = {
+            "tier": tier,
+            "site": site,
+            "url": url,
+            "ok": result.ok,
+            "status_code": result.status_code,
+            "failure_code": failure.code if failure else None,
+            "failure_stage": failure.stage if failure else None,
+            "failure_detail": failure.detail if failure else None,
+        }
+        row = {**row, "probe": probe}
+        results.append(row)
+    audit_detail = {
+        "count": len(results),
+        "ok": sum(1 for row in results if (row.get("probe") or {}).get("ok")),
+        "sites": [row.get("site") for row in results],
+    }
+    record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
+                 action="proxy.anti_bot_check", target_type="proxy_pool",
+                 target_id="anti_bot", detail=audit_detail, ip=ip or None)
+    db.commit()
+    return {
+        **diagnostics,
+        "items": results,
+        "checked": len(results),
+        "ok": audit_detail["ok"],
+        "failed": len(results) - audit_detail["ok"],
+        "checked_at": datetime.utcnow().isoformat(),
+    }
+
+
+@router.post("/proxies/anti-bot/apply-rules")
+def proxies_anti_bot_apply_rules(
+    payload: dict | None = None,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+    ip: str = Header(default="", alias="X-Forwarded-For"),
+) -> dict:
+    """把反爬诊断推荐的住宅代理规则批量落库。"""
+    actor = _require_super_admin(user, db)
+    payload = payload or {}
+    tenant = payload.get("tenant")
+    tenant_id = int(tenant) if tenant not in (None, "") else None
+    requested_sites = {
+        str(site).strip() for site in (payload.get("sites") or [])
+        if str(site).strip()
+    }
+    diagnostics = _anti_bot_diagnostics_payload(
+        db,
+        tenant=tenant_id,
+        include_hidden=bool(payload.get("include_hidden")),
+    )
+    targets = diagnostics.get("items") or []
+    if requested_sites:
+        targets = [row for row in targets if row.get("site") in requested_sites]
+    applied = []
+    for item in targets:
+        rule_payload = dict(item.get("recommended_rule") or {})
+        pattern = (rule_payload.get("site_pattern") or item.get("site") or "").strip()
+        if not pattern:
+            continue
+        match_type = (rule_payload.get("match_type") or "exact").strip() or "exact"
+        row = (db.query(ProxyRule)
+               .filter(ProxyRule.site_pattern == pattern,
+                       ProxyRule.match_type == match_type)
+               .first())
+        created = row is None
+        if row is None:
+            row = ProxyRule(site_pattern=pattern, match_type=match_type,
+                            created_at=datetime.utcnow())
+            db.add(row)
+        _update_rule_from_payload(row, {**rule_payload, "enabled": True})
+        db.flush()
+        applied.append({
+            "site": pattern,
+            "rule_id": row.id,
+            "created": created,
+            "pool_slug": row.pool_slug,
+            "fallback_pool_slug": row.fallback_pool_slug,
+        })
+    record_audit(
+        db,
+        actor_user_id=actor.id,
+        actor_name=actor.username,
+        action="proxy.anti_bot_apply_rules",
+        target_type="proxy_rule",
+        target_id="anti_bot",
+        detail={"count": len(applied), "sites": [row["site"] for row in applied]},
+        ip=ip or None,
+    )
+    db.commit()
+    _reload_pool_safely()
+    refreshed = _anti_bot_diagnostics_payload(
+        db,
+        tenant=tenant_id,
+        include_hidden=bool(payload.get("include_hidden")),
+    )
+    return {
+        **refreshed,
+        "applied": applied,
+        "applied_count": len(applied),
+        "applied_at": datetime.utcnow().isoformat(),
+    }
 
 
 @router.get("/inventory")

@@ -13,9 +13,26 @@ const qualitySummary = ref<Record<string, any>>({})
 const loading = ref(false)
 const error = ref('')
 const jobTrigger = useJobTrigger({ onDone: () => load() })
+const batchBusy = ref(false)
+const batchMessage = ref('')
+
+const rerunnableIssueSet = new Set([
+  'no_products',
+  'coverage_low',
+  'sku_deviation_high',
+  'title_weak',
+  'price_missing',
+  'promotions_missing',
+  'latest_job_failed',
+  'never_crawled',
+  'empty_sitemap',
+  'proxy_unavailable',
+  'proxy_auth_failed',
+  'anti_bot_blocked',
+])
 
 const sortedRows = computed(() => rows.value.slice().sort((a, b) => normalizedPct(b) - normalizedPct(a)))
-const totalSku = computed(() => Number(summary.value.total_current_sku ?? rows.value.reduce((sum, row) => sum + Number(row.current || row.sku_count || row.products || row.count || 0), 0)))
+const totalSku = computed(() => Number(summary.value.total_current_sku ?? rows.value.reduce((sum, row) => sum + currentCount(row), 0)))
 const totalEstimated = computed(() => Number(summary.value.total_estimated_full ?? rows.value.reduce((sum, row) => sum + Number(row.estimated_full || 0), 0)))
 const coveragePct = computed(() => {
   if (summary.value.overall_coverage_pct != null) return Number(summary.value.overall_coverage_pct)
@@ -30,7 +47,10 @@ const warningSites = computed(() => rows.value.filter((row) => {
 }).length)
 const warningCount = computed(() => Number(summary.value.warning_count ?? warningSites.value))
 const criticalSites = computed(() => Number(summary.value.critical_count ?? rows.value.filter((row) => normalizedPct(row) < 50).length))
+const highDeviationCount = computed(() => Number(summary.value.high_deviation_count ?? rows.value.filter((row) => Math.abs(Number(row.sku_deviation_pct || 0)) > 50).length))
 const qualityBySite = computed(() => new Map(quality.value.map((row) => [String(row.site), row])))
+const rerunCandidateRows = computed(() => sortedRows.value.filter((row) => isRerunCandidate(row)))
+const rerunCandidateSites = computed(() => Array.from(new Set(rerunCandidateRows.value.map(siteKey).filter(Boolean))))
 
 async function load() {
   loading.value = true
@@ -52,29 +72,80 @@ async function trigger(site: string) {
   await jobTrigger.trigger(site)
 }
 
+async function triggerRiskSites() {
+  const sites = rerunCandidateSites.value
+  if (!sites.length || batchBusy.value) return
+  batchBusy.value = true
+  batchMessage.value = `准备提交 ${sites.length} 个风险站点`
+  let submitted = 0
+  try {
+    for (const site of sites) {
+      if (!site || jobTrigger.isBusy(site)) continue
+      submitted += 1
+      batchMessage.value = `正在提交 ${submitted}/${sites.length}: ${site}`
+      await jobTrigger.trigger(site)
+    }
+    batchMessage.value = submitted
+      ? `已提交 ${submitted} 个站点，页面会持续同步队列状态`
+      : '风险站点已有任务在运行或排队'
+  } catch (err) {
+    batchMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    batchBusy.value = false
+  }
+}
+
 function siteKey(row: Record<string, any>) {
   return String(row.site || row.name || '')
 }
 
 function normalizedPct(row: Record<string, any>) {
-  const raw = Number(row.coverage_pct || row.coverage || 0)
-  return Math.min(100, raw <= 1 ? raw * 100 : raw)
+  const raw = Number(row.coverage_pct ?? row.coverage ?? 0)
+  const pct = Math.min(100, raw <= 1 ? raw * 100 : raw)
+  return Math.round(pct * 100) / 100
 }
 
 function width(row: Record<string, any>) {
   return `${normalizedPct(row)}%`
 }
 
+function coverageLabel(row: Record<string, any>) {
+  return `${normalizedPct(row)}%`
+}
+
+function currentCount(row: Record<string, any>) {
+  return Number(row.current ?? row.sku_count ?? row.products ?? row.count ?? 0)
+}
+
 function qualityFor(row: Record<string, any>) {
   return qualityBySite.value.get(siteKey(row)) || {}
+}
+
+function issuesFor(row: Record<string, any>) {
+  const q = qualityFor(row)
+  return Array.isArray(q.issues) ? q.issues.map(String) : []
+}
+
+function isRerunCandidate(row: Record<string, any>) {
+  const pct = normalizedPct(row)
+  const deviation = Math.abs(Number(row.sku_deviation_pct || 0))
+  const issues = issuesFor(row)
+  return pct < 50
+    || deviation > 50
+    || issues.some((issue) => rerunnableIssueSet.has(issue))
 }
 
 function issueLabel(issue: string) {
   return ({
     no_products: '无商品',
     coverage_low: '覆盖低',
+    sku_deviation_high: 'SKU偏差高',
+    title_weak: '标题弱',
+    price_missing: '价格缺失',
     sales_missing: '销量缺失',
     revenue_missing: '收入缺失',
+    traffic_missing: '流量缺失',
+    conversion_missing: '转化缺失',
     promotions_missing: '促销缺失',
     latest_job_failed: '任务失败',
     job_in_progress: '运行中',
@@ -97,17 +168,34 @@ onMounted(load)
       <div class="stat"><div class="lbl">健康</div><div class="val">{{ healthySites }}</div><div class="delta">≥ 90%</div></div>
       <div class="stat"><div class="lbl">警告</div><div class="val">{{ warningCount }}</div><div class="delta warn">50-90%</div></div>
       <div class="stat"><div class="lbl">关键</div><div class="val">{{ criticalSites }}</div><div class="delta bad">&lt; 50%</div></div>
+      <div class="stat"><div class="lbl">SKU偏差</div><div class="val">{{ highDeviationCount }}</div><div class="delta bad">&gt; 50%</div></div>
       <div class="stat"><div class="lbl">需重跑</div><div class="val">{{ qualitySummary.needs_rerun || 0 }}</div><div class="delta bad">任务/覆盖风险</div></div>
       <div class="stat"><div class="lbl">缺销量</div><div class="val">{{ qualitySummary.missing_sales || 0 }}</div><div class="delta warn">需销量估算</div></div>
       <div class="stat"><div class="lbl">缺促销</div><div class="val">{{ qualitySummary.missing_promotions || 0 }}</div><div class="delta warn">需促销采集</div></div>
     </div>
 
+    <div v-if="!loading || rows.length" class="coverage-actions">
+      <div>
+        <b>风险站点 {{ rerunCandidateSites.length }}</b>
+        <span>包含覆盖低、SKU 偏差高、缺商品/价格/促销、最近任务失败或反爬代理类问题。</span>
+      </div>
+      <button class="batch-rerun" :disabled="loading || batchBusy || !rerunCandidateSites.length" @click="triggerRiskSites">
+        {{ batchBusy ? '提交中...' : `批量重跑风险站点(${rerunCandidateSites.length})` }}
+      </button>
+    </div>
+    <div v-if="batchMessage" class="batch-note">{{ batchMessage }}</div>
+
     <DataLoadingPanel v-if="!loading || rows.length" class="cov-grid" :loading="loading" :has-data="rows.length > 0" label="正在更新覆盖率">
       <div v-for="row in sortedRows" :key="row.site || row.name" class="cov-tile" :class="row.status">
         <h6>{{ row.site || row.name }}</h6>
         <div class="country">{{ row.brand || '—' }} · {{ row.country || '—' }}</div>
-        <div class="num">{{ fmtNumber(row.current || row.sku_count || row.products || row.count) }}</div>
-        <div class="pct">{{ row.coverage_pct ?? row.coverage ?? '—' }}% · 满 {{ fmtNumber(row.estimated_full || 0) }}</div>
+        <div class="num">{{ fmtNumber(currentCount(row)) }}</div>
+        <div class="pct">{{ coverageLabel(row) }} · 满 {{ fmtNumber(row.estimated_full || 0) }}</div>
+        <div v-if="row.target_sku_count" class="target-line">
+          目标 SKU {{ fmtNumber(row.target_sku_count) }} · 偏差 {{ row.sku_deviation_pct }}%
+          <span v-if="row.target_sku_source === 'acceptance'">验收口径</span>
+          <span v-else-if="row.target_sku_source === 'workspace'">工作区配置</span>
+        </div>
         <div class="bar"><div :style="{ width: width(row) }" /></div>
         <div class="quality-metrics">
           <span>SKU {{ fmtNumber(qualityFor(row).sku_count ?? row.current ?? 0) }}</span>
@@ -149,6 +237,12 @@ onMounted(load)
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.target-line {
+  margin-top: 4px;
+  color: var(--ui-amber, #b45309);
+  font-size: .72rem;
+  font-weight: 700;
 }
 .issue-list {
   display: flex;
@@ -194,5 +288,62 @@ onMounted(load)
   color: var(--ui-text);
   font-size: .7rem;
   line-height: 1.35;
+}
+.coverage-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -4px 0 14px;
+  padding: 11px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: 10px;
+  background: var(--ui-card);
+}
+.coverage-actions b {
+  display: block;
+  color: var(--ui-heading);
+  font-size: .84rem;
+}
+.coverage-actions span {
+  display: block;
+  margin-top: 3px;
+  color: var(--ui-muted);
+  font-size: .72rem;
+  line-height: 1.4;
+}
+.batch-rerun {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 13px;
+  border-radius: 8px;
+  border: 1px solid rgba(167, 139, 250, .34);
+  background: var(--ui-purple-soft);
+  color: var(--ui-purple-strong);
+  font-size: .74rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.batch-rerun:disabled {
+  opacity: .58;
+  cursor: not-allowed;
+}
+.batch-note {
+  margin: -5px 0 10px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(167, 139, 250, .24);
+  background: var(--ui-purple-soft);
+  color: var(--ui-purple-strong);
+  font-size: .72rem;
+}
+@media (max-width: 780px) {
+  .coverage-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .batch-rerun {
+    width: 100%;
+  }
 }
 </style>

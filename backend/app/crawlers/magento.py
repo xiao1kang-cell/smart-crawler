@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from selectolax.parser import HTMLParser
 
+from ..antiban import BlockedError
 from ..config import get_sites
 from .base import BaseCrawler, CrawlResult
 from .generic import GenericCrawler
@@ -65,6 +66,8 @@ class MagentoCrawler(BaseCrawler):
             m = re.findall(r"(?im)^\s*Sitemap:\s*(\S+)", res.text or "")
             if m:
                 return m[0].strip()
+        except BlockedError:
+            raise
         except Exception:
             pass
         for p in ("/media/sitemap/sitemap.xml", "/sitemap.xml",
@@ -74,6 +77,8 @@ class MagentoCrawler(BaseCrawler):
                                   headers=self._headers(), timeout=20)
                 if (res.status or 0) == 200 and "<loc>" in (res.text or ""):
                     return self.base + p
+            except BlockedError:
+                raise
             except Exception:
                 continue
         return None
@@ -85,6 +90,8 @@ class MagentoCrawler(BaseCrawler):
         try:
             res = fetcher.get(url, headers=self._headers(), timeout=30)
             raw = res.content or b""
+        except BlockedError:
+            raise
         except Exception:
             return []
         try:
@@ -103,7 +110,12 @@ class MagentoCrawler(BaseCrawler):
 
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        fetcher = self.make_fetcher(kind="product", source="magento")
+        fetcher = self.make_fetcher(
+            kind="product",
+            source="magento",
+            fail_fast_blocked=False,
+            retries=0,
+        )
 
         sitemap = self.sitemap_hint or self._discover_sitemap(fetcher)
         if not sitemap:
@@ -152,6 +164,8 @@ class MagentoCrawler(BaseCrawler):
         """抓单页并判别 —— 是商品返回 row，否则 None。"""
         try:
             res = self._fetcher.get(url, headers=self._headers(), timeout=25)
+        except BlockedError:
+            raise
         except Exception:
             return None
         if (res.status or 0) != 200:

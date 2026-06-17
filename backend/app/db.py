@@ -147,6 +147,7 @@ def _seed_sites() -> None:
                     country=cfg["country"], url=cfg["url"],
                     platform=cfg["platform"],
                     proxy_tier=cfg.get("proxy_tier", "none"),
+                    source="yaml",
                 ))
             else:                                 # 已存在 —— 同步 yaml 配置
                 row.brand = cfg["brand"]
@@ -154,6 +155,8 @@ def _seed_sites() -> None:
                 row.url = cfg["url"]
                 row.platform = cfg["platform"]
                 row.proxy_tier = cfg.get("proxy_tier", "none")
+                if not row.source:
+                    row.source = "yaml"
 
 
 def _seed_users() -> None:
@@ -240,23 +243,29 @@ def _seed_workspaces() -> None:
 
 
 def _seed_workspace_sites() -> None:
+    from .config import get_settings
     from .models import Site, Workspace, WorkspaceSite
 
+    hidden_sites = set(get_settings().get("hidden_sites") or [])
     with session_scope() as s:
         workspace = s.query(Workspace).filter(Workspace.slug == "internal").first()
         if not workspace:
             return
-        existing = {row.site for row in s.query(WorkspaceSite)
+        existing = {row.site: row for row in s.query(WorkspaceSite)
                     .filter(WorkspaceSite.workspace_id == workspace.id).all()}
         for idx, site in enumerate(s.query(Site).order_by(Site.id).all()):
-            if site.site in existing:
+            link = existing.get(site.site)
+            if link:
+                link.hidden = site.site in hidden_sites
+                if not link.display_name:
+                    link.display_name = f"{site.brand} · {site.country}"
                 continue
             s.add(WorkspaceSite(
                 workspace_id=workspace.id,
                 site=site.site,
                 display_name=f"{site.brand} · {site.country}",
                 enabled=True,
-                hidden=False,
+                hidden=site.site in hidden_sites,
                 sort_order=idx,
             ))
 

@@ -18,8 +18,10 @@ settings:
     - allegro_pl
     - bestbuy_us
     - ebay_us
+    - etsy_us
     - otto_de
     - target_us
+    - vidaxl_ca
     - walmart_us
     - wayfair_us
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { enqueueJob, jobStats, listJobs, retryJob } from '../api/queue'
+import { enqueueJob, jobDetail, jobStats, listJobs, retryJob } from '../api/queue'
 import { fmtDate } from '../api/client'
 import StatCard from '../components/common/StatCard.vue'
 import StatusBadge from '../components/common/StatusBadge.vue'
@@ -22,6 +22,8 @@ const failureCodeFilter = ref('')
 const page = ref(1)
 const size = ref(20)
 const detailRow = ref<Record<string, any> | null>(null)
+const detailLoading = ref(false)
+const detailError = ref('')
 
 const polling = ref(true)
 let timer: ReturnType<typeof setInterval> | null = null
@@ -31,6 +33,14 @@ const enqBusy = ref(false)
 const enqMsg = ref('')
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / size.value)))
+const detailJson = computed(() => {
+  if (!detailRow.value) return ''
+  try {
+    return JSON.stringify(detailRow.value, null, 2)
+  } catch {
+    return String(detailRow.value)
+  }
+})
 
 const statCards = computed(() => [
   { key: 'pending', label: '待处理', value: stats.value.pending ?? 0 },
@@ -55,6 +65,8 @@ const sourceCards = computed(() => {
 })
 
 const breakdowns = computed(() => (stats.value.breakdowns || {}) as Record<string, any[]>)
+const statusMeta = computed(() => (stats.value.status_meta || {}) as Record<string, any>)
+const queueCountNote = computed(() => String(stats.value.status_count_note || ''))
 
 const breakdownCards = computed(() => [
   {
@@ -81,7 +93,7 @@ const breakdownCards = computed(() => [
   {
     key: 'crawl_stale_pending_by_site',
     title: '久排站点',
-    status: 'pending',
+    status: 'stale_pending',
     source: 'crawl',
     rows: breakdowns.value.crawl_stale_pending_by_site || []
   },
@@ -106,6 +118,41 @@ const breakdownCards = computed(() => [
     source: 'crawl',
     failureCode: true,
     rows: breakdowns.value.crawl_failure_codes || []
+  },
+  {
+    key: 'spine_failed_by_dataset',
+    title: '通用失败',
+    status: 'failed',
+    source: 'spine',
+    rows: breakdowns.value.spine_failed_by_dataset || []
+  },
+  {
+    key: 'spine_running_by_dataset',
+    title: '通用运行中',
+    status: 'running',
+    source: 'spine',
+    rows: breakdowns.value.spine_running_by_dataset || []
+  },
+  {
+    key: 'spine_stuck_by_dataset',
+    title: '通用卡住',
+    status: 'stuck',
+    source: 'spine',
+    rows: breakdowns.value.spine_stuck_by_dataset || []
+  },
+  {
+    key: 'ondemand_running_by_platform',
+    title: '按需运行中',
+    status: 'running',
+    source: 'ondemand',
+    rows: breakdowns.value.ondemand_running_by_platform || []
+  },
+  {
+    key: 'ondemand_stuck_by_platform',
+    title: '按需卡住',
+    status: 'stuck',
+    source: 'ondemand',
+    rows: breakdowns.value.ondemand_stuck_by_platform || []
   },
   {
     key: 'ondemand_failed_by_platform',
@@ -160,6 +207,12 @@ watch([statusFilter, sourceFilter, targetFilter, failureCodeFilter, size], () =>
   load()
 })
 
+watch(() => route.fullPath, () => {
+  applyRouteQuery()
+  page.value = 1
+  load()
+})
+
 async function submitEnqueue() {
   if (!enqForm.value.url || !enqForm.value.dataset) {
     enqMsg.value = '请填写 URL 与 dataset'
@@ -179,8 +232,8 @@ async function submitEnqueue() {
   }
 }
 
-async function doRetry(id: number) {
-  const row = items.value.find((item) => item.id === id)
+async function doRetry(row: Record<string, any>) {
+  const id = Number(row.id)
   try {
     await retryJob(id, row?.source || 'spine')
     await load()
@@ -218,6 +271,15 @@ function clearFilters() {
   load()
 }
 
+function applyStatusCard(status: string) {
+  statusFilter.value = status
+  sourceFilter.value = 'all'
+  targetFilter.value = ''
+  failureCodeFilter.value = ''
+  page.value = 1
+  load()
+}
+
 function truncate(s?: string | null, n = 48) {
   const v = String(s || '')
   return v.length > n ? `${v.slice(0, n)}…` : v
@@ -239,6 +301,30 @@ function retryableText(row: Record<string, any>) {
   return '-'
 }
 
+function attemptText(row: Record<string, any>) {
+  return row.attempts ?? row.retries ?? '-'
+}
+
+function durationText(row: Record<string, any>) {
+  const parts: string[] = []
+  const duration = Number(row.duration_sec ?? 0)
+  const active = Number(row.active_sec ?? 0)
+  const age = Number(row.age_sec ?? 0)
+  if (duration > 0) parts.push(`耗时 ${humanSeconds(duration)}`)
+  if (!duration && active > 0) parts.push(`活跃 ${humanSeconds(active)}`)
+  if (!duration && !active && age > 0) parts.push(`等待 ${humanSeconds(age)}`)
+  if (row.is_stale_pending) parts.push('久排')
+  return parts.join(' / ') || '-'
+}
+
+function humanSeconds(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '0s'
+  if (value < 60) return `${Math.round(value)}s`
+  if (value < 3600) return `${Math.round(value / 60)}m`
+  if (value < 86400) return `${Math.round(value / 3600)}h`
+  return `${Math.round(value / 86400)}d`
+}
+
 function noteText(row: Record<string, any>) {
   if (!row.notes) return ''
   try {
@@ -248,12 +334,28 @@ function noteText(row: Record<string, any>) {
   }
 }
 
-function openDetail(row: Record<string, any>) {
+async function openDetail(row: Record<string, any>) {
   detailRow.value = row
+  detailLoading.value = true
+  detailError.value = ''
+  try {
+    const detail = await jobDetail(Number(row.id), row?.source || 'spine')
+    detailRow.value = { ...row, ...detail }
+  } catch (err) {
+    detailError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+function closeDetail() {
+  detailRow.value = null
+  detailError.value = ''
+  detailLoading.value = false
 }
 
 function canRetry(row: Record<string, any>) {
-  return !['pending', 'running', 'stuck'].includes(String(row.normalized_status || row.status || ''))
+  return !['pending', 'running'].includes(String(row.normalized_status || row.status || ''))
 }
 
 function applyRouteQuery() {
@@ -287,7 +389,15 @@ onUnmounted(stopPolling)
     </div>
 
     <div class="stat-row">
-      <StatCard v-for="c in statCards" :key="c.key" :label="c.label" :value="c.value" />
+      <button
+        v-for="c in statCards"
+        :key="c.key"
+        class="stat-filter"
+        :class="{ active: statusFilter === c.key }"
+        @click="applyStatusCard(c.key)"
+      >
+        <StatCard :label="c.label" :value="c.value" />
+      </button>
     </div>
 
     <div class="source-row">
@@ -303,6 +413,14 @@ onUnmounted(stopPolling)
       </button>
     </div>
 
+    <div v-if="queueCountNote" class="queue-note">
+      <span>{{ queueCountNote }}</span>
+      <b>原始运行 {{ statusMeta.running_raw ?? 0 }}</b>
+      <b>有效运行 {{ statusMeta.running_active ?? 0 }}</b>
+      <b>卡住 {{ statusMeta.stuck ?? 0 }}</b>
+      <b>久排 {{ statusMeta.stale_pending ?? 0 }}</b>
+    </div>
+
     <div class="toolbar">
       <select v-model="sourceFilter" class="ctl">
         <option value="all">全部来源</option>
@@ -313,6 +431,7 @@ onUnmounted(stopPolling)
       <select v-model="statusFilter" class="ctl">
         <option value="">全部状态</option>
         <option value="pending">待处理</option>
+        <option value="stale_pending">久排</option>
         <option value="running">运行中</option>
         <option value="stuck">卡住</option>
         <option value="success">成功</option>
@@ -370,15 +489,16 @@ onUnmounted(stopPolling)
             <th>URL / 批次</th>
             <th>失败码 / 阶段</th>
             <th>可重试</th>
-            <th>重试/执行</th>
+            <th>执行次数</th>
             <th>错误</th>
+            <th>耗时 / 活跃</th>
             <th>完成时间</th>
             <th>创建时间</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="row in items" :key="row.id">
+          <tr v-for="row in items" :key="`${row.source || 'spine'}-${row.id}`">
             <td>{{ row.id }}</td>
             <td>{{ row.source_label || row.source || '-' }}</td>
             <td><StatusBadge :status="row.normalized_status || row.status" /></td>
@@ -386,19 +506,20 @@ onUnmounted(stopPolling)
             <td :title="row.url || row.dataset || ''">{{ truncate(row.url || row.dataset) || '-' }}</td>
             <td :title="metaText(row)">{{ truncate(metaText(row), 32) }}</td>
             <td>{{ retryableText(row) }}</td>
-            <td>{{ row.retries ?? 0 }}</td>
+            <td>{{ attemptText(row) }}</td>
             <td class="err-cell" :title="row.error || ''">{{ truncate(row.error, 36) || '-' }}</td>
+            <td :title="row.stuck_reason || ''">{{ durationText(row) }}</td>
             <td>{{ fmtDate(row.finished_at) }}</td>
             <td>{{ fmtDate(row.created_at) }}</td>
             <td>
               <div class="row-actions">
                 <button class="btn small" @click="openDetail(row)">详情</button>
-                <button class="btn small" :disabled="!canRetry(row)" @click="doRetry(row.id)">重试</button>
+                <button class="btn small" :disabled="!canRetry(row)" @click="doRetry(row)">重试</button>
               </div>
             </td>
           </tr>
           <tr v-if="!items.length">
-            <td colspan="12" class="empty">{{ loading ? '加载中…' : '暂无任务' }}</td>
+            <td colspan="13" class="empty">{{ loading ? '加载中…' : '暂无任务' }}</td>
           </tr>
         </tbody>
       </table>
@@ -415,15 +536,17 @@ onUnmounted(stopPolling)
       </select>
     </div>
 
-    <div v-if="detailRow" class="detail-mask" @click.self="detailRow = null">
+    <div v-if="detailRow" class="detail-mask" @click.self="closeDetail">
       <aside class="detail-panel">
         <div class="detail-head">
           <div>
             <p>{{ detailRow.source_label || detailRow.source }}</p>
             <h2>#{{ detailRow.id }} · {{ targetText(detailRow) }}</h2>
           </div>
-          <button class="btn small" @click="detailRow = null">关闭</button>
+          <button class="btn small" @click="closeDetail">关闭</button>
         </div>
+        <div v-if="detailLoading" class="detail-loading">正在读取最新任务明细…</div>
+        <div v-if="detailError" class="detail-error">{{ detailError }}</div>
         <dl class="detail-grid">
           <div>
             <dt>状态</dt>
@@ -451,7 +574,23 @@ onUnmounted(stopPolling)
           </div>
           <div>
             <dt>执行次数</dt>
-            <dd>{{ detailRow.attempts ?? detailRow.retries ?? 0 }}</dd>
+            <dd>{{ attemptText(detailRow) }}</dd>
+          </div>
+          <div>
+            <dt>排队时长</dt>
+            <dd>{{ detailRow.age_sec ? humanSeconds(Number(detailRow.age_sec)) : '-' }}</dd>
+          </div>
+          <div>
+            <dt>活跃时长</dt>
+            <dd>{{ detailRow.active_sec ? humanSeconds(Number(detailRow.active_sec)) : '-' }}</dd>
+          </div>
+          <div>
+            <dt>任务耗时</dt>
+            <dd>{{ detailRow.duration_sec ? humanSeconds(Number(detailRow.duration_sec)) : '-' }}</dd>
+          </div>
+          <div>
+            <dt>卡住原因</dt>
+            <dd>{{ detailRow.stuck_reason || '-' }}</dd>
           </div>
           <div>
             <dt>创建时间</dt>
@@ -493,6 +632,10 @@ onUnmounted(stopPolling)
         <div v-if="noteText(detailRow)" class="detail-block">
           <h3>Notes</h3>
           <pre>{{ noteText(detailRow) }}</pre>
+        </div>
+        <div class="detail-block">
+          <h3>原始明细</h3>
+          <pre>{{ detailJson }}</pre>
         </div>
       </aside>
     </div>
@@ -539,6 +682,27 @@ onUnmounted(stopPolling)
   gap: 12px;
 }
 
+.stat-filter {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.stat-filter :deep(.stat-card) {
+  height: 100%;
+  transition: border-color .16s ease, background .16s ease, transform .16s ease;
+}
+
+.stat-filter:hover :deep(.stat-card),
+.stat-filter.active :deep(.stat-card) {
+  border-color: rgba(139, 92, 246, .62);
+  background: rgba(139, 92, 246, .12);
+}
+
 .source-row {
   display: flex;
   gap: 8px;
@@ -570,6 +734,31 @@ onUnmounted(stopPolling)
 
 .source-chip b {
   font-size: 13px;
+}
+
+.queue-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid rgba(245, 158, 11, 0.24);
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--ui-muted, #9ca3af);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.queue-note span {
+  flex: 1;
+  min-width: 260px;
+}
+
+.queue-note b {
+  color: inherit;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .toolbar,
@@ -797,6 +986,26 @@ onUnmounted(stopPolling)
 .detail-head h2 {
   font-size: 18px;
   font-weight: 600;
+}
+
+.detail-loading,
+.detail-error {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.detail-loading {
+  border: 1px solid rgba(139, 92, 246, 0.28);
+  background: rgba(139, 92, 246, 0.12);
+  color: #c4b5fd;
+}
+
+.detail-error {
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  background: rgba(239, 68, 68, 0.1);
+  color: #fca5a5;
 }
 
 .detail-grid {

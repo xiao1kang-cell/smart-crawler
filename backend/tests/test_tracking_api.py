@@ -39,6 +39,28 @@ def test_tracking_list_returns_items_shape():
     assert "items" in body and "total" in body
 
 
+def test_tracking_list_excludes_configured_hidden_sites():
+    init_db()
+    client = TestClient(app)
+    body = client.get("/api/tracking?page_size=200", headers=_admin_headers()).json()
+    listed = {item["site"] for item in body["items"]}
+    assert "walmart_us" not in listed
+    assert "songmics_us" in listed
+
+
+def test_seeded_sites_are_marked_as_yaml_source():
+    init_db()
+    from app.db import SessionLocal
+    from app.models import Site
+
+    s = SessionLocal()
+    try:
+        songmics = s.query(Site).filter_by(site="songmics_us").one()
+        assert songmics.source == "yaml"
+    finally:
+        s.close()
+
+
 def test_add_tracking_creates_site_and_enqueues():
     init_db()
     client = TestClient(app)
@@ -70,6 +92,24 @@ def test_add_tracking_falls_back_to_generic_when_undetectable():
     enq.assert_called_once()
 
 
+def test_add_tracking_normalizes_long_url_and_inferrs_market_brand():
+    init_db()
+    client = TestClient(app)
+    long_path = "/collections/desks/" + "x" * 180
+    with patch("app.api.tracking.detect_platform",
+               return_value=("generic", "https://flexispot.co.uk")), \
+         patch("app.api.tracking.enqueue", return_value=1002):
+        r = client.post("/api/tracking", headers=_admin_headers(),
+                        json={"url": f"https://flexispot.co.uk{long_path}"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["url"] == "https://flexispot.co.uk"
+    assert body["site"].startswith("flexispot_uk")
+    assert body["country"] == "UK"
+    assert body["brand"] == "flexispot"
+    assert body["currency"] == "GBP"
+
+
 def test_add_tracking_forbidden_for_non_admin():
     init_db()
     client = TestClient(app)
@@ -96,13 +136,14 @@ def test_trigger_reuses_active_job_for_same_site():
     assert body["existing_jobs"] == [first_job]
 
 
-def _make_user_site(client):
+def _make_user_site(client, *, host: str = "edit.example.com",
+                    brand: str = "B", country: str = "US"):
     """借 POST 建一个 source=user 的站,返回其 site code。"""
     with patch("app.api.tracking.detect_platform",
-               return_value=("shopify", "https://edit.example.com")), \
+               return_value=("shopify", f"https://{host}")), \
          patch("app.api.tracking.enqueue", return_value=1):
         r = client.post("/api/tracking", headers=_admin_headers(),
-                        json={"url": "https://edit.example.com", "brand": "B", "country": "US"})
+                        json={"url": f"https://{host}", "brand": brand, "country": country})
     return r.json()["site"]
 
 
@@ -177,7 +218,125 @@ def test_export_returns_xlsx():
     assert r.content[:2] == b"PK"  # xlsx = zip
     wb = load_workbook(io.BytesIO(r.content), read_only=True)
     headers = [cell.value for cell in next(wb.active.iter_rows(max_row=1))]
+    assert headers == ["Market", "Brand", "URL", "Status", "Products",
+                       "30-Day Sales", "30-Day Revenue", "Updated Time",
+                       "Created Time", "Creator", "Last Error"]
     assert "Created Time" in headers
     assert "Creator" in headers
     assert "30-Day Revenue" in headers
     assert client.get("/api/tracking/export?token=bogus").status_code == 401
+
+
+def test_tracking_filters_metrics_latest_job_and_export_scope():
+    init_db(); client = TestClient(app)
+    from datetime import datetime
+    from openpyxl import load_workbook
+    import io
+    import uuid
+    from app.db import SessionLocal
+    from app.models import CrawlJob, Product
+
+    suffix = uuid.uuid4().hex[:8]
+    host = f"filter-metric-{suffix}.example.com"
+    brand = f"MetricBrand{suffix}"
+    code = _make_user_site(client, host=host, brand=brand, country="CA")
+    s = SessionLocal()
+    try:
+        s.add(Product(site=code, sku=f"METRIC-{suffix}", spu=f"SPU-{suffix}",
+                      title="Metric Product", sale_price=20,
+                      thirty_day_sales=3, thirty_day_revenue=60,
+                      updated_time=datetime(2026, 6, 16)))
+        s.add(CrawlJob(site=code, status="failed", trigger="manual",
+                       failure_code="http_403", failure_stage="fetch",
+                       failure_detail="HTTP 403 forbidden",
+                       suggested_action="配置可用住宅代理",
+                       created_at=datetime(2026, 6, 16, 1),
+                       finished_at=datetime(2026, 6, 16, 1, 1)))
+        s.commit()
+    finally:
+        s.close()
+
+    listed = client.get(
+        f"/api/tracking?search={suffix}&market=CA&brand={brand}&status=tracking",
+        headers=_admin_headers(),
+    )
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    assert body["total"] == 1
+    row = body["items"][0]
+    assert row["site"] == code
+    assert row["products"] == 1
+    assert row["sku_count"] == 1
+    assert row["thirty_day_sales"] == 3
+    assert row["thirty_day_revenue"] == 60
+    assert row["sales_available"] is True
+    assert row["revenue_available"] is True
+    assert row["track_status"] == "tracking"
+    assert row["display_status"] == "error"
+    assert row["last_error_code"] == "http_403"
+    assert row["latest_job"]["failure_stage"] == "fetch"
+
+    error_listed = client.get(
+        f"/api/tracking?search={suffix}&market=CA&brand={brand}&status=error",
+        headers=_admin_headers(),
+    )
+    assert error_listed.status_code == 200, error_listed.text
+    error_body = error_listed.json()
+    assert error_body["total"] == 1
+    assert error_body["items"][0]["site"] == code
+    assert "error" in error_body["facets"]["statuses"]
+
+    token = make_token("admin", "")
+    exported = client.get(
+        f"/api/tracking/export?token={token}&search={suffix}&market=CA&brand={brand}&status=tracking"
+    )
+    assert exported.status_code == 200, exported.text
+    wb = load_workbook(io.BytesIO(exported.content), read_only=True)
+    rows = list(wb.active.iter_rows(values_only=True))
+    assert len(rows) == 2
+    assert rows[1][0:5] == ("CA", brand, f"https://{host}", "error", 1)
+    assert rows[1][5] == 3
+    assert rows[1][7] == "2026-06-16 00:00"
+    assert "T" not in rows[1][8]
+    assert rows[1][10] == "http_403"
+
+
+def test_tracking_revenue_does_not_depend_on_sales_signal():
+    init_db(); client = TestClient(app)
+    from datetime import datetime
+    from openpyxl import load_workbook
+    import io
+    import uuid
+    from app.db import SessionLocal
+    from app.models import Product
+
+    suffix = uuid.uuid4().hex[:8]
+    host = f"revenue-only-{suffix}.example.com"
+    brand = f"RevenueOnly{suffix}"
+    code = _make_user_site(client, host=host, brand=brand, country="US")
+    s = SessionLocal()
+    try:
+        s.add(Product(site=code, sku=f"REV-{suffix}", spu=f"REVSPU-{suffix}",
+                      title="Revenue Only Product", sale_price=25,
+                      thirty_day_sales=0, thirty_day_revenue=125,
+                      updated_time=datetime(2026, 6, 15)))
+        s.commit()
+    finally:
+        s.close()
+
+    listed = client.get(f"/api/tracking?search={suffix}",
+                        headers=_admin_headers())
+    assert listed.status_code == 200, listed.text
+    row = listed.json()["items"][0]
+    assert row["thirty_day_sales"] == 0
+    assert row["thirty_day_revenue"] == 125
+    assert row["sales_available"] is False
+    assert row["revenue_available"] is True
+
+    token = make_token("admin", "")
+    exported = client.get(f"/api/tracking/export?token={token}&search={suffix}")
+    assert exported.status_code == 200, exported.text
+    wb = load_workbook(io.BytesIO(exported.content), read_only=True)
+    rows = list(wb.active.iter_rows(values_only=True))
+    assert rows[1][5] in ("", None)
+    assert rows[1][6] == "USD 125.0"

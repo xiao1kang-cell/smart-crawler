@@ -14,7 +14,7 @@ import {
 } from 'lucide-vue-next'
 import { computed, onMounted, ref } from 'vue'
 import DataLoadingPanel from '../components/common/DataLoadingPanel.vue'
-import { asList, fmtDate, fmtNumber, fmtPrice, shortUrl } from '../api/client'
+import { asList, currencyForMarket, fmtDate, fmtNumber, fmtPrice, shortUrl } from '../api/client'
 import { addTracking, deleteTracking, editTracking, listTracking, pauseTracking, resumeTracking } from '../api/tracking'
 import { useJobTrigger } from '../composables/useJobTrigger'
 import { useAuthStore } from '../stores/auth'
@@ -35,6 +35,8 @@ const showAdd = ref(false)
 const addForm = ref({ url: '', brand: '', country: '' })
 const addBusy = ref(false)
 const editing = ref<Record<string, any> | null>(null)
+const deleteTarget = ref<Record<string, any> | null>(null)
+const deleteBusy = ref(false)
 const jobTrigger = useJobTrigger({ onDone: () => load() })
 const ALL_VALUE = '__all'
 
@@ -84,20 +86,17 @@ const statusSelect = computed({
   },
 })
 const trackingColumns = [
-  { accessorKey: 'country', header: '市场' },
-  { accessorKey: 'brand', header: '品牌' },
-  { accessorKey: 'site', header: '站点' },
-  { accessorKey: 'track_status', header: '状态' },
-  { accessorKey: 'products', header: '商品', meta: { class: { th: 'num', td: 'num' } } },
-  { accessorKey: 'sku_count', header: 'SKU 行', meta: { class: { th: 'num', td: 'num muted' } } },
-  { accessorKey: 'thirty_day_sales', header: '30天销量', meta: { class: { th: 'num', td: 'num' } } },
-  { accessorKey: 'thirty_day_revenue', header: '30天收入', meta: { class: { th: 'num', td: 'num' } } },
-  { accessorKey: 'display_updated_at', header: '最后采集' },
-  { accessorKey: 'created_at', header: '创建时间' },
-  { accessorKey: 'creator', header: '创建人' },
-  { accessorKey: 'last_product_updated', header: '商品更新' },
-  { accessorKey: 'source', header: '来源' },
-  { id: 'actions', header: '操作', meta: { class: { th: 'actions-head', td: 'actions-cell' } } },
+  { accessorKey: 'country', header: 'Market' },
+  { accessorKey: 'brand', header: 'Brand' },
+  { accessorKey: 'site', header: 'URL' },
+  { accessorKey: 'track_status', header: 'Status' },
+  { accessorKey: 'products', header: 'Products', meta: { class: { th: 'num', td: 'num' } } },
+  { accessorKey: 'thirty_day_sales', header: '30-Day Sales', meta: { class: { th: 'num', td: 'num' } } },
+  { accessorKey: 'thirty_day_revenue', header: '30-Day Revenue', meta: { class: { th: 'num', td: 'num' } } },
+  { accessorKey: 'display_updated_at', header: 'Updated Time' },
+  { accessorKey: 'created_at', header: 'Created Time' },
+  { accessorKey: 'creator', header: 'Creator' },
+  { id: 'actions', header: 'Action', meta: { class: { th: 'actions-head', td: 'actions-cell' } } },
 ]
 
 const canEdit = computed(() => {
@@ -114,10 +113,25 @@ function flag(cc?: string) {
 function statusMeta(s?: string) {
   const key = (s || 'tracking').toLowerCase()
   return ({
+    submitting: { label: '提交中', tone: 'busy' },
+    queued: { label: '已入队', tone: 'busy' },
+    pending: { label: '已入队', tone: 'busy' },
+    running: { label: '抓取中', tone: 'busy' },
+    success: { label: '已完成', tone: 'ok' },
     tracking: { label: '追踪中', tone: 'ok' },
     paused: { label: '已暂停', tone: 'idle' },
     error: { label: '异常', tone: 'bad' },
+    failed: { label: '抓取失败', tone: 'bad' },
+    blocked: { label: '被拦截', tone: 'bad' },
+    skipped: { label: '已跳过', tone: 'idle' },
+    unknown: { label: '同步中', tone: 'busy' },
   } as Record<string, { label: string; tone: string }>)[key] || { label: s || '未知', tone: 'idle' }
+}
+
+function displayStatus(row: Record<string, any>) {
+  const triggerStatus = jobTrigger.stateFor(row.site)?.status
+  if (triggerStatus && triggerStatus !== 'idle') return triggerStatus
+  return row.display_status || row.track_status
 }
 
 function fmtTime(value?: string | null) {
@@ -134,8 +148,20 @@ function fmtSales(row: Record<string, any>) {
 }
 
 function fmtRevenue(row: Record<string, any>) {
-  if (!row.sales_available) return '暂无'
-  return fmtPrice(row.thirty_day_revenue || 0, row.currency)
+  if (!row.revenue_available) return '暂无'
+  return fmtPrice(row.thirty_day_revenue || 0, row.currency || currencyForMarket(row.site || row.country))
+}
+
+function trackingUrlLabel(url?: string, fallback?: string) {
+  if (!url) return fallback || ''
+  try {
+    const u = new URL(url)
+    const fixed = `${u.protocol}//${u.host}/`
+    return fixed.length > 150 ? `${fixed.slice(0, 149)}…` : fixed
+  } catch {
+    const label = shortUrl(url) || url || fallback || ''
+    return label.length > 150 ? `${label.slice(0, 149)}…` : label
+  }
 }
 
 async function load() {
@@ -223,13 +249,21 @@ async function togglePause(row: Record<string, any>) {
   }
 }
 
-async function remove(row: Record<string, any>) {
-  if (!window.confirm(`确认从当前工作区移除「${row.brand || row.site}」？`)) return
+function remove(row: Record<string, any>) {
+  deleteTarget.value = row
+}
+
+async function confirmRemove() {
+  if (!deleteTarget.value) return
+  deleteBusy.value = true
   try {
-    await deleteTracking(row.site)
+    await deleteTracking(deleteTarget.value.site)
+    deleteTarget.value = null
     await load()
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    deleteBusy.value = false
   }
 }
 
@@ -268,10 +302,10 @@ onMounted(async () => {
         <div class="lead">标杆网站维护</div>
         <div class="sub">{{ loading ? '同步中' : `${fmtNumber(total)} 个追踪站点` }}</div>
       </div>
-      <UButton v-if="canEdit" class="btn-prim tracking-add" @click="showAdd = true">
+      <button v-if="canEdit" type="button" class="btn-prim tracking-add" @click="showAdd = true">
         <Plus class="size-4" />
-        <span>新增站点</span>
-      </UButton>
+        <span>Add Tracking</span>
+      </button>
     </div>
 
     <UAlert v-if="error" color="error" variant="soft" :title="error" class="mb-4" />
@@ -298,27 +332,28 @@ onMounted(async () => {
     <div class="tracking-toolbar">
       <label class="tracking-field search-field">
         <Search class="size-4 field-icon" />
-        <UInput v-model="search" variant="none" placeholder="URL / 品牌 / 站点代码" @keyup.enter="applySearch" />
+        <UInput v-model="search" variant="none" placeholder="URL / Brand name / Site code" @keyup.enter="applySearch" />
       </label>
       <label class="tracking-field small">
-        <span>市场</span>
+        <span>Market</span>
         <USelect v-model="marketSelect" variant="none" :items="marketItems" value-key="value" />
       </label>
       <label class="tracking-field brand-filter">
-        <span>品牌</span>
+        <span>Brand</span>
         <USelect v-model="brandSelect" variant="none" :items="brandItems" value-key="value" />
       </label>
       <label class="tracking-field select-field">
-        <span>状态</span>
+        <span>Status</span>
         <USelect v-model="statusSelect" variant="none" :items="statusItems" value-key="value" />
       </label>
-      <UButton class="tool-btn primary" :loading="loading" :disabled="loading" @click="applySearch">
+      <button type="button" class="tool-btn primary" :disabled="loading" @click="applySearch">
         <SlidersHorizontal v-if="!loading" class="size-4" />
-        <span>筛选</span>
-      </UButton>
-      <UButton v-if="hasFilters" class="tool-btn ghost" :disabled="loading" @click="resetFilters">
+        <RefreshCw v-else class="size-4 spin" />
+        <span>{{ loading ? '筛选中' : '筛选' }}</span>
+      </button>
+      <button v-if="hasFilters" type="button" class="tool-btn ghost" :disabled="loading" @click="resetFilters">
         <span>清空</span>
-      </UButton>
+      </button>
       <a class="tool-btn ghost" :href="exportUrl()" target="_blank" rel="noopener">
         <Download class="size-4" />
         <span>导出</span>
@@ -345,26 +380,27 @@ onMounted(async () => {
         <template #site-cell="{ row }">
           <div>
             <a class="site-link" :href="row.original.url" target="_blank" rel="noopener" :title="row.original.url">
-              <span>{{ shortUrl(row.original.url) || row.original.site }}</span>
+              <span>{{ trackingUrlLabel(row.original.url, row.original.site) }}</span>
               <ExternalLink class="size-3" />
             </a>
             <div class="site-code">{{ row.original.site }}</div>
           </div>
         </template>
         <template #track_status-cell="{ row }">
-          <span class="status-pill" :class="statusMeta(row.original.track_status).tone">{{ statusMeta(row.original.track_status).label }}</span>
+          <div class="status-cell">
+            <span class="status-pill" :class="statusMeta(displayStatus(row.original)).tone">{{ statusMeta(displayStatus(row.original)).label }}</span>
+            <small v-if="row.original.last_error_code" class="status-detail">{{ row.original.last_error_code }}</small>
+            <small v-else-if="row.original.latest_job?.status === 'pending' || row.original.latest_job?.status === 'running'" class="status-detail">{{ row.original.latest_job.status }}</small>
+          </div>
         </template>
         <template #products-cell="{ row }">
           {{ fmtMetric(row.original.products) }}
-        </template>
-        <template #sku_count-cell="{ row }">
-          {{ fmtMetric(row.original.sku_count) }}
         </template>
         <template #thirty_day_sales-cell="{ row }">
           <span :class="{ muted: !row.original.sales_available }">{{ fmtSales(row.original) }}</span>
         </template>
         <template #thirty_day_revenue-cell="{ row }">
-          <span :class="{ muted: !row.original.sales_available }">{{ fmtRevenue(row.original) }}</span>
+          <span :class="{ muted: !row.original.revenue_available }">{{ fmtRevenue(row.original) }}</span>
         </template>
         <template #display_updated_at-cell="{ row }">
           <span class="time-cell">{{ fmtTime(row.original.display_updated_at || row.original.last_crawled || row.original.updated_at) }}</span>
@@ -375,15 +411,6 @@ onMounted(async () => {
         <template #creator-cell="{ row }">
           <span class="creator-cell">{{ row.original.creator || '系统' }}</span>
         </template>
-        <template #last_product_updated-cell="{ row }">
-          <span class="time-cell">{{ fmtTime(row.original.last_product_updated) }}</span>
-        </template>
-        <template #source-cell="{ row }">
-          <span class="source-cell">
-            <span>{{ row.original.source === 'user' ? '手动' : '种子' }}</span>
-            <small>{{ row.original.creator || '系统' }}</small>
-          </span>
-        </template>
         <template #actions-cell="{ row }">
           <div class="actions-cell">
             <a :href="reportHref(row.original)" target="_blank" rel="noopener" class="action-btn" title="打开报告" aria-label="打开报告">
@@ -391,23 +418,24 @@ onMounted(async () => {
               <span class="sr-only">报告</span>
             </a>
             <template v-if="canEdit">
-              <UButton class="action-btn" variant="ghost" color="neutral" title="编辑" aria-label="编辑" @click="editing = { ...row.original }">
+              <button type="button" class="action-btn" title="编辑" aria-label="编辑" @click="editing = { ...row.original }">
                 <Pencil class="size-4" />
                 <span class="sr-only">编辑</span>
-              </UButton>
-              <UButton class="action-btn" variant="ghost" color="neutral" :title="row.original.track_status === 'paused' ? '恢复追踪' : '暂停追踪'" :aria-label="row.original.track_status === 'paused' ? '恢复追踪' : '暂停追踪'" @click="togglePause(row.original)">
+              </button>
+              <button type="button" class="action-btn" :title="row.original.track_status === 'paused' ? '恢复追踪' : '暂停追踪'" :aria-label="row.original.track_status === 'paused' ? '恢复追踪' : '暂停追踪'" @click="togglePause(row.original)">
                 <Play v-if="row.original.track_status === 'paused'" class="size-4" />
                 <Pause v-else class="size-4" />
                 <span class="sr-only">{{ row.original.track_status === 'paused' ? '恢复' : '暂停' }}</span>
-              </UButton>
-              <UButton class="action-btn" variant="ghost" color="neutral" :class="jobTrigger.classFor(row.original.site)" :loading="jobTrigger.isBusy(row.original.site)" :disabled="jobTrigger.isBusy(row.original.site)" :title="jobTrigger.labelFor(row.original.site, '重跑抓取')" :aria-label="jobTrigger.labelFor(row.original.site, '重跑抓取')" @click="triggerCrawl(row.original)">
+              </button>
+              <button type="button" class="action-btn" :class="jobTrigger.classFor(row.original.site)" :disabled="jobTrigger.isBusy(row.original.site)" :title="jobTrigger.labelFor(row.original.site, '重跑抓取')" :aria-label="jobTrigger.labelFor(row.original.site, '重跑抓取')" @click="triggerCrawl(row.original)">
                 <RefreshCw v-if="!jobTrigger.isBusy(row.original.site)" class="size-4" />
+                <RefreshCw v-else class="size-4 spin" />
                 <span class="sr-only">{{ jobTrigger.labelFor(row.original.site, '重跑') }}</span>
-              </UButton>
-              <UButton class="action-btn danger" variant="ghost" color="neutral" title="移出追踪" aria-label="移出追踪" @click="remove(row.original)">
+              </button>
+              <button type="button" class="action-btn danger" title="移出追踪" aria-label="移出追踪" @click="remove(row.original)">
                 <Trash2 class="size-4" />
                 <span class="sr-only">删除</span>
-              </UButton>
+              </button>
               <div v-if="jobTrigger.detailFor(row.original.site)" class="row-trigger-status" :class="jobTrigger.classFor(row.original.site)">
                 {{ jobTrigger.labelFor(row.original.site, '重跑') }} · {{ jobTrigger.detailFor(row.original.site) }}
               </div>
@@ -425,51 +453,73 @@ onMounted(async () => {
 
     <div class="tracking-pager">
       <span>{{ pageFrom }}-{{ pageTo }} / {{ fmtNumber(total) }}</span>
-      <UButton class="pager-btn" variant="ghost" color="neutral" @click="page = Math.max(1, page - 1); load()" :disabled="page <= 1 || loading">‹</UButton>
+      <button type="button" class="pager-btn" @click="page = Math.max(1, page - 1); load()" :disabled="page <= 1 || loading">‹</button>
       <b>{{ page }} / {{ totalPages }}</b>
-      <UButton class="pager-btn" variant="ghost" color="neutral" @click="page = Math.min(totalPages, page + 1); load()" :disabled="page >= totalPages || loading">›</UButton>
+      <button type="button" class="pager-btn" @click="page = Math.min(totalPages, page + 1); load()" :disabled="page >= totalPages || loading">›</button>
       <USelect v-model="pageSize" class="pager-select" variant="outline" :items="pageSizeItems" value-key="value" @update:model-value="page = 1; load()" />
     </div>
 
-    <UModal v-model:open="showAdd" title="新增追踪站点" :ui="{ content: 'tracking-dialog', header: 'dialog-head', body: 'dialog-body', footer: 'dialog-foot', title: 'dialog-title' }">
+    <UModal v-model:open="showAdd" title="Add Tracking" :ui="{ content: 'tracking-dialog', header: 'dialog-head', body: 'dialog-body', footer: 'dialog-foot', title: 'dialog-title' }">
       <template #body>
         <UFormField label="URL" class="dialog-field">
           <UInput v-model="addForm.url" placeholder="https://brand.example.com" />
         </UFormField>
-        <UFormField label="品牌" class="dialog-field">
+        <UFormField label="Brand" class="dialog-field">
           <UInput v-model="addForm.brand" maxlength="50" />
         </UFormField>
-        <UFormField label="市场" class="dialog-field">
+        <UFormField label="Market" class="dialog-field">
           <UInput v-model="addForm.country" maxlength="8" placeholder="US" />
         </UFormField>
       </template>
       <template #footer>
-        <UButton class="dialog-btn ghost" variant="ghost" color="neutral" @click="showAdd = false">取消</UButton>
-        <UButton class="dialog-btn primary" :loading="addBusy" :disabled="addBusy" @click="submitAdd">
+        <button type="button" class="dialog-btn ghost" @click="showAdd = false">取消</button>
+        <button type="button" class="dialog-btn primary" :disabled="addBusy" @click="submitAdd">
           <Plus v-if="!addBusy" class="size-4" />
+          <RefreshCw v-else class="size-4 spin" />
           <span>{{ addBusy ? '探测中' : '添加并抓取' }}</span>
-        </UButton>
+        </button>
       </template>
     </UModal>
 
-    <UModal :open="Boolean(editing)" title="编辑追踪" :ui="{ content: 'tracking-dialog', header: 'dialog-head', body: 'dialog-body', footer: 'dialog-foot', title: 'dialog-title' }" @update:open="(open: boolean) => { if (!open) editing = null }">
+    <UModal :open="Boolean(editing)" title="Edit Tracking" :ui="{ content: 'tracking-dialog', header: 'dialog-head', body: 'dialog-body', footer: 'dialog-foot', title: 'dialog-title' }" @update:open="(open: boolean) => { if (!open) editing = null }">
       <template #body>
-        <UFormField v-if="editing" label="品牌" class="dialog-field">
+        <UFormField v-if="editing" label="Brand" class="dialog-field">
           <UInput v-model="editing.brand" maxlength="50" />
         </UFormField>
-        <UFormField v-if="editing" label="市场" class="dialog-field">
+        <UFormField v-if="editing" label="Market" class="dialog-field">
           <UInput v-model="editing.country" maxlength="8" />
         </UFormField>
-        <UFormField v-if="editing" label="留评率" class="dialog-field">
+        <UFormField v-if="editing" label="Review Rate" class="dialog-field">
           <UInput v-model="editing.review_rate" type="number" step="0.001" />
         </UFormField>
       </template>
       <template #footer>
-        <UButton class="dialog-btn ghost" variant="ghost" color="neutral" @click="editing = null">取消</UButton>
-        <UButton class="dialog-btn primary" @click="saveEdit">
+        <button type="button" class="dialog-btn ghost" @click="editing = null">取消</button>
+        <button type="button" class="dialog-btn primary" @click="saveEdit">
           <Pencil class="size-4" />
           <span>保存</span>
-        </UButton>
+        </button>
+      </template>
+    </UModal>
+
+    <UModal :open="Boolean(deleteTarget)" title="移出追踪站点" :ui="{ content: 'tracking-dialog', header: 'dialog-head', body: 'dialog-body', footer: 'dialog-foot', title: 'dialog-title' }" @update:open="(open: boolean) => { if (!open && !deleteBusy) deleteTarget = null }">
+      <template #body>
+        <div v-if="deleteTarget" class="delete-confirm">
+          <Trash2 class="size-5" />
+          <div>
+            <b>{{ deleteTarget.brand || deleteTarget.site }}</b>
+            <p>确认从当前工作区移出该标杆站点？历史商品数据不会在其他仍启用该站点的工作区被删除。</p>
+            <small>{{ deleteTarget.url || deleteTarget.site }}</small>
+          </div>
+        </div>
+      </template>
+      <template #footer>
+        <button type="button" class="dialog-btn ghost" :disabled="deleteBusy" @click="deleteTarget = null">取消</button>
+        <button type="button" class="dialog-btn danger-solid" :disabled="deleteBusy" @click="confirmRemove">
+          <Trash2 v-if="!deleteBusy" class="size-4" />
+          <RefreshCw v-else class="size-4 spin" />
+          <span>{{ deleteBusy ? '移出中' : '确认移出' }}</span>
+        </button>
       </template>
     </UModal>
   </section>
@@ -498,20 +548,22 @@ onMounted(async () => {
 .tracking-field span { color:var(--ui-muted); font-size:.72rem; font-weight:800; white-space:nowrap; }
 .field-icon { color:var(--ui-dim); flex-shrink:0; }
 
-.tool-btn, .dialog-btn { border:1px solid var(--ui-border); border-radius:7px; min-height:38px; padding:0 12px; display:inline-flex; align-items:center; justify-content:center; gap:6px; cursor:pointer; font-size:.8rem; font-weight:800; text-decoration:none; white-space:nowrap; transition:background .15s,border-color .15s,color .15s,transform .15s; }
-.tool-btn.primary, .dialog-btn.primary { border-color:transparent; color:#fff; background:linear-gradient(135deg,#a78bfa,#7c3aed); box-shadow:0 8px 18px rgba(124,58,237,.18); }
-.tool-btn.ghost, .dialog-btn.ghost { color:var(--ui-purple-strong); background:var(--ui-purple-soft); border-color:rgba(167,139,250,.28); }
+.tool-btn, .dialog-btn { min-height:38px!important; height:38px!important; padding:0 12px!important; border:1px solid var(--ui-border)!important; border-radius:7px!important; display:inline-flex!important; align-items:center!important; justify-content:center!important; gap:6px!important; cursor:pointer; font-size:.8rem!important; line-height:1!important; font-weight:800!important; text-decoration:none; white-space:nowrap; transition:background .15s,border-color .15s,color .15s,transform .15s; box-shadow:none; }
+.tool-btn.primary, .dialog-btn.primary { border-color:transparent!important; color:#fff!important; background:linear-gradient(135deg,#a78bfa,#7c3aed)!important; box-shadow:0 8px 18px rgba(124,58,237,.18)!important; }
+.tool-btn.ghost, .dialog-btn.ghost { color:var(--ui-purple-strong)!important; background:var(--ui-purple-soft)!important; border-color:rgba(167,139,250,.28)!important; }
+.dialog-btn.danger-solid { border-color:transparent!important; color:#fff!important; background:linear-gradient(135deg,#fb7185,#be123c)!important; box-shadow:0 8px 18px rgba(190,18,60,.16)!important; }
 .tool-btn:hover, .dialog-btn:hover { transform:translateY(-1px); }
 .tool-btn.ghost:hover, .dialog-btn.ghost:hover { background:rgba(167,139,250,.20); }
 .tool-btn:disabled, .dialog-btn:disabled { opacity:.58; cursor:not-allowed; transform:none; }
 
-.action-btn { width:30px; height:30px; border:1px solid transparent; border-radius:7px; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; color:var(--ui-muted); background:transparent; text-decoration:none; transition:background .15s,border-color .15s,color .15s; }
-.action-btn:hover { color:var(--ui-purple-strong); background:var(--ui-purple-soft); border-color:rgba(167,139,250,.28); }
-.action-btn.danger:hover { color:var(--ui-red,#be123c); background:rgba(248,113,113,.12); border-color:rgba(248,113,113,.28); }
+.action-btn { width:32px!important; min-width:32px!important; height:32px!important; min-height:32px!important; padding:0!important; border:1px solid transparent!important; border-radius:7px!important; display:inline-flex!important; align-items:center!important; justify-content:center!important; cursor:pointer; color:var(--ui-muted)!important; background:transparent!important; box-shadow:none!important; text-decoration:none; line-height:1!important; transition:background .15s,border-color .15s,color .15s,transform .15s; }
+.action-btn:hover { color:var(--ui-purple-strong)!important; background:var(--ui-purple-soft)!important; border-color:rgba(167,139,250,.28)!important; transform:translateY(-1px); }
+.action-btn.danger:hover { color:var(--ui-red,#be123c)!important; background:rgba(248,113,113,.12)!important; border-color:rgba(248,113,113,.28)!important; }
 .action-btn:disabled { cursor:not-allowed; opacity:.75; }
-.action-btn.trigger-queued, .action-btn.trigger-running, .action-btn.trigger-submitting, .action-btn.trigger-unknown { color:var(--ui-purple-strong); background:var(--ui-purple-soft); border-color:rgba(167,139,250,.34); }
-.action-btn.trigger-success { color:#047857; background:rgba(16,185,129,.14); border-color:rgba(16,185,129,.30); }
-.action-btn.trigger-failed, .action-btn.trigger-blocked { color:var(--ui-red,#be123c); background:rgba(248,113,113,.12); border-color:rgba(248,113,113,.30); }
+.action-btn svg { width:16px!important; height:16px!important; flex-shrink:0; }
+.action-btn.trigger-queued, .action-btn.trigger-running, .action-btn.trigger-submitting, .action-btn.trigger-unknown { color:var(--ui-purple-strong)!important; background:var(--ui-purple-soft)!important; border-color:rgba(167,139,250,.34)!important; }
+.action-btn.trigger-success { color:#047857!important; background:rgba(16,185,129,.14)!important; border-color:rgba(16,185,129,.30)!important; }
+.action-btn.trigger-failed, .action-btn.trigger-blocked { color:var(--ui-red,#be123c)!important; background:rgba(248,113,113,.12)!important; border-color:rgba(248,113,113,.30)!important; }
 .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 
 .tracking-table-wrap { width:100%; overflow:auto; border:1px solid var(--ui-border); border-radius:8px; background:var(--ui-card); box-shadow:0 14px 32px rgba(37,29,61,.08); }
@@ -530,10 +582,13 @@ onMounted(async () => {
 .site-link { max-width:270px; display:inline-flex; align-items:center; gap:5px; color:var(--ui-purple-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:middle; }
 .site-link span { overflow:hidden; text-overflow:ellipsis; }
 .site-code { margin-top:2px; color:var(--ui-muted); font-size:.7rem; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+.status-cell { display:flex; flex-direction:column; align-items:flex-start; gap:3px; min-width:82px; }
 .status-pill { display:inline-flex; align-items:center; justify-content:center; min-width:58px; padding:3px 9px; border-radius:999px; font-size:.72rem; font-weight:800; }
 .status-pill.ok { color:#047857; background:rgba(16,185,129,.16); border:1px solid rgba(16,185,129,.3); }
+.status-pill.busy { color:var(--ui-purple-strong); background:var(--ui-purple-soft); border:1px solid rgba(167,139,250,.32); }
 .status-pill.idle { color:var(--ui-muted); background:rgba(148,163,184,.12); border:1px solid rgba(148,163,184,.24); }
 .status-pill.bad { color:var(--ui-red,#be123c); background:rgba(248,113,113,.14); border:1px solid rgba(248,113,113,.34); }
+.status-detail { max-width:110px; color:var(--ui-red,#be123c); font-size:.68rem; line-height:1.25; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .time-cell { min-width:142px; color:var(--ui-muted); font-size:.78rem; white-space:nowrap; }
 .creator-cell { color:var(--ui-text); font-size:.78rem; white-space:nowrap; }
 .source-cell { min-width:74px; }
@@ -560,6 +615,11 @@ onMounted(async () => {
 :global(.dialog-field) { display:flex; flex-direction:column; gap:6px; color:var(--ui-muted); font-size:.76rem; font-weight:800; }
 :global(.dialog-field input) { width:100%; height:38px; border:1px solid var(--ui-border); border-radius:7px; background:var(--ui-card-soft); color:var(--ui-heading); padding:0 11px; outline:0; font-size:.84rem; box-shadow:none; }
 :global(.dialog-field input:focus) { border-color:var(--ui-purple-line); background:var(--ui-card); }
+.delete-confirm { display:flex; gap:12px; align-items:flex-start; color:var(--ui-text); }
+.delete-confirm > svg { margin-top:2px; color:var(--ui-red,#be123c); flex-shrink:0; }
+.delete-confirm b { display:block; color:var(--ui-heading); margin-bottom:5px; }
+.delete-confirm p { margin:0; color:var(--ui-text); line-height:1.55; font-size:.84rem; }
+.delete-confirm small { display:block; margin-top:8px; color:var(--ui-muted); word-break:break-all; }
 
 .spin { animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }

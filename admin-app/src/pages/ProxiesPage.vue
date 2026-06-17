@@ -1,8 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { Database, Plus, RefreshCw, RotateCw, ShieldCheck, ToggleLeft, ToggleRight, Unlock } from 'lucide-vue-next'
 import {
   proxies,
+  proxyAntiBotApplyRules,
+  proxyAntiBotCheck,
+  proxyAntiBotDiagnostics,
   proxyCheck,
   proxyClear,
   proxyEndpointCreate,
@@ -19,10 +23,12 @@ import { fmtDate, fmtNumber } from '../api/client'
 import StatCard from '../components/common/StatCard.vue'
 
 const info = ref<Record<string, any>>({})
+const route = useRoute()
 const loading = ref(false)
 const busy = ref('')
 const error = ref('')
 const message = ref('')
+const antiBot = ref<Record<string, any>>({})
 
 const probeForm = ref({
   tier: 'residential',
@@ -57,6 +63,7 @@ const ruleForm = ref({
   match_type: 'exact',
   proxy_mode: 'pool',
   pool_slug: 'datacenter',
+  fallback_pool_slug: '',
   priority: 50,
   notes: ''
 })
@@ -65,6 +72,8 @@ const items = computed(() => info.value?.items || [])
 const endpoints = computed(() => info.value?.endpoints || [])
 const pools = computed(() => info.value?.pools || [])
 const rules = computed(() => info.value?.rules || [])
+const antiBotItems = computed(() => antiBot.value?.items || [])
+const antiBotSummary = computed(() => antiBot.value?.summary || {})
 const pool = computed(() => info.value?.pool || {})
 const health = computed(() => info.value?.health || {})
 const byStatus = computed(() => health.value?.by_status || {})
@@ -73,12 +82,24 @@ const available = computed(() => Object.values(pool.value?.by_tier || {}).reduce
   0
 ))
 const problemCount = computed(() => Number(byStatus.value.degraded || 0) + Number(byStatus.value.down || 0) + Number(byStatus.value.blocked || 0))
+const routeIssue = computed(() => String(route.query.issue || ''))
+const routeSite = computed(() => String(route.query.site || ''))
+const routeIssueLabel = computed(() => ({
+  anti_bot_blocked: '反爬封禁',
+  proxy_unavailable: '代理不可用',
+  proxy_auth_failed: '代理鉴权失败'
+} as Record<string, string>)[routeIssue.value] || routeIssue.value)
 
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    info.value = await proxies()
+    const [proxyInfo, antiBotInfo] = await Promise.all([
+      proxies(),
+      proxyAntiBotDiagnostics()
+    ])
+    info.value = proxyInfo || {}
+    antiBot.value = antiBotInfo || {}
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -111,6 +132,67 @@ function doImport() {
 
 function doCheck() {
   return runAction('check', () => proxyCheck(probeForm.value), '代理预检已完成')
+}
+
+async function checkAntiBotSites() {
+  busy.value = 'anti-bot-check'
+  error.value = ''
+  message.value = ''
+  try {
+    antiBot.value = await proxyAntiBotCheck({
+      limit: 10,
+      timeout: probeForm.value.timeout || 8,
+    })
+    message.value = `反爬站点预检完成：通过 ${fmtNumber(antiBot.value.ok || 0)}，失败 ${fmtNumber(antiBot.value.failed || 0)}`
+    info.value = await proxies()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function applyAntiBotRules() {
+  busy.value = 'anti-bot-apply'
+  error.value = ''
+  message.value = ''
+  try {
+    antiBot.value = await proxyAntiBotApplyRules({})
+    message.value = `已应用 ${fmtNumber(antiBot.value.applied_count || 0)} 条反爬推荐规则`
+    info.value = await proxies()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    busy.value = ''
+  }
+}
+
+function applyRouteContext() {
+  const site = routeSite.value.trim()
+  const issue = routeIssue.value.trim()
+  if (!site && !issue) return
+  if (site) {
+    probeForm.value.site = site
+    ruleForm.value.site_pattern = site
+    ruleForm.value.notes = `来自数据质量：${routeIssueLabel.value || issue}`
+  }
+  if (issue === 'anti_bot_blocked') {
+    probeForm.value.tier = 'residential'
+    ruleForm.value.proxy_mode = 'pool'
+    ruleForm.value.pool_slug = 'residential'
+    ruleForm.value.fallback_pool_slug = 'datacenter'
+    ruleForm.value.priority = 90
+  } else if (issue === 'proxy_unavailable') {
+    probeForm.value.tier = 'residential'
+    ruleForm.value.proxy_mode = 'pool'
+    ruleForm.value.pool_slug = 'residential'
+    ruleForm.value.priority = 80
+  } else if (issue === 'proxy_auth_failed') {
+    probeForm.value.tier = 'residential'
+    ruleForm.value.proxy_mode = 'pool'
+    ruleForm.value.pool_slug = 'residential'
+    ruleForm.value.priority = 85
+  }
 }
 
 function doClear(row: Record<string, any>) {
@@ -162,6 +244,7 @@ function createRule() {
   const payload = { ...ruleForm.value }
   return runAction('rule:create', () => proxyRuleCreate(payload), '站点代理规则已保存').then(() => {
     ruleForm.value.site_pattern = ''
+    ruleForm.value.fallback_pool_slug = ''
     ruleForm.value.notes = ''
   })
 }
@@ -181,11 +264,44 @@ function statusClass(row: Record<string, any>) {
   return 'bad'
 }
 
+function ruleStatusLabel(status?: string) {
+  return ({
+    primary_available: '主池可用',
+    fallback_available: '备用池生效',
+    unavailable: '无可用代理',
+    misconfigured: '配置不完整',
+    direct: '直连',
+    disabled: '已停用'
+  } as Record<string, string>)[status || ''] || status || '-'
+}
+
+function ruleStatusClass(status?: string) {
+  if (status === 'primary_available' || status === 'direct') return 'ok'
+  if (status === 'fallback_available' || status === 'disabled') return 'warn'
+  return 'bad'
+}
+
+function rulePoolSummary(row: Record<string, any>) {
+  if (row.effective_status === 'direct') return '不使用代理'
+  const primary = row.primary_pool_slug
+    ? `主池 ${row.primary_pool_slug}: ${fmtNumber(row.primary_available_count)}/${fmtNumber(row.primary_member_count)} 可用`
+    : '主池未配置'
+  const fallback = row.fallback_pool_slug
+    ? `备用 ${row.fallback_pool_slug}: ${fmtNumber(row.fallback_available_count)}/${fmtNumber(row.fallback_member_count)} 可用`
+    : '无备用池'
+  return `${primary} · ${fallback}`
+}
+
 function shortHash(hash?: string) {
   return hash ? hash.slice(0, 12) : '-'
 }
 
-onMounted(load)
+onMounted(() => {
+  applyRouteContext()
+  load()
+})
+
+watch(() => route.fullPath, applyRouteContext)
 </script>
 
 <template>
@@ -213,6 +329,13 @@ onMounted(load)
 
     <div v-if="error" class="error">{{ error }}</div>
     <div v-if="message" class="message">{{ message }}</div>
+    <div v-if="routeIssue || routeSite" class="context-panel">
+      <div>
+        <b>来自数据质量</b>
+        <span>{{ routeSite || '站点未指定' }} · {{ routeIssueLabel || '代理前置条件' }}</span>
+      </div>
+      <span>已预填代理预检和站点规则，优先验证住宅池可用性。</span>
+    </div>
 
     <div class="stat-row">
       <StatCard label="池内代理" :value="fmtNumber(pool.total)" />
@@ -220,6 +343,51 @@ onMounted(load)
       <StatCard label="配置端点" :value="fmtNumber(endpoints.length)" />
       <StatCard label="异常代理" :value="fmtNumber(problemCount)" />
     </div>
+
+    <section class="block">
+      <div class="block-head">
+        <h2 class="block-title">反爬站点诊断</h2>
+        <span class="meta">
+          {{ fmtNumber(antiBot.count || 0) }} 个站点 ·
+          需规则 {{ fmtNumber(antiBotSummary.needs_rule || 0) }} ·
+          可用规则 {{ fmtNumber(antiBotSummary.with_available_rule || 0) }}
+        </span>
+      </div>
+      <div class="anti-actions">
+        <button class="btn small" :disabled="!!busy || !antiBotItems.length" @click="applyAntiBotRules">
+          <RotateCw class="size-4" />
+          <span>{{ busy === 'anti-bot-apply' ? '应用中' : `应用推荐规则(${antiBotSummary.needs_rule || antiBotItems.length})` }}</span>
+        </button>
+        <button class="btn small primary" :disabled="!!busy || !antiBotItems.length" @click="checkAntiBotSites">
+          <ShieldCheck class="size-4" />
+          <span>{{ busy === 'anti-bot-check' ? '批量预检中' : `批量预检(${antiBotItems.length})` }}</span>
+        </button>
+      </div>
+      <div class="mini-table anti-table">
+        <div v-for="row in antiBotItems" :key="row.site" class="mini-row">
+          <div class="rule-info">
+            <div class="rule-title">
+              <b>{{ row.site }}</b>
+              <span v-for="issue in row.issues" :key="issue" class="badge bad">{{ issue }}</span>
+              <span v-if="row.rule_status" class="badge" :class="ruleStatusClass(row.rule_status)">{{ ruleStatusLabel(row.rule_status) }}</span>
+              <span v-else class="badge warn">建议住宅池</span>
+            </div>
+            <span>{{ row.last_error_code || '-' }} · {{ row.last_error || row.suggested_action || '-' }}</span>
+            <span>
+              推荐 {{ row.recommended_rule?.pool_slug || 'residential' }}
+              <template v-if="row.current_rule">· 当前 {{ row.current_rule.proxy_mode }}{{ row.current_rule.pool_slug ? `:${row.current_rule.pool_slug}` : '' }}</template>
+            </span>
+            <span v-if="row.probe" :class="['probe-inline', row.probe.ok ? 'ok' : 'bad']">
+              预检 {{ row.probe.ok ? '通过' : '失败' }} · {{ row.probe.status_code || row.probe.failure_code || '-' }}
+            </span>
+          </div>
+          <button class="btn small" :disabled="!!busy" @click="probeForm.site = row.site; probeForm.url = row.url || probeForm.url; probeForm.tier = row.current_rule?.pool_slug ? `pool:${row.current_rule.pool_slug}` : 'residential'; doCheck()">
+            单站预检
+          </button>
+        </div>
+        <div v-if="!antiBotItems.length" class="empty">暂无反爬/代理阻断站点</div>
+      </div>
+    </section>
 
     <section class="block">
       <div class="block-head">
@@ -333,15 +501,24 @@ onMounted(load)
           <option value="">选择池</option>
           <option v-for="p in pools" :key="p.id" :value="p.slug">{{ p.slug }}</option>
         </select>
+        <select v-model="ruleForm.fallback_pool_slug" class="ctl">
+          <option value="">无备用池</option>
+          <option v-for="p in pools" :key="p.id" :value="p.slug">备用: {{ p.slug }}</option>
+        </select>
         <input v-model.number="ruleForm.priority" type="number" class="ctl" placeholder="优先级" />
         <input v-model="ruleForm.notes" class="ctl" placeholder="备注" />
         <button class="btn small primary" :disabled="!!busy || !ruleForm.site_pattern" @click="createRule">保存规则</button>
       </div>
       <div class="mini-table">
         <div v-for="r in rules" :key="r.id" class="mini-row">
-          <div>
-            <b>{{ r.site_pattern }}</b>
+          <div class="rule-info">
+            <div class="rule-title">
+              <b>{{ r.site_pattern }}</b>
+              <span class="badge" :class="ruleStatusClass(r.effective_status)">{{ ruleStatusLabel(r.effective_status) }}</span>
+            </div>
             <span>{{ r.match_type }} · {{ r.proxy_mode }}{{ r.pool_slug ? `:${r.pool_slug}` : '' }} · P{{ r.priority }}</span>
+            <span>{{ rulePoolSummary(r) }}</span>
+            <span v-if="r.notes">{{ r.notes }}</span>
           </div>
           <button class="icon-btn" :disabled="!!busy" @click="toggleRule(r)">
             <ToggleRight v-if="r.enabled" class="size-4" />
@@ -490,6 +667,30 @@ onMounted(load)
   gap: 12px;
 }
 
+.context-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid rgba(139, 92, 246, 0.28);
+  border-radius: 8px;
+  background: rgba(139, 92, 246, 0.10);
+  color: var(--ui-muted, #9ca3af);
+  font-size: 12px;
+}
+
+.context-panel b {
+  display: block;
+  color: var(--ui-text, #e5e7eb);
+  font-size: 13px;
+}
+
+.context-panel span {
+  line-height: 1.45;
+}
+
 .block {
   display: flex;
   flex-direction: column;
@@ -614,6 +815,11 @@ onMounted(load)
   opacity: 0.6;
 }
 
+.anti-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .probe-result {
   display: flex;
   align-items: center;
@@ -629,6 +835,19 @@ onMounted(load)
 }
 
 .probe-result.bad {
+  color: #ef4444;
+}
+
+.probe-inline {
+  opacity: 1 !important;
+  font-weight: 700;
+}
+
+.probe-inline.ok {
+  color: #10b981;
+}
+
+.probe-inline.bad {
   color: #ef4444;
 }
 
@@ -653,7 +872,7 @@ onMounted(load)
   border-bottom: 0;
 }
 
-.mini-row div {
+.mini-row > div {
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -668,6 +887,22 @@ onMounted(load)
 .mini-row span {
   font-size: 12px;
   opacity: 0.58;
+}
+
+.rule-info {
+  flex: 1;
+}
+
+.rule-title {
+  display: flex;
+  align-items: center;
+  flex-direction: row !important;
+  gap: 8px !important;
+}
+
+.rule-title .badge {
+  flex: 0 0 auto;
+  opacity: 1;
 }
 
 .tbl {

@@ -54,11 +54,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 
 from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
 
 DEFAULT_LIMIT = int(os.environ.get("CDISCOUNT_LIMIT", "1000"))
+MAX_ELAPSED_SEC = float(os.environ.get("CDISCOUNT_MAX_ELAPSED_SEC", "180"))
 # 单类目最多翻几页（防止某些大类几百页打爆）
 PAGES_PER_CATEGORY = int(os.environ.get("CDISCOUNT_PAGES_PER_CAT", "5"))
 # 最多探索多少个列表页（防止 BFS 漫游失控）
@@ -188,7 +190,12 @@ class CdiscountCrawler(BaseCrawler):
     # ------------------------------------------------------------------
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        fetcher = self.make_fetcher(kind="product", source="cdiscount")
+        fetcher = self.make_fetcher(
+            kind="product",
+            source="cdiscount",
+            use_proxy=False,
+        )
+        started = time.monotonic()
 
         # Step 1: warmup
         home_html = self._warmup_baleen(fetcher, result)
@@ -215,6 +222,11 @@ class CdiscountCrawler(BaseCrawler):
         pdp_fails = 0
         ok = 0
         for idx, url in enumerate(product_urls, 1):
+            if time.monotonic() - started >= MAX_ELAPSED_SEC:
+                result.notes.append(
+                    f"达到 CDISCOUNT_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
+                    f"提前返回已解析结果（ok={ok}, pdp_fails={pdp_fails}）")
+                break
             if len(result.products) >= self.limit:
                 break
             try:

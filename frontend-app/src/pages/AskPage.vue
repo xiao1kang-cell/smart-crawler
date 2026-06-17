@@ -28,8 +28,8 @@ const starters = [
 ]
 
 const sites = computed(() => asList(coverage.value, ['sites', 'items', 'coverage']))
-const totalSku = computed(() => Number(coverage.value.summary?.total_current_sku || 0))
-const coveragePct = computed(() => Number(coverage.value.summary?.overall_coverage_pct || 0))
+const totalSku = computed(() => Number(coverage.value.summary?.total_current_sku ?? 0))
+const coveragePct = computed(() => Number(coverage.value.summary?.overall_coverage_pct ?? 0))
 const runningJobs = computed(() => jobs.value.filter((j) => j.status === 'running').length)
 const successJobs = computed(() => jobs.value.filter((j) => ['success', 'completed'].includes(j.status)).length)
 const proxyOk = computed(() => proxyAvailable(proxy.value))

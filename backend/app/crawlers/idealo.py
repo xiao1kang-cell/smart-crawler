@@ -32,11 +32,16 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
+
+from selectolax.parser import HTMLParser
 
 from .base import BaseCrawler, CrawlResult
 
 DEFAULT_LIMIT = int(os.environ.get("IDEALO_LIMIT", "1000"))
+MAX_ELAPSED_SEC = float(os.environ.get("IDEALO_MAX_ELAPSED_SEC", "180"))
 SCAN_CAP = int(os.environ.get("IDEALO_SCAN_CAP", "4000"))
+TRY_PDP_ENRICH = os.environ.get("IDEALO_TRY_PDP", "0") == "1"
 
 _HOME = "https://www.idealo.de/"
 _LD_RE = re.compile(
@@ -71,7 +76,12 @@ class IdealoCrawler(BaseCrawler):
     # ---------- core ----------
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        fetcher = self.make_fetcher(kind="product", source="idealo")
+        fetcher = self.make_fetcher(
+            kind="product",
+            source="idealo",
+            use_proxy=False,
+        )
+        started = time.monotonic()
 
         # 1) 首页种子
         try:
@@ -94,13 +104,21 @@ class IdealoCrawler(BaseCrawler):
 
         seeds = self._extract_product_urls(home_html)
         result.notes.append(f"首页种子 {len(seeds)} 个商品 URL")
+        home_rows = self._parse_home_tiles(home_html)
+        if home_rows:
+            result.products.extend(home_rows[: self.limit])
+            result.notes.append(
+                f"首页商品卡片解析 {len(home_rows)} 个，已先写入 {len(result.products)} 个基础商品")
+        if not TRY_PDP_ENRICH and result.products:
+            result.notes.append("IDEALO_TRY_PDP=0，跳过 Akamai 更重的 PDP 深度补充")
+            return result
         if not seeds:
             result.notes.append("⚠ 首页未抽到任何商品 URL —— 页面结构可能变了")
             return result
 
         # 2) BFS 抓取
         queue: list[str] = list(seeds)
-        seen_ids: set[str] = set()
+        seen_ids: set[str] = {row["sku"] for row in result.products if row.get("sku")}
         scanned = 0
         ok = 0
         stealth_used = 0
@@ -108,6 +126,11 @@ class IdealoCrawler(BaseCrawler):
 
         while queue and len(result.products) < self.limit \
                 and scanned < self.scan_cap:
+            if time.monotonic() - started >= MAX_ELAPSED_SEC:
+                result.notes.append(
+                    f"达到 IDEALO_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
+                    f"提前返回已解析结果（ok={ok}, scanned={scanned}, challenges={challenge_hits}）")
+                break
             url = queue.pop(0)
             pid = self._url_id(url)
             if not pid or pid in seen_ids:
@@ -197,7 +220,7 @@ class IdealoCrawler(BaseCrawler):
             return None
         try:
             kw = stealth_kwargs(
-                proxy=self.proxy,
+                proxy=None,
                 country=self.site.country,
                 persist_profile_key=f"idealo_{self.site.site}",
                 timeout_ms=45000,
@@ -241,6 +264,77 @@ class IdealoCrawler(BaseCrawler):
             out.append(
                 f"{self.base}/preisvergleich/OffersOfProduct/{pid}{tail}")
         return out
+
+    def _parse_home_tiles(self, html: str) -> list[dict]:
+        """从首页 SSR 商品卡片生成基础商品。
+
+        Idealo 的 OffersOfProduct PDP 常返回 Akamai stub，但首页卡片稳定包含
+        产品 URL、图片 alt、最低价和报价数量。先落基础商品，后续可用
+        IDEALO_TRY_PDP=1 慢速补充 JSON-LD 聚合报价。
+        """
+        tree = HTMLParser(html)
+        rows: list[dict] = []
+        seen: set[str] = set()
+        for node in tree.css('a[href*="OffersOfProduct"]'):
+            href = node.attributes.get("href") or ""
+            pid = self._url_id(href)
+            if not pid or pid in seen:
+                continue
+            seen.add(pid)
+            img = node.css_first("img")
+            title = None
+            image = None
+            if img:
+                title = img.attributes.get("alt")
+                image = img.attributes.get("src")
+            text = node.text(separator=" ", strip=True)
+            if not title:
+                title = self._title_from_tile_text(text)
+            if not title:
+                continue
+            low = self._tile_low_price(text)
+            offer_count = self._tile_offer_count(text)
+            rows.append({
+                "sku": str(pid),
+                "spu": str(pid),
+                "title": title.strip(),
+                "description": None,
+                "image_urls": [image] if image else [],
+                "category_path": self._tile_category(text),
+                "sale_price": low,
+                "original_price": low,
+                "currency": "EUR",
+                "price_low": low,
+                "price_high": low,
+                "offer_count": offer_count,
+                "status": "on_sale",
+                "brand": self.site.brand,
+                "product_url": href if href.startswith("http") else self.base + href,
+                "site": self.site.site,
+            })
+            if len(rows) >= self.limit:
+                break
+        return rows
+
+    @staticmethod
+    def _tile_low_price(text: str):
+        m = re.search(r"\bab\s+([\d.]+,\d{2}|[\d.]+)\s*€", text or "")
+        return _num(m.group(1)) if m else None
+
+    @staticmethod
+    def _tile_offer_count(text: str):
+        m = re.search(r"(?:Note\s+Ø\s+[\d,]+\s+)?(\d+)\s+ab\s+[\d.]+,\d{2}\s*€", text or "")
+        return _int(m.group(1)) if m else None
+
+    @staticmethod
+    def _tile_category(text: str) -> str | None:
+        m = re.search(r"(?:Bestseller|Beliebt)\s+in\s+(.+?)\s+[A-ZÄÖÜ][^ ]+", text or "")
+        return m.group(1).strip() if m else None
+
+    @staticmethod
+    def _title_from_tile_text(text: str) -> str | None:
+        m = re.search(r"(?:Bestseller|Beliebt)\s+in\s+.+?\s+(.+?)\s+(?:Note\s+Ø|\d+\s+ab|ab\s+)", text or "")
+        return m.group(1).strip() if m else None
 
     def _parse_product(self, html: str, url: str) -> dict | None:
         """对齐 vonhaus 字段 + Idealo 特有 price_low / price_high / offer_count。"""

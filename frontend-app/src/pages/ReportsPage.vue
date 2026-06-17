@@ -14,8 +14,21 @@ const sortedRows = computed(() => rows.value.slice().sort((a, b) => normalizedPc
 const jobTrigger = useJobTrigger({ onDone: () => load() })
 
 function normalizedPct(row: Record<string, any>) {
-  const raw = Number(row.coverage_pct || row.coverage || 0)
-  return Math.min(100, raw <= 1 ? raw * 100 : raw)
+  const raw = Number(row.coverage_pct ?? row.coverage ?? 0)
+  const pct = Math.min(100, raw <= 1 ? raw * 100 : raw)
+  return Math.round(pct * 100) / 100
+}
+
+function coverageWidth(row: Record<string, any>) {
+  return `${normalizedPct(row)}%`
+}
+
+function coverageLabel(row: Record<string, any>) {
+  return `${normalizedPct(row)}%`
+}
+
+function currentCount(row: Record<string, any>) {
+  return Number(row.current ?? row.sku_count ?? row.products ?? row.count ?? 0)
 }
 
 async function load() {
@@ -53,7 +66,7 @@ onMounted(load)
     <div class="sub">交互式网页报表 · 可自定义模块、列和时间范围 · 点站点打开</div>
     <UAlert v-if="error" color="error" variant="soft" :title="error" class="mb-4" />
     <DataLoadingPanel class="report-grid" :loading="loading" :has-data="rows.length > 0" label="正在更新站点报表" skeleton-variant="cards" :skeleton-rows="6">
-      <div v-for="s in sortedRows" :key="s.site || s.name" class="report-tile" :class="[s.status, { ready: (s.current || s.sku_count || s.products || s.count || 0) > 0, empty: !(s.current || s.sku_count || s.products || s.count || 0) }]">
+      <div v-for="s in sortedRows" :key="s.site || s.name" class="report-tile" :class="[s.status, { ready: currentCount(s) > 0, empty: currentCount(s) <= 0 }]">
         <div class="head">
           <h6>{{ s.site || s.name }}</h6>
           <span v-if="s.status === 'healthy'" class="badge healthy">健康</span>
@@ -63,14 +76,14 @@ onMounted(load)
         </div>
         <div class="country">{{ s.brand || '—' }} · {{ s.country || '—' }}</div>
         <div class="nums">
-          <div class="item"><div class="lbl">实际抓取</div><div class="v">{{ (s.current || s.sku_count || s.products || s.count || 0).toLocaleString() }}</div></div>
+          <div class="item"><div class="lbl">实际抓取</div><div class="v">{{ currentCount(s).toLocaleString() }}</div></div>
           <div class="item"><div class="lbl">预计商品</div><div class="v dim">{{ (s.estimated_full || 0).toLocaleString() }}</div></div>
         </div>
-        <div class="covbar" :class="s.status"><i :style="{ width: Math.min(Number(s.coverage_pct || s.coverage || 0), 100) + '%' }"></i></div>
-        <div class="report-rate">覆盖率 {{ s.coverage_pct != null ? s.coverage_pct + '%' : '—' }}</div>
-        <div class="btns" :class="{ two: (s.current || s.sku_count || s.products || s.count || 0) > 0 }">
-          <a v-if="(s.current || s.sku_count || s.products || s.count || 0) > 0" :href="reportHref(s)" target="_blank" rel="noopener" class="btn-prim">📊 打开报表</a>
-          <button class="btn-muted" :class="jobTrigger.classFor(siteKey(s))" :disabled="loading || jobTrigger.isBusy(siteKey(s))" @click="trigger(siteKey(s))">{{ jobTrigger.labelFor(siteKey(s), (s.current || s.sku_count || s.products || s.count || 0) > 0 ? '重跑抓取' : '触发抓取') }}</button>
+        <div class="covbar" :class="s.status"><i :style="{ width: coverageWidth(s) }"></i></div>
+        <div class="report-rate">覆盖率 {{ coverageLabel(s) }}</div>
+        <div class="btns" :class="{ two: currentCount(s) > 0 }">
+          <a v-if="currentCount(s) > 0" :href="reportHref(s)" target="_blank" rel="noopener" class="btn-prim">📊 打开报表</a>
+          <button class="btn-muted" :class="jobTrigger.classFor(siteKey(s))" :disabled="loading || jobTrigger.isBusy(siteKey(s))" @click="trigger(siteKey(s))">{{ jobTrigger.labelFor(siteKey(s), currentCount(s) > 0 ? '重跑抓取' : '触发抓取') }}</button>
         </div>
         <div v-if="jobTrigger.detailFor(siteKey(s))" class="trigger-note" :class="jobTrigger.classFor(siteKey(s))">{{ jobTrigger.detailFor(siteKey(s)) }}</div>
       </div>

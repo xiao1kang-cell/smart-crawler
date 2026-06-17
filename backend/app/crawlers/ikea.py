@@ -46,6 +46,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 
 from selectolax.parser import HTMLParser
 
@@ -53,6 +54,7 @@ from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
 
 DEFAULT_LIMIT = int(os.environ.get("IKEA_LIMIT", "1000"))
+MAX_ELAPSED_SEC = float(os.environ.get("IKEA_MAX_ELAPSED_SEC", "240"))
 SITEMAP_INDEX = "https://www.ikea.com/sitemaps/sitemap.xml"
 
 # country code → sitemap 分片前缀（lang 部分按 IKEA 主语种走）
@@ -148,6 +150,7 @@ class IkeaCrawler(BaseCrawler):
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
         fetcher = self.make_fetcher(kind="product", source="ikea")
+        started = time.monotonic()
 
         # Warmup：访问首页建立会话 / 预热 Cloudflare cookie（计入 api_calls）
         try:
@@ -179,6 +182,11 @@ class IkeaCrawler(BaseCrawler):
         STEALTH_BUDGET = 5
 
         for i, entry in enumerate(targets):
+            if time.monotonic() - started >= MAX_ELAPSED_SEC:
+                result.notes.append(
+                    f"达到 IKEA_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
+                    f"提前返回已解析结果（ok={ok}, fail={fail}, blocked={blocked}）")
+                break
             url = entry["url"]
             sitemap_images: list[str] = entry.get("images") or []
 

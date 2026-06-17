@@ -64,12 +64,32 @@ export function fmtNumber(value: unknown) {
 const CURRENCY_SYMBOL: Record<string, string> = {
   USD: '$', EUR: '€', GBP: '£', PLN: 'zł', MXN: '$', BRL: 'R$',
   JPY: '¥', CNY: '¥', CAD: 'C$', AUD: 'A$', SEK: 'kr', CHF: 'CHF',
+  RON: 'lei', KRW: '₩', IDR: 'Rp', NZD: 'NZ$', ARS: 'AR$',
+  CLP: 'CLP$', COP: 'COL$', MYR: 'RM', RM: 'RM', SGD: 'S$',
+  VND: '₫', THB: '฿', PHP: '₱', HKD: 'HK$', TWD: 'NT$',
 }
-export function fmtPrice(amount: unknown, currency?: string | null) {
+const MARKET_CURRENCY: Record<string, string> = {
+  US: 'USD', CA: 'CAD', MX: 'MXN', BR: 'BRL', AR: 'ARS', CL: 'CLP', CO: 'COP',
+  GB: 'GBP', UK: 'GBP', DE: 'EUR', FR: 'EUR', IT: 'EUR', ES: 'EUR', NL: 'EUR',
+  IE: 'EUR', PT: 'EUR', PL: 'PLN', RO: 'RON', SE: 'SEK', CH: 'CHF',
+  JP: 'JPY', KR: 'KRW', CN: 'CNY', ID: 'IDR', MY: 'MYR', SG: 'SGD',
+  VN: 'VND', TH: 'THB', PH: 'PHP', HK: 'HKD', TW: 'TWD',
+  AU: 'AUD', NZ: 'NZD',
+}
+
+export function currencyForMarket(value?: string | null) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const suffix = (raw.includes('_') ? raw.split('_').pop() || '' : raw).toUpperCase()
+  return MARKET_CURRENCY[suffix] || ''
+}
+
+export function fmtPrice(amount: unknown, currency?: string | null, marketHint?: string | null) {
   if (amount === null || amount === undefined || amount === '') return '--'
   const n = Number(amount)
   if (!Number.isFinite(n)) return '--'
-  const sym = currency ? (CURRENCY_SYMBOL[currency.toUpperCase()] || `${currency} `) : '$'
+  const inferred = currency || currencyForMarket(marketHint)
+  const sym = inferred ? (CURRENCY_SYMBOL[inferred.toUpperCase()] || `${inferred} `) : '$'
   return `${sym}${n.toLocaleString()}`
 }
 
@@ -84,10 +104,22 @@ export function proxyAvailable(status: any): number {
   )
 }
 
+function padDatePart(value: number) {
+  return String(value).padStart(2, '0')
+}
+
 export function fmtDate(value?: string | null) {
   if (!value) return '-'
   const d = new Date(value)
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString()
+  if (Number.isNaN(d.getTime())) return value
+  return `${d.getFullYear()}-${padDatePart(d.getMonth() + 1)}-${padDatePart(d.getDate())} ${padDatePart(d.getHours())}:${padDatePart(d.getMinutes())}`
+}
+
+export function fmtDateOnly(value?: string | null) {
+  if (!value) return '-'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return String(value).slice(0, 10) || value
+  return `${d.getFullYear()}-${padDatePart(d.getMonth() + 1)}-${padDatePart(d.getDate())}`
 }
 
 export function badgeTone(status?: string) {

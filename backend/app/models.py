@@ -32,6 +32,7 @@ class Site(Base):
     url = Column(String)
     platform = Column(String)                        # shopify / nuxt / vue_spa
     proxy_tier = Column(String, default="none")
+    crawler_config = Column(JSON)                    # per-site crawler secrets/feed URLs/options
     last_crawled = Column(DateTime)
     # 标杆追踪面板字段（2026-06-11）
     track_status = Column(String, default="tracking")  # tracking / paused / error
@@ -207,6 +208,7 @@ class WorkspaceSite(Base):
     hidden = Column(Boolean, default=False)
     sort_order = Column(Integer, default=0)
     target_coverage_pct = Column(Float)
+    target_sku_count = Column(Integer)
     report_config = Column(JSON)
     created_at = Column(DateTime, default=datetime.utcnow)
 

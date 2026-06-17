@@ -17,20 +17,21 @@ import html as html_lib
 import json
 import os
 import re
+import time
 from urllib.parse import urljoin, urlparse
 
 from curl_cffi import requests as creq
 from selectolax.parser import HTMLParser
 
 from ..config import get_sites
+from ..currency import SITE_CURRENCY_BY_COUNTRY, currency_for_site
 from ..fetching import CrawlerFetcher, FetchContext
+from ..pipeline import to_price
 from .base import BaseCrawler, CrawlResult
 
 DEFAULT_LIMIT = int(os.environ.get("GENERIC_LIMIT", "200"))
-_CURRENCY = {"US": "USD", "UK": "GBP", "CA": "CAD", "IE": "EUR", "DE": "EUR",
-             "IT": "EUR", "ES": "EUR", "FR": "EUR", "RO": "RON", "PT": "EUR",
-             "NL": "EUR", "PL": "PLN"}
-_PRICE_RE = re.compile(r"[\d.,]+")
+REQUEST_TIMEOUT = int(os.environ.get("GENERIC_REQUEST_TIMEOUT", "12"))
+MAX_ELAPSED_SEC = float(os.environ.get("GENERIC_MAX_ELAPSED_SEC", "180"))
 _LD_RE = re.compile(
     r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', re.S)
 _SITEMAP_RE = re.compile(r"(?im)^\s*sitemap:\s*(\S+)\s*$")
@@ -43,6 +44,26 @@ _NOISE_RE = re.compile(
 _PRODUCT_HINT_RE = re.compile(
     r"(/products?/|/product/|/p/|/pd/|/pdp/|/item/|/itm/|/dp/|"
     r"/sku/|/catalog/product|product[-_]|p-[0-9]|sku[-_/]?[0-9])",
+    re.I,
+)
+_BLOCKED_TITLE_RE = re.compile(
+    r"(access\s*denied|just\s*a\s*moment|checking\s*your\s*browser|"
+    r"security\s*check|verify\s*(?:you\s*are\s*)?human|captcha|blocked)",
+    re.I,
+)
+_BLOCKED_BODY_RE = re.compile(
+    r"(cf-chl-|cloudflare|perimeterx|akamai|px-captcha|g-recaptcha|"
+    r"please\s+enable\s+cookies|unusual\s+traffic)",
+    re.I,
+)
+_WEAK_TITLE_RE = re.compile(
+    r"^(product|item|sku|untitled|detail|details|view product|shop now)$",
+    re.I,
+)
+_PROMO_TEXT_RE = re.compile(
+    r"(\b\d{1,2}(?:\.\d+)?\s*%\s*(?:off|discount)?\b|"
+    r"\b(?:coupon|deal|discount|clearance|sale|promo|promotion|save|offer)\b|"
+    r"满减|优惠|折扣|券)",
     re.I,
 )
 
@@ -70,7 +91,7 @@ class GenericCrawler(BaseCrawler):
 
     def _fetcher(self, kind: str, source: str) -> CrawlerFetcher:
         return self.make_fetcher(kind=kind, source=source,
-                                 timeout=30, use_proxy=True)
+                                 timeout=REQUEST_TIMEOUT, use_proxy=True)
 
     def _fetch_text(self, sess: creq.Session | None, url: str,
                     *, kind: str, source: str) -> tuple[int | None, str, bytes]:
@@ -187,6 +208,7 @@ class GenericCrawler(BaseCrawler):
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
         sess = None
+        started = time.monotonic()
 
         if self.site.platform and self.site.platform != self.platform:
             result.notes.append(
@@ -204,6 +226,12 @@ class GenericCrawler(BaseCrawler):
 
         ok = 0
         for url in targets:
+            elapsed = time.monotonic() - started
+            if elapsed >= MAX_ELAPSED_SEC:
+                result.notes.append(
+                    f"达到 GENERIC_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
+                    f"提前返回已解析结果（ok={ok}/{len(targets)}）")
+                break
             try:
                 row = self._parse(sess, url)
                 if row:
@@ -240,15 +268,30 @@ class GenericCrawler(BaseCrawler):
             return None
         self.snapshot(self._slug(url), html)       # 原始商品页归档
         tree = HTMLParser(html)
-        data = self._from_jsonld(html) or {}
+        if self._looks_blocked_page(tree, html):
+            return None
+        data = self._merge_product_data(
+            self._from_jsonld(html) or {},
+            self._from_hydration_json(html) or {},
+        )
 
-        title = data.get("name") or self._meta(tree, "og:title")
+        title = self._best_title(
+            data.get("name"),
+            self._meta(tree, "og:title"),
+            self._meta(tree, "twitter:title"),
+            self._title_from_page(tree),
+            sku=data.get("sku") or self._slug(url),
+        )
         if not title:
             return None
-        sale = data.get("price") or self._meta_price(tree)
-        if sale is None:
-            return None
+        sale = data.get("price") or self._meta_price(tree) or self._dom_price(tree)
+        # Pipeline 已允许 price 缺失。通用抓取应优先保留 SKU/title/URL，
+        # 价格缺口交给数据质量页暴露，避免无价格站点被误判为 0 商品。
         original = data.get("original_price") or sale
+        attributes = self._merge_attributes(
+            data.get("attributes") or {},
+            self._dom_promotion_attributes(tree),
+        )
 
         return {
             "sku": data.get("sku") or self._slug(url),
@@ -262,13 +305,15 @@ class GenericCrawler(BaseCrawler):
             "sale_price": sale,
             "original_price": original,
             "currency": data.get("currency")
-            or _CURRENCY.get(self.site.country, "USD"),
+            or currency_for_site(self.site.site)
+            or SITE_CURRENCY_BY_COUNTRY.get((self.site.country or "").upper(), "USD"),
             "ratings": data.get("rating"),
             "review_count": data.get("review_count"),
             "status": data.get("status", "on_sale"),
             "has_video": "<video" in html,
             "mpn": data.get("mpn"),
             "gtin": data.get("gtin"),
+            "attributes": attributes or None,
             "brand": data.get("brand") or self.site.brand,
             "product_url": url,
             "site": self.site.site,
@@ -277,53 +322,525 @@ class GenericCrawler(BaseCrawler):
     @staticmethod
     def _from_jsonld(html: str) -> dict | None:
         """解析 JSON-LD 的 Product schema。"""
+        best: tuple[int, dict] | None = None
         for block in _LD_RE.findall(html):
             try:
                 doc = json.loads(block.strip())
             except json.JSONDecodeError:
                 continue
-            for it in (doc if isinstance(doc, list) else
-                       doc.get("@graph", [doc]) if isinstance(doc, dict) else []):
+            for it in GenericCrawler._jsonld_nodes(doc):
                 if not isinstance(it, dict):
                     continue
-                t = it.get("@type")
-                is_product = t == "Product" or (
-                    isinstance(t, list) and "Product" in t)
-                if not is_product:
+                types = GenericCrawler._jsonld_types(it.get("@type"))
+                if not ({"product", "productgroup"} & types):
                     continue
-                offers = it.get("offers") or {}
-                if isinstance(offers, list):
-                    offers = offers[0] if offers else {}
-                rating = it.get("aggregateRating") or {}
-                brand = it.get("brand")
-                if isinstance(brand, dict):
-                    brand = brand.get("name")
-                avail = str(offers.get("availability", "")).lower()
-                imgs = it.get("image")
-                if isinstance(imgs, str):
-                    imgs = [imgs]
-                return {
-                    "name": it.get("name"),
-                    "sku": it.get("sku") or it.get("mpn"),
-                    "description": it.get("description"),
-                    "images": imgs or [],
-                    "price": GenericCrawler._num(offers.get("price")),
-                    "currency": offers.get("priceCurrency"),
-                    "status": "out_of_stock" if "outofstock" in avail
-                    or "soldout" in avail else "on_sale",
-                    "rating": GenericCrawler._num(rating.get("ratingValue")),
-                    "review_count": GenericCrawler._int(rating.get("reviewCount")),
-                    "mpn": it.get("mpn"),
-                    "gtin": it.get("gtin13") or it.get("gtin"),
-                    "brand": brand,
-                }
+                candidate = GenericCrawler._product_from_jsonld_node(it)
+                if not candidate:
+                    continue
+                score = GenericCrawler._candidate_score(candidate)
+                if best is None or score > best[0]:
+                    best = (score, candidate)
+        return best[1] if best else None
+
+    @staticmethod
+    def _product_from_jsonld_node(it: dict) -> dict | None:
+        offer_items = GenericCrawler._offer_items(it.get("offers"))
+        offers = offer_items[0] if offer_items else {}
+        rating = it.get("aggregateRating") or {}
+        avail = str(offers.get("availability", "")).lower()
+        price = GenericCrawler._price_from_offer(offers)
+        original_price = GenericCrawler._num(offers.get("highPrice")) or price
+        name = it.get("name")
+        if not name and price is None and not it.get("sku") and not it.get("productID"):
+            return None
+        return {
+            "name": name,
+            "sku": it.get("sku") or it.get("mpn") or it.get("productID"),
+            "description": it.get("description"),
+            "images": GenericCrawler._image_urls(it.get("image")),
+            "price": price,
+            "original_price": original_price,
+            "currency": offers.get("priceCurrency")
+            or GenericCrawler._currency_from_price_spec(offers),
+            "status": "out_of_stock" if "outofstock" in avail
+            or "soldout" in avail
+            or "out of stock" in avail else "on_sale",
+            "rating": GenericCrawler._num(rating.get("ratingValue")),
+            "review_count": GenericCrawler._int(
+                rating.get("reviewCount") or rating.get("ratingCount")
+            ),
+            "mpn": it.get("mpn"),
+            "gtin": it.get("gtin13") or it.get("gtin"),
+            "brand": GenericCrawler._named_value(it.get("brand")),
+            "category": GenericCrawler._named_value(it.get("category")),
+            "attributes": GenericCrawler._jsonld_attributes(it, offer_items),
+        }
+
+    @staticmethod
+    def _candidate_score(candidate: dict) -> int:
+        name = str(candidate.get("name") or "")
+        return (
+            min(len(name), 80) // 8
+            + (5 if candidate.get("price") is not None else 0)
+            + (2 if candidate.get("original_price") is not None else 0)
+            + (2 if candidate.get("sku") else 0)
+            + (2 if candidate.get("images") else 0)
+            + (1 if candidate.get("brand") else 0)
+            + (1 if candidate.get("category") else 0)
+            + (1 if candidate.get("rating") is not None else 0)
+        )
+
+    @staticmethod
+    def _from_hydration_json(html: str) -> dict | None:
+        """从 Next/Nuxt/前端 hydration JSON 中兜底提取商品字段。"""
+        best: tuple[int, dict] | None = None
+        for attrs, block in re.findall(
+                r"<script([^>]*)>(.*?)</script>", html, re.S):
+            if "application/ld+json" in (attrs or "").lower():
+                continue
+            text = html_lib.unescape((block or "").strip())
+            if not text or len(text) > 5_000_000:
+                continue
+            if not (text.startswith("{") or text.startswith("[")):
+                continue
+            try:
+                doc = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            for node in GenericCrawler._walk_json(doc):
+                candidate = GenericCrawler._product_from_json_node(node)
+                if not candidate:
+                    continue
+                score = (
+                    (3 if candidate.get("name") else 0) +
+                    (2 if candidate.get("price") is not None else 0) +
+                    (1 if candidate.get("sku") else 0) +
+                    (1 if candidate.get("images") else 0)
+                )
+                if best is None or score > best[0]:
+                    best = (score, candidate)
+        return best[1] if best else None
+
+    @staticmethod
+    def _walk_json(value, depth: int = 0):
+        if depth > 8:
+            return
+        if isinstance(value, dict):
+            yield value
+            for child in value.values():
+                yield from GenericCrawler._walk_json(child, depth + 1)
+        elif isinstance(value, list):
+            for child in value:
+                yield from GenericCrawler._walk_json(child, depth + 1)
+
+    @staticmethod
+    def _product_from_json_node(node) -> dict | None:
+        if not isinstance(node, dict):
+            return None
+        title = GenericCrawler._first_json_value(
+            node, ("name", "title", "productName", "displayName"))
+        price = GenericCrawler._json_price(
+            node, ("salePrice", "currentPrice", "finalPrice", "price",
+                   "discountPrice", "promoPrice", "priceRange",
+                   "price_range", "minVariantPrice", "lowPrice"))
+        original = GenericCrawler._json_price(
+            node, ("originalPrice", "regularPrice", "listPrice", "wasPrice",
+                   "compareAtPrice", "msrp", "rrp", "maxVariantPrice",
+                   "highPrice"))
+        sku = GenericCrawler._first_json_value(
+            node, ("sku", "skuCode", "productSku", "productID", "productId",
+                   "itemNumber", "mpn", "id"))
+        images = GenericCrawler._image_urls(
+            GenericCrawler._first_json_value(
+                node, ("images", "image", "imageUrl", "image_url", "media",
+                       "gallery")))
+        if not title or (price is None and not sku and not images):
+            return None
+        rating = GenericCrawler._json_price(
+            node, ("ratingValue", "rating", "averageRating", "avgRating"))
+        reviews = GenericCrawler._json_int(
+            GenericCrawler._first_json_value(
+                node, ("reviewCount", "ratingCount", "reviewsCount",
+                       "reviews")))
+        attributes = GenericCrawler._promotion_attributes_from_mapping(node)
+        return {
+            "name": title,
+            "sku": str(sku) if sku is not None else None,
+            "description": GenericCrawler._first_json_value(
+                node, ("description", "shortDescription")),
+            "images": images,
+            "price": price,
+            "original_price": original or price,
+            "currency": GenericCrawler._first_json_value(
+                node, ("priceCurrency", "currency", "currencyCode")),
+            "status": GenericCrawler._status_from_availability(
+                GenericCrawler._first_json_value(
+                    node, ("availability", "stockStatus", "status"))),
+            "rating": rating,
+            "review_count": reviews,
+            "mpn": GenericCrawler._first_json_value(node, ("mpn", "model")),
+            "gtin": GenericCrawler._first_json_value(
+                node, ("gtin", "gtin13", "ean", "barcode")),
+            "brand": GenericCrawler._named_value(
+                GenericCrawler._first_json_value(node, ("brand", "manufacturer"))),
+            "category": GenericCrawler._named_value(
+                GenericCrawler._first_json_value(
+                    node, ("category", "categoryName", "breadcrumb"))),
+            "attributes": attributes,
+        }
+
+    @staticmethod
+    def _first_json_value(node: dict, keys: tuple[str, ...]):
+        lower = {str(k).lower(): v for k, v in node.items()}
+        for key in keys:
+            if key in node and node[key] not in (None, "", [], {}):
+                return node[key]
+            value = lower.get(key.lower())
+            if value not in (None, "", [], {}):
+                return value
         return None
+
+    @staticmethod
+    def _json_price(node: dict, keys: tuple[str, ...]):
+        value = GenericCrawler._first_json_value(node, keys)
+        return GenericCrawler._price_from_json_value(value)
+
+    @staticmethod
+    def _price_from_json_value(value, depth: int = 0, source_key: str = ""):
+        if value in (None, "", [], {}) or depth > 5:
+            return None
+        if isinstance(value, dict):
+            lower = {str(k).lower(): k for k in value}
+            priority = (
+                "value", "amount", "price", "centamount",
+                "saleprice", "currentprice", "finalprice", "discountprice",
+                "promoPrice", "current", "sale", "final", "minvariantprice",
+                "minprice", "lowprice", "minimumprice", "regularprice",
+                "listprice", "wasprice", "compareatprice",
+            )
+            for key in priority:
+                actual = key if key in value else lower.get(key.lower())
+                if not actual:
+                    continue
+                price = GenericCrawler._price_from_json_value(
+                    value.get(actual), depth + 1, actual)
+                if price is not None:
+                    return price
+            for key, child in value.items():
+                if isinstance(child, (dict, list)):
+                    price = GenericCrawler._price_from_json_value(
+                        child, depth + 1, str(key))
+                    if price is not None:
+                        return price
+            return None
+        if isinstance(value, list):
+            for child in value:
+                price = GenericCrawler._price_from_json_value(
+                    child, depth + 1, source_key)
+                if price is not None:
+                    return price
+            return None
+        price = GenericCrawler._num(value)
+        if price is not None and source_key.lower() == "centamount" and price > 999:
+            return price / 100
+        return price
+
+    @staticmethod
+    def _json_int(value):
+        if isinstance(value, dict):
+            value = value.get("value") or value.get("count")
+        return GenericCrawler._int(value)
+
+    @staticmethod
+    def _status_from_availability(value) -> str | None:
+        if not value:
+            return None
+        raw = str(value).lower()
+        if any(token in raw for token in ("outofstock", "out of stock",
+                                          "soldout", "sold out",
+                                          "unavailable")):
+            return "out_of_stock"
+        return "on_sale"
+
+    @staticmethod
+    def _looks_blocked_page(tree: HTMLParser, html: str) -> bool:
+        signals = []
+        for selector in ("title", "h1"):
+            node = tree.css_first(selector)
+            if node:
+                signals.append(node.text(strip=True))
+        for prop in ("og:title", "twitter:title"):
+            node = (tree.css_first(f'meta[property="{prop}"]')
+                    or tree.css_first(f'meta[name="{prop}"]'))
+            if node:
+                signals.append(node.attributes.get("content") or "")
+        if any(_BLOCKED_TITLE_RE.search(text or "") for text in signals):
+            return True
+        return bool(_BLOCKED_BODY_RE.search((html or "")[:12000]))
+
+    @staticmethod
+    def _merge_product_data(primary: dict, fallback: dict) -> dict:
+        merged = dict(primary or {})
+        for key, value in (fallback or {}).items():
+            if value in (None, "", [], {}):
+                continue
+            current = merged.get(key)
+            if key == "name" and current:
+                if len(str(value)) > len(str(current)) + 8:
+                    merged[key] = value
+                continue
+            if key == "attributes":
+                merged[key] = GenericCrawler._merge_attributes(current, value)
+                continue
+            if current in (None, "", [], {}):
+                merged[key] = value
+        return merged
+
+    @staticmethod
+    def _jsonld_nodes(value, depth: int = 0):
+        if depth > 5:
+            return
+        if isinstance(value, list):
+            for item in value:
+                yield from GenericCrawler._jsonld_nodes(item, depth + 1)
+            return
+        if not isinstance(value, dict):
+            return
+
+        yield value
+        for key in ("@graph", "mainEntity", "itemListElement"):
+            child = value.get(key)
+            if key == "itemListElement" and isinstance(child, list):
+                for item in child:
+                    if isinstance(item, dict) and "item" in item:
+                        yield from GenericCrawler._jsonld_nodes(
+                            item.get("item"), depth + 1
+                        )
+                    yield from GenericCrawler._jsonld_nodes(item, depth + 1)
+                continue
+            yield from GenericCrawler._jsonld_nodes(child, depth + 1)
+
+    @staticmethod
+    def _jsonld_types(value) -> set[str]:
+        raw = value if isinstance(value, list) else [value]
+        out: set[str] = set()
+        for item in raw:
+            if not item:
+                continue
+            name = str(item).rstrip("/").rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+            if name:
+                out.add(name.lower())
+        return out
+
+    @staticmethod
+    def _first_dict(value) -> dict:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    return item
+        return {}
+
+    @staticmethod
+    def _offer_items(value) -> list[dict]:
+        if isinstance(value, dict):
+            return [value]
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        return []
+
+    @staticmethod
+    def _jsonld_attributes(product: dict, offers: list[dict]) -> dict:
+        attrs = {}
+        if offers:
+            attrs["offers"] = offers
+        for key in (
+            "offers",
+            "promotions",
+            "promotion",
+            "coupons",
+            "coupon",
+            "deals",
+            "deal",
+            "discounts",
+            "badges",
+            "labels",
+        ):
+            value = product.get(key)
+            if value not in (None, "", [], {}) and key != "offers":
+                attrs[key] = value
+        return GenericCrawler._compact_mapping(attrs)
+
+    @staticmethod
+    def _promotion_attributes_from_mapping(node: dict) -> dict:
+        attrs = {}
+        lower = {str(k).lower(): k for k in node}
+        for key in (
+            "offers",
+            "offer",
+            "promotions",
+            "promotion",
+            "coupons",
+            "coupon",
+            "deals",
+            "deal",
+            "discounts",
+            "discount",
+            "badges",
+            "badge",
+            "labels",
+            "label",
+            "campaigns",
+            "campaign",
+        ):
+            actual = key if key in node else lower.get(key.lower())
+            if not actual:
+                continue
+            value = node.get(actual)
+            if value not in (None, "", [], {}):
+                attrs[key] = value
+        return GenericCrawler._compact_mapping(attrs)
+
+    @staticmethod
+    def _merge_attributes(primary, fallback) -> dict:
+        merged = {}
+        if isinstance(primary, dict):
+            merged.update(primary)
+        if isinstance(fallback, dict):
+            for key, value in fallback.items():
+                if value not in (None, "", [], {}):
+                    merged.setdefault(key, value)
+        return GenericCrawler._compact_mapping(merged)
+
+    @staticmethod
+    def _compact_mapping(value: dict) -> dict:
+        if not isinstance(value, dict):
+            return {}
+        return {k: v for k, v in value.items() if v not in (None, "", [], {})}
+
+    @staticmethod
+    def _price_from_offer(offer: dict):
+        for key in ("price", "lowPrice", "highPrice"):
+            price = GenericCrawler._num(offer.get(key))
+            if price is not None:
+                return price
+        spec = offer.get("priceSpecification")
+        specs = spec if isinstance(spec, list) else [spec]
+        for item in specs:
+            if not isinstance(item, dict):
+                continue
+            for key in ("price", "minPrice", "maxPrice"):
+                price = GenericCrawler._num(item.get(key))
+                if price is not None:
+                    return price
+        return None
+
+    @staticmethod
+    def _currency_from_price_spec(offer: dict) -> str | None:
+        spec = offer.get("priceSpecification")
+        specs = spec if isinstance(spec, list) else [spec]
+        for item in specs:
+            if isinstance(item, dict) and item.get("priceCurrency"):
+                return item.get("priceCurrency")
+        return None
+
+    @staticmethod
+    def _named_value(value) -> str | None:
+        if isinstance(value, dict):
+            return value.get("name")
+        if isinstance(value, str):
+            return value
+        return None
+
+    @staticmethod
+    def _image_urls(value) -> list[str]:
+        items = value if isinstance(value, list) else [value]
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            if isinstance(item, str):
+                url = item
+            elif isinstance(item, dict):
+                url = item.get("url") or item.get("contentUrl")
+            else:
+                url = None
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            out.append(url)
+        return out
 
     @staticmethod
     def _meta(tree: HTMLParser, prop: str) -> str | None:
         node = (tree.css_first(f'meta[property="{prop}"]')
                 or tree.css_first(f'meta[name="{prop}"]'))
         return node.attributes.get("content") if node else None
+
+    @staticmethod
+    def _best_title(*values, sku: str | None = None) -> str | None:
+        best: tuple[int, str] | None = None
+        for value in values:
+            text = html_lib.unescape(str(value or "")).strip()
+            if not text:
+                continue
+            score = GenericCrawler._title_score(text, sku)
+            if best is None or score > best[0]:
+                best = (score, text)
+        return best[1] if best else None
+
+    @staticmethod
+    def _title_score(value: str, sku: str | None = None) -> int:
+        text = re.sub(r"\s+", " ", value or "").strip()
+        if not text:
+            return -1000
+        lowered = text.lower()
+        sku_text = str(sku or "").strip().lower()
+        weak = (
+            len(text) < 6
+            or bool(_WEAK_TITLE_RE.match(text))
+            or (bool(sku_text) and lowered == sku_text)
+            or re.fullmatch(r"[A-Z0-9._-]{4,}", text or "") is not None
+        )
+        score = min(len(text), 140)
+        if weak:
+            score -= 160
+        if "|" in text or " - " in text:
+            score -= 8
+        return score
+
+    @staticmethod
+    def _title_from_page(tree: HTMLParser) -> str | None:
+        selectors = (
+            '[itemprop="name"]',
+            '[data-testid*=product-title]',
+            '[data-testid*=product_name]',
+            '[data-testid*=title]',
+            '[data-test*=product-title]',
+            '[data-test*=product_name]',
+            '[data-test*=title]',
+            '[class*=product-title]',
+            '[class*=product_name]',
+            '[class*=ProductTitle]',
+            '[class*=productTitle]',
+            '[class*=product-name]',
+            '[class*=product_name]',
+            '[id*=product-title]',
+            '[id*=product_name]',
+            'h1',
+            'title',
+        )
+        values: list[str] = []
+        for selector in selectors:
+            for node in tree.css(selector)[:8]:
+                for attr in ("content", "aria-label", "title", "data-title"):
+                    value = (node.attributes.get(attr) or "").strip()
+                    if value:
+                        values.append(html_lib.unescape(value))
+                text = (node.text(separator=" ", strip=True) or "").strip()
+                if text:
+                    values.append(html_lib.unescape(text))
+        return GenericCrawler._best_title(*values)
 
     def _meta_price(self, tree: HTMLParser):
         for sel in ('meta[property="product:price:amount"]',
@@ -336,6 +853,90 @@ class GenericCrawler(BaseCrawler):
                 if p:
                     return p
         return None
+
+    def _dom_price(self, tree: HTMLParser):
+        """保守 DOM 兜底：很多普通站只把价格放在 data-* 或 .price 文本里。"""
+        selectors = (
+            "[data-price]",
+            "[data-sale-price]",
+            "[data-current-price]",
+            "[data-product-price]",
+            "[data-testid*=price]",
+            "[data-test*=price]",
+            "[class*=sale-price]",
+            "[class*=current-price]",
+            "[class*=product-price]",
+            "[class*=price]",
+            "[id*=price]",
+        )
+        attrs = (
+            "content",
+            "data-price",
+            "data-sale-price",
+            "data-current-price",
+            "data-product-price",
+            "aria-label",
+            "value",
+        )
+        for selector in selectors:
+            for node in tree.css(selector)[:20]:
+                values = [node.attributes.get(attr) for attr in attrs]
+                values.append(node.text(separator=" ", strip=True))
+                for value in values:
+                    price = self._num(value)
+                    if price is not None and 0 < price < 1_000_000:
+                        return price
+        return None
+
+    @staticmethod
+    def _dom_promotion_attributes(tree: HTMLParser) -> dict:
+        selectors = (
+            "[data-testid*=promo]",
+            "[data-testid*=coupon]",
+            "[data-testid*=deal]",
+            "[data-testid*=discount]",
+            "[data-testid*=badge]",
+            "[data-test*=promo]",
+            "[data-test*=coupon]",
+            "[data-test*=deal]",
+            "[data-test*=discount]",
+            "[data-test*=badge]",
+            "[class*=promo]",
+            "[class*=coupon]",
+            "[class*=deal]",
+            "[class*=discount]",
+            "[class*=badge]",
+            "[id*=promo]",
+            "[id*=coupon]",
+            "[id*=deal]",
+            "[id*=discount]",
+        )
+        labels: list[str] = []
+        seen: set[str] = set()
+        for selector in selectors:
+            for node in tree.css(selector)[:20]:
+                values = [
+                    node.attributes.get("aria-label"),
+                    node.attributes.get("title"),
+                    node.attributes.get("data-label"),
+                    node.attributes.get("data-promo"),
+                    node.attributes.get("data-coupon"),
+                    node.text(separator=" ", strip=True),
+                ]
+                for value in values:
+                    text = re.sub(r"\s+", " ", str(value or "")).strip()
+                    if not text or len(text) > 180:
+                        continue
+                    if not _PROMO_TEXT_RE.search(text):
+                        continue
+                    key = text.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    labels.append(text[:160])
+                    if len(labels) >= 12:
+                        return {"promotions": labels}
+        return {"promotions": labels} if labels else {}
 
     @staticmethod
     def _slug(url: str) -> str:
@@ -353,15 +954,7 @@ class GenericCrawler(BaseCrawler):
 
     @staticmethod
     def _num(v):
-        if v is None:
-            return None
-        m = _PRICE_RE.search(str(v).replace(",", "."))
-        if not m:
-            return None
-        try:
-            return float(m.group())
-        except ValueError:
-            return None
+        return to_price(v)
 
     @staticmethod
     def _int(v):

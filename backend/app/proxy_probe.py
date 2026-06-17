@@ -11,9 +11,14 @@ from dataclasses import dataclass
 from curl_cffi import requests as creq
 
 from . import proxy_pool
-from .crawl_diagnostics import FailureInfo, STAGE_FETCH, classify_exception
+from .crawl_diagnostics import (
+    FailureInfo,
+    STAGE_FETCH,
+    classify_exception,
+    classify_http_status,
+)
 from .db import SessionLocal
-from .proxy_health import record_proxy_result
+from .proxy_health import is_proxy_health_failure, record_proxy_result
 
 
 @dataclass(frozen=True)
@@ -47,24 +52,30 @@ def probe_proxy_for_url(
     sess.proxies = {"http": proxy, "https": proxy}
     try:
         resp = sess.get(url, timeout=timeout)
-        if 200 <= resp.status_code < 500:
+        if 200 <= resp.status_code < 400:
             proxy_pool.report_success(proxy)
             _record(proxy, tier, True, None)
             return ProxyProbeResult(True, proxy, status_code=resp.status_code)
-        failure = FailureInfo(
-            "http_5xx",
+        failure = classify_http_status(
+            resp.status_code,
+            f"目标预检返回 HTTP {resp.status_code}",
+        ) or FailureInfo(
+            "http_4xx",
             STAGE_FETCH,
-            f"代理预检返回 HTTP {resp.status_code}",
+            f"目标预检返回 HTTP {resp.status_code}",
             True,
-            "目标站或代理出口临时异常，稍后重试或切换代理",
+            "目标站或代理出口异常，稍后重试或切换代理",
             resp.status_code,
         )
     except Exception as exc:
         failure = classify_exception(exc, stage=STAGE_FETCH)
 
-    proxy_pool.report_failure(proxy, hard=failure.code in (
-        "proxy_auth_failed", "proxy_unavailable"))
-    _record(proxy, tier, False, failure)
+    proxy_failed = is_proxy_health_failure(failure)
+    if proxy_failed:
+        proxy_pool.report_failure(proxy, hard=failure.code == "proxy_auth_failed")
+    else:
+        proxy_pool.report_success(proxy)
+    _record(proxy, tier, not proxy_failed, failure)
     return ProxyProbeResult(False, proxy, failure,
                             status_code=failure.http_status)
 

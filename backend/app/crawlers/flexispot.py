@@ -11,10 +11,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 
 from .base import BaseCrawler, CrawlResult
 
 DEFAULT_LIMIT = int(os.environ.get("FLEXISPOT_LIMIT", "120"))
+MAX_ELAPSED_SEC = float(os.environ.get("FLEXISPOT_MAX_ELAPSED_SEC", "180"))
+REQUEST_TIMEOUT = int(os.environ.get("FLEXISPOT_REQUEST_TIMEOUT", "12"))
 _CURRENCY = {"US": "USD", "UK": "GBP", "CA": "CAD", "DE": "EUR", "IT": "EUR",
              "ES": "EUR", "FR": "EUR", "NL": "EUR", "PL": "PLN"}
 _EXCLUDE = ("spine-care-center", "/category", "/blog", "undefined", "/cart",
@@ -87,6 +90,7 @@ class FlexispotCrawler(BaseCrawler):
 
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
+        started = time.monotonic()
         slugs = self._product_slugs()
         targets = slugs[: self.limit]
         result.notes.append(
@@ -116,9 +120,14 @@ class FlexispotCrawler(BaseCrawler):
         api = self.base + "/sapi/mall-item/item/detail"
         ok = 0
         for slug in targets:
+            if time.monotonic() - started >= MAX_ELAPSED_SEC:
+                result.notes.append(
+                    f"达到 FLEXISPOT_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
+                    f"提前返回已解析结果（ok={ok}/{len(targets)}）")
+                break
             try:
                 res = fetcher.post(api, data=json.dumps({"urlKey": slug}),
-                                   headers=headers)
+                                   headers=headers, timeout=REQUEST_TIMEOUT)
                 if not res.ok:
                     continue
                 self.snapshot(slug, res.text)

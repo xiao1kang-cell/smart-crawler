@@ -27,3 +27,7 @@ export function siteOverview(site: string, params: Record<string, unknown> = {})
 export function listPromotions(params: Record<string, unknown> = {}) {
   return apiJson(`/api/promotions${qs(params)}`)
 }
+
+export function listCategoriesCross(params: Record<string, unknown> = {}) {
+  return apiJson(`/api/categories/cross${qs(params)}`)
+}

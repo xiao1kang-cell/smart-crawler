@@ -27,6 +27,7 @@ from .base import BaseCrawler, CrawlResult
 DEFAULT_LIMIT = int(os.environ.get("ETSY_LIMIT", "1000"))
 DELAY = float(os.environ.get("ETSY_DELAY", "3.0"))
 MAX_PAGES_PER_KW = int(os.environ.get("ETSY_MAX_PAGES_PER_KW", "6"))
+MAX_ELAPSED_SEC = float(os.environ.get("ETSY_MAX_ELAPSED_SEC", "180"))
 
 _HOME_KW = [
     "wall art print", "throw pillow cover", "table lamp", "wooden coaster",
@@ -68,23 +69,34 @@ class EtsyCrawler(BaseCrawler):
 
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
+        started = time.monotonic()
         fetcher = self.make_fetcher(kind="product", source="etsy")
         urls: list[str] = []
         seen: set[str] = set()
 
         # SRP 阶段
         for kw in _HOME_KW:
+            if time.monotonic() - started >= MAX_ELAPSED_SEC:
+                result.notes.append(
+                    f"达到 ETSY_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
+                    f"提前返回（发现 {len(urls)} 个 listing）")
+                break
             if len(urls) >= self.limit * 2:
                 break
             for pg in range(1, MAX_PAGES_PER_KW + 1):
+                if time.monotonic() - started >= MAX_ELAPSED_SEC:
+                    break
                 u = (f"{self.base}/search?q={kw.replace(' ', '+')}"
                      f"&page={pg}")
                 try:
                     res = fetcher.get(u, headers=self._headers(), timeout=30)
                 except Exception:
                     break
-                if (res.status or 0) != 200 or self._blocked(res.text):
-                    time.sleep(30)
+                if (res.status or 0) in (403, 429) or self._blocked(res.text):
+                    result.notes.append(
+                        f"⚠ Etsy SRP 被拦截 status={res.status or 0} kw={kw}")
+                    return result
+                if (res.status or 0) != 200:
                     break
                 new = 0
                 for lid in _LISTING_RE.findall(res.text):
@@ -106,6 +118,11 @@ class EtsyCrawler(BaseCrawler):
         # PDP 阶段
         ok = denied = 0
         for i, url in enumerate(urls[: self.limit * 2]):
+            if time.monotonic() - started >= MAX_ELAPSED_SEC:
+                result.notes.append(
+                    f"达到 ETSY_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
+                    f"提前返回已解析结果（ok={ok}, denied={denied}）")
+                break
             if ok >= self.limit:
                 break
             try:

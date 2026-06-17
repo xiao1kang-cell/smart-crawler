@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import and_, func, or_, text
+from sqlalchemy import String, and_, cast, exists, func, or_, text
 from sqlalchemy.orm import Session
 
 from ..access import DEFAULT_API_KEY_SCOPES, api_key_scopes, normalize_scopes
@@ -20,6 +20,8 @@ from ..auth import (TOKEN_TTL, generate_session_id, hash_secret, hash_password,
                     make_token, normalize_email, parse_token, validate_email,
                     validate_password_strength, validate_username,
                     verify_password)
+from ..currency import (currency_for_site as _currency_for_site,
+                        normalize_currency_for_site as _display_currency)
 from ..db import get_db
 from ..export import export_workbook
 from ..models import (ApiKey, Category, CrawlFailure, CrawlJob, CrawlUrl,
@@ -29,24 +31,6 @@ from ..models import (ApiKey, Category, CrawlFailure, CrawlJob, CrawlUrl,
                       WorkspaceMember, WorkspaceSite, ReportConfig)
 from ..proxy import pool_status
 from ..runner import enqueue
-
-
-SITE_CURRENCY_BY_COUNTRY = {
-    "US": "USD", "CA": "CAD", "UK": "GBP", "GB": "GBP",
-    "DE": "EUR", "FR": "EUR", "IT": "EUR", "ES": "EUR", "NL": "EUR",
-    "IE": "EUR", "PT": "EUR", "PL": "PLN", "RO": "RON",
-    "SE": "SEK", "CH": "CHF", "JP": "JPY", "KR": "KRW",
-    "CN": "CNY", "ID": "IDR", "MX": "MXN", "BR": "BRL",
-}
-
-
-def _currency_for_site(site: str | None) -> str | None:
-    if not site or "_" not in site:
-        return None
-    suffix = site.rsplit("_", 1)[-1].upper()
-    if suffix == "GLOBAL":
-        return "USD"
-    return SITE_CURRENCY_BY_COUNTRY.get(suffix)
 
 
 # 新品判定窗口：created_time 落在最近 N 天即视为新品。
@@ -305,6 +289,40 @@ def _current_workspace(
     return _default_workspace(db)
 
 
+def _workspace_role_for_user(db: Session, u: User | None,
+                             workspace_id: int | None) -> str | None:
+    if not u or not workspace_id:
+        return None
+    member = (db.query(WorkspaceMember)
+              .filter(WorkspaceMember.workspace_id == workspace_id,
+                      WorkspaceMember.user_id == u.id,
+                      WorkspaceMember.status == "active")
+              .first())
+    return member.role if member else None
+
+
+def _can_edit_workspace_report(db: Session, u: User | None,
+                               workspace_id: int | None) -> bool:
+    if _is_super_admin(u):
+        return True
+    if not u or (u.status or "active") != "active":
+        return False
+    if u.role in {"admin", "owner"}:
+        return True
+    return _workspace_role_for_user(db, u, workspace_id) in {
+        "admin", "owner", "operator",
+    }
+
+
+def _require_report_editor(user: str, db: Session, ws: Workspace) -> User:
+    if user.startswith("apikey:"):
+        raise HTTPException(403, "API 密钥不能执行报表编辑/导出操作")
+    u = _require_dashboard_user(user, db)
+    if not _can_edit_workspace_report(db, u, ws.id):
+        raise HTTPException(403, "需要报表编辑权限")
+    return u
+
+
 def _workspace_site_names(
     db: Session,
     workspace_id: int,
@@ -318,6 +336,30 @@ def _workspace_site_names(
         q = q.filter(WorkspaceSite.hidden.is_(False))
     return [row.site for row in q.order_by(WorkspaceSite.sort_order,
                                            WorkspaceSite.id).all()]
+
+
+def _workspace_site_targets(
+    db: Session,
+    workspace_id: int,
+    include_hidden: bool = False,
+) -> dict[str, int]:
+    q = db.query(WorkspaceSite).filter(
+        WorkspaceSite.workspace_id == workspace_id,
+        WorkspaceSite.enabled.is_(True),
+    )
+    if not include_hidden:
+        q = q.filter(WorkspaceSite.hidden.is_(False))
+    return {
+        row.site: int(row.target_sku_count or 0)
+        for row in q.all()
+        if row.target_sku_count
+    }
+
+
+def _optional_int(value) -> int | None:
+    if value in (None, ""):
+        return None
+    return int(value)
 
 
 def _require_site_in_workspace(site: str, allowed_sites: list[str]) -> None:
@@ -607,7 +649,7 @@ def site_dict(s: Site) -> dict:
 
 
 def product_dict(p: Product) -> dict:
-    currency = p.currency or _currency_for_site(p.site)
+    currency = _display_currency(p.currency, p.site)
     return {
         "id": p.id, "sku": p.sku, "spu": p.spu, "variant_id": p.variant_id,
         "title": p.title,
@@ -622,10 +664,42 @@ def product_dict(p: Product) -> dict:
         "tags": p.tags, "product_url": p.product_url,
         "product_type": p.product_type, "is_new": p.is_new,
         "is_bestseller": p.is_bestseller,
+        "published_at": p.published_at.isoformat() if p.published_at else None,
         "created_time": p.created_time.isoformat() if p.created_time else None,
         "updated_time": p.updated_time.isoformat() if p.updated_time else None,
         "site": p.site, "brand": p.brand,
     }
+
+
+def _report_money(value, currency: str | None) -> str:
+    if value is None:
+        return ""
+    amount = f"{value:g}" if isinstance(value, (int, float)) else str(value)
+    return f"{currency} {amount}" if currency else amount
+
+
+def _report_time(value: str | datetime | None) -> str:
+    if not value:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M")
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).strftime(
+            "%Y-%m-%d %H:%M"
+        )
+    except ValueError:
+        return str(value)
+
+
+def _report_promo_type(value: str | None) -> str:
+    key = (value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if key in {"coupon", "coupons"}:
+        return "Coupons"
+    if key in {"price", "price_promotion", "sale", "discount"}:
+        return "Price Promotion"
+    if key in {"bundle", "bundle_promotion"}:
+        return "Bundle"
+    return value or ""
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -680,19 +754,25 @@ def _filtered_products_query(
         q = q.filter(Product.is_bestseller.is_(True))
     elif tab == "new":
         # 验收口径的“最新产品”应展示站点最近采集到的新品列表。
-        # 有些历史站点没有最近 30 天 created_time，不能因此把 tab 变成空表。
+        # 有些历史站点只有 updated_time，不能因此把 tab 变成空表。
         q = q.filter(or_(Product.created_time.isnot(None),
-                         Product.published_at.isnot(None)))
+                         Product.published_at.isnot(None),
+                         Product.updated_time.isnot(None)))
     if search:
         like = f"%{search}%"
         q = q.filter(or_(Product.title.ilike(like), Product.sku.ilike(like),
-                         Product.spu.ilike(like)))
+                         Product.spu.ilike(like),
+                         Product.product_url.ilike(like),
+                         cast(Product.attributes, String).ilike(like),
+                         cast(Product.tags, String).ilike(like)))
     if status:
-        q = q.filter(Product.status == status)
+        status_values = _product_status_values(status)
+        q = q.filter(func.lower(Product.status).in_([v.lower() for v in status_values]))
+    effective_price = func.coalesce(Product.sale_price, Product.original_price)
     if min_price is not None:
-        q = q.filter(Product.sale_price >= min_price)
+        q = q.filter(effective_price >= min_price)
     if max_price is not None:
-        q = q.filter(Product.sale_price <= max_price)
+        q = q.filter(effective_price <= max_price)
     if category:
         q = q.filter(Product.category_path.ilike(f"%{category}%"))
     if min_rating is not None:
@@ -737,12 +817,14 @@ def _filtered_products_query(
         q = q.filter(Product.has_video.is_(has_video))
     if free_shipping is not None:
         q = q.filter(Product.has_free_shipping.is_(free_shipping))
+    created_at_expr = func.coalesce(Product.published_at, Product.created_time,
+                                    Product.updated_time)
     parsed_from = _parse_iso_datetime(created_from)
     if parsed_from:
-        q = q.filter(Product.created_time >= parsed_from)
+        q = q.filter(created_at_expr >= parsed_from)
     parsed_to = _parse_iso_datetime_end(created_to)
     if parsed_to:
-        q = q.filter(Product.created_time <= parsed_to)
+        q = q.filter(created_at_expr <= parsed_to)
     return q
 
 
@@ -763,6 +845,114 @@ def _variant_counts_for_products(db: Session, products: list[Product]) -> dict[i
     return {p.id: by_key.get((p.site, p.spu or p.sku), 1) for p in products}
 
 
+def _promotion_labels_for_products(db: Session,
+                                   products: list[Product]) -> dict[int, list[str]]:
+    keys = [(p.site, p.sku) for p in products if p.site and p.sku]
+    if not keys:
+        return {}
+    sites = sorted({site for site, _sku in keys})
+    skus = sorted({sku for _site, sku in keys})
+    rows = (
+        db.query(Promotion.site, Promotion.sku, Promotion.promotion_name,
+                 Promotion.promotion_type)
+        .filter(Promotion.site.in_(sites), Promotion.sku.in_(skus))
+        .order_by(Promotion.detected_time.desc().nullslast(),
+                  Promotion.id.desc())
+        .all()
+    )
+    wanted = set(keys)
+    by_key: dict[tuple[str, str], list[str]] = {}
+    seen: dict[tuple[str, str], set[str]] = {}
+    for site, sku, name, promo_type in rows:
+        key = (site, sku)
+        if key not in wanted:
+            continue
+        label = str(name or promo_type or "").strip()
+        if not label:
+            continue
+        bucket = by_key.setdefault(key, [])
+        used = seen.setdefault(key, set())
+        if label in used or len(bucket) >= 3:
+            continue
+        bucket.append(label[:80])
+        used.add(label)
+    return {p.id: by_key.get((p.site, p.sku), []) for p in products}
+
+
+def _variant_rows_for_product(db: Session, p: Product) -> list[dict]:
+    key = p.spu or p.sku
+    if not p.site or not key:
+        return []
+    variant_key = func.coalesce(Product.spu, Product.sku)
+    rows = (
+        db.query(Product)
+        .filter(Product.site == p.site, variant_key == key)
+        .order_by(Product.id)
+        .limit(200)
+        .all()
+    )
+    return [{
+        "id": row.id,
+        "sku": row.sku,
+        "spu": row.spu,
+        "variant_id": row.variant_id,
+        "title": row.title,
+        "attributes": row.attributes,
+        "sale_price": row.sale_price,
+        "original_price": row.original_price,
+        "currency": _display_currency(row.currency, row.site),
+        "product_url": row.product_url,
+        "status": row.status,
+    } for row in rows]
+
+
+def _variant_context_for_products(
+    db: Session,
+    products: list[Product],
+) -> dict[int, dict]:
+    keys = {(p.site, p.spu or p.sku) for p in products if p.site and (p.spu or p.sku)}
+    if not keys:
+        return {}
+    sites = sorted({site for site, _key in keys})
+    variant_keys = sorted({key for _site, key in keys})
+    rows = (
+        db.query(Product)
+        .filter(Product.site.in_(sites))
+        .filter(or_(Product.spu.in_(variant_keys), Product.sku.in_(variant_keys)))
+        .order_by(Product.id)
+        .all()
+    )
+    grouped: dict[tuple[str, str], list[Product]] = {}
+    for row in rows:
+        key = (row.site, row.spu or row.sku)
+        if key in keys:
+            grouped.setdefault(key, []).append(row)
+    out: dict[int, dict] = {}
+    for product in products:
+        key = (product.site, product.spu or product.sku)
+        variants = grouped.get(key) or [product]
+        skus = [v.sku for v in variants if v.sku]
+        out[product.id] = {
+            "listing_sku": skus[0] if skus else product.sku,
+            "variant_skus": skus,
+            "variant_count": len(skus) or 1,
+        }
+    return out
+
+
+def _product_status_values(status: str | None) -> list[str]:
+    normalized = (status or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "on_sale": ["on_sale", "on sale", "sale", "active", "available"],
+        "out_of_stock": [
+            "out_of_stock", "out of stock", "sold_out", "sold out",
+            "unavailable", "oos",
+        ],
+        "discontinued": ["discontinued", "offline", "removed", "inactive"],
+    }
+    return aliases.get(normalized, [status.strip()] if status else [])
+
+
 def _product_order_cols(tab: str):
     if tab == "new":
         return (
@@ -770,7 +960,11 @@ def _product_order_cols(tab: str):
                           Product.updated_time).desc().nullslast(),
             Product.id.desc(),
         )
-    return (Product.id,)
+    return (
+        func.coalesce(Product.updated_time, Product.created_time,
+                      Product.published_at).desc().nullslast(),
+        Product.id.desc(),
+    )
 
 
 def _filtered_promotions_query(
@@ -791,11 +985,23 @@ def _filtered_promotions_query(
         q = q.filter(Promotion.site.in_(allowed_sites))
     if search:
         like = f"%{search}%"
+        product_match = exists().where(
+            Product.site == Promotion.site,
+            Product.sku == Promotion.sku,
+            or_(Product.product_url.ilike(like),
+                Product.title.ilike(like),
+                cast(Product.attributes, String).ilike(like)),
+        )
         q = q.filter(or_(Promotion.sku.ilike(like),
                          Promotion.promotion_name.ilike(like),
-                         Promotion.product_title.ilike(like)))
+                         Promotion.product_title.ilike(like),
+                         product_match))
     if type:
-        q = q.filter(Promotion.promotion_type.ilike(f"%{type}%"))
+        values = _promotion_type_values(type)
+        q = q.filter(or_(*[
+            Promotion.promotion_type.ilike(f"%{value}%")
+            for value in values
+        ]))
     parsed_from = _parse_iso_datetime(date_from)
     if parsed_from:
         q = q.filter(Promotion.detected_time >= parsed_from)
@@ -803,6 +1009,23 @@ def _filtered_promotions_query(
     if parsed_to:
         q = q.filter(Promotion.detected_time <= parsed_to)
     return q
+
+
+def _promotion_type_values(value: str | None) -> list[str]:
+    normalized = (value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "price": ["price", "price_promotion"],
+        "price_promotion": ["price", "price_promotion"],
+        "价格促销": ["price", "price_promotion"],
+        "coupon": ["coupon"],
+        "coupons": ["coupon"],
+        "优惠券": ["coupon"],
+        "bundle": ["bundle"],
+        "组合": ["bundle"],
+        "clearance": ["clearance"],
+        "site_promotion": ["site_promotion"],
+    }
+    return aliases.get(normalized, [value.strip()] if value else [])
 
 
 # ---------- 站点概览（R-001 / R-002 / §14.2）----------
@@ -863,9 +1086,23 @@ def site_overview(site: str, user: str = Depends(require_user),
         raise HTTPException(404, "站点不存在")
     currency = _currency_for_site(site)
     sku_count = db.query(Product).filter(Product.site == site).count()
+    product_count = (
+        db.query(func.count(func.distinct(func.coalesce(Product.spu, Product.sku))))
+        .filter(Product.site == site)
+        .scalar() or 0
+    )
     _new_cutoff = datetime.utcnow() - timedelta(days=NEW_PRODUCT_DAYS)
     new_count = db.query(Product).filter(
-        Product.site == site, Product.created_time >= _new_cutoff).count()
+        Product.site == site,
+        or_(Product.created_time >= _new_cutoff,
+            Product.published_at >= _new_cutoff),
+    ).count()
+    latest_product_count = db.query(Product).filter(
+        Product.site == site,
+        or_(Product.created_time.isnot(None),
+            Product.published_at.isnot(None),
+            Product.updated_time.isnot(None)),
+    ).count()
     bestseller_count = db.query(Product).filter(
         Product.site == site, Product.is_bestseller.is_(True)).count()
     category_count = (db.query(func.count(func.distinct(Product.category_path)))
@@ -908,9 +1145,38 @@ def site_overview(site: str, user: str = Depends(require_user),
             "review_total": t.review_total,
         }
     trends = list(trend_buckets.values())
+    used_snapshot_fallback = False
+    if not trends:
+        snapshot_dt = updated_at or datetime.utcnow()
+        snapshot_date = snapshot_dt.date()
+        if (not parsed_from or snapshot_date >= parsed_from.date()) and (
+            not parsed_to or snapshot_date <= parsed_to.date()
+        ):
+            avg_rating, review_total = db.query(
+                func.avg(Product.ratings),
+                func.coalesce(func.sum(Product.review_count), 0),
+            ).filter(Product.site == site).first()
+            trends = [{
+                "date": _trend_bucket_key(snapshot_date, granularity),
+                "source_date": snapshot_date.isoformat(),
+                "sku_count": sku_count,
+                "product_count": int(product_count),
+                "spu_count": int(product_count),
+                "new_product_count": new_count,
+                "estimated_sales": int(sales or 0),
+                "estimated_revenue": round(revenue or 0, 2),
+                "traffic": None,
+                "conversion_rate": None,
+                "avg_rating": round(float(avg_rating), 2) if avg_rating is not None else None,
+                "review_total": int(review_total or 0),
+                "snapshot": True,
+            }]
+            used_snapshot_fallback = True
     current_period = trends[-1] if trends else {
         "date": None,
         "sku_count": sku_count,
+        "product_count": int(product_count),
+        "spu_count": int(product_count),
         "new_product_count": new_count,
         "estimated_sales": int(sales or 0),
         "estimated_revenue": round(revenue or 0, 2),
@@ -922,13 +1188,17 @@ def site_overview(site: str, user: str = Depends(require_user),
     previous_period = trends[-2] if len(trends) > 1 else None
     return {
         "cards": {
-            "sku_count": sku_count, "new_product_count": new_count,
+            "sku_count": sku_count, "product_count": int(product_count),
+            "spu_count": int(product_count),
+            "new_product_count": new_count,
+            "latest_product_count": latest_product_count,
             "bestseller_count": bestseller_count,
             "category_count": int(category_count),
             "thirty_day_sales": int(sales or 0),
             "thirty_day_revenue": round(revenue or 0, 2),
             "currency": currency,
-            "traffic": None, "conversion_rate": None,
+            "traffic": current_period.get("traffic"),
+            "conversion_rate": current_period.get("conversion_rate"),
         },
         "trends": trends,
         "currency": currency,
@@ -938,6 +1208,7 @@ def site_overview(site: str, user: str = Depends(require_user),
             "visible_points": len(trends),
             "current_period": current_period,
             "previous_period": previous_period,
+            "snapshot_fallback": used_snapshot_fallback,
         },
     }
 
@@ -989,10 +1260,12 @@ def list_products(
     rows = (q.order_by(*_product_order_cols(tab))
             .offset((page - 1) * page_size).limit(page_size).all())
     variant_counts = _variant_counts_for_products(db, rows)
+    promotion_labels = _promotion_labels_for_products(db, rows)
     items = []
     for row in rows:
         item = product_dict(row)
         item["variant_count"] = variant_counts.get(row.id, 1)
+        item["promotion_labels"] = promotion_labels.get(row.id, [])
         items.append(item)
     return {"total": total, "page": page, "page_size": page_size,
             "items": items}
@@ -1192,6 +1465,9 @@ def _build_product_trend_payload(
     date_to: str | None = None,
     promo_search: str | None = None,
     promo_type: str | None = None,
+    promo_sku: str | None = None,
+    promo_page: int | None = 1,
+    promo_page_size: int | None = 20,
 ) -> dict:
     granularity = granularity if granularity in {"day", "week", "month"} else "day"
     parsed_from = _parse_iso_datetime(date_from)
@@ -1228,6 +1504,28 @@ def _build_product_trend_payload(
             "estimated_revenue": round(sales * (price or 0), 2),
             "avg_rating": p.ratings,
         })
+    used_snapshot_fallback = False
+    if not raw_rows:
+        snapshot_dt = p.updated_time or p.created_time or datetime.utcnow()
+        snapshot_date = snapshot_dt.date()
+        if (not from_date or snapshot_date >= from_date) and (
+            not to_date or snapshot_date <= to_date
+        ):
+            price = p.sale_price if p.sale_price is not None else p.original_price
+            revenue = p.thirty_day_revenue
+            if revenue is None and price is not None and p.thirty_day_sales is not None:
+                revenue = round((p.thirty_day_sales or 0) * price, 2)
+            raw_rows.append({
+                "date": snapshot_date.isoformat(),
+                "sale_price": p.sale_price,
+                "original_price": p.original_price,
+                "review_total": p.review_count,
+                "estimated_sales": p.thirty_day_sales or 0,
+                "estimated_revenue": revenue or 0,
+                "avg_rating": p.ratings,
+                "snapshot": True,
+            })
+            used_snapshot_fallback = True
 
     if granularity == "day":
         trend_rows = raw_rows
@@ -1245,6 +1543,7 @@ def _build_product_trend_payload(
                 "estimated_revenue": 0,
                 "avg_rating": row["avg_rating"],
                 "points": 0,
+                "snapshot": bool(row.get("snapshot")),
             })
             current["estimated_sales"] += row["estimated_sales"] or 0
             current["estimated_revenue"] = round(
@@ -1253,72 +1552,150 @@ def _build_product_trend_payload(
             current["original_price"] = row["original_price"]
             current["review_total"] = row["review_total"]
             current["avg_rating"] = row["avg_rating"]
+            current["snapshot"] = bool(current.get("snapshot") or row.get("snapshot"))
             current["points"] += 1
         trend_rows = [buckets[k] for k in sorted(buckets.keys())]
 
-    promo_q = db.query(Promotion).filter(Promotion.site == p.site,
-                                         Promotion.sku == p.sku)
+    variant_rows = _variant_rows_for_product(db, p)
+    variant_skus = [row["sku"] for row in variant_rows if row.get("sku")]
+    if not variant_skus and p.sku:
+        variant_skus = [p.sku]
+    promo_sku = (promo_sku or "").strip()
+    promo_q = db.query(Promotion).filter(Promotion.site == p.site)
+    if variant_skus:
+        promo_q = promo_q.filter(Promotion.sku.in_(variant_skus))
+    else:
+        promo_q = promo_q.filter(Promotion.sku == p.sku)
+    if promo_sku:
+        promo_q = promo_q.filter(Promotion.sku == promo_sku)
     if promo_search:
         like = f"%{promo_search}%"
+        product_match = exists().where(
+            Product.site == Promotion.site,
+            Product.sku == Promotion.sku,
+            or_(Product.product_url.ilike(like),
+                Product.title.ilike(like),
+                cast(Product.attributes, String).ilike(like)),
+        )
         promo_q = promo_q.filter(or_(Promotion.sku.ilike(like),
                                      Promotion.promotion_name.ilike(like),
-                                     Promotion.product_title.ilike(like)))
+                                     Promotion.product_title.ilike(like),
+                                     product_match))
     if promo_type:
-        promo_q = promo_q.filter(Promotion.promotion_type.ilike(f"%{promo_type}%"))
+        promo_q = promo_q.filter(or_(*[
+            Promotion.promotion_type.ilike(f"%{value}%")
+            for value in _promotion_type_values(promo_type)
+        ]))
     if parsed_from:
         promo_q = promo_q.filter(Promotion.detected_time >= parsed_from)
     if parsed_to:
         promo_q = promo_q.filter(Promotion.detected_time <= parsed_to)
-    promos = (promo_q.order_by(Promotion.detected_time.desc().nullslast(),
-                               Promotion.id.desc())
-              .limit(500).all())
-    promo_rows = [{
-        "id": r.id,
-        "sku": r.sku,
-        "site": r.site,
-        "promotion_type": r.promotion_type,
-        "promotion_name": r.promotion_name,
-        "original_price": r.original_price,
-        "promotion_price": r.promotion_price,
-        "currency": p.currency or _currency_for_site(p.site),
-        "discount_percent": r.discount_percent,
-        "threshold": r.threshold,
-        "product_title": r.product_title,
-        "product_image": r.product_image,
-        "start_time": r.start_time.isoformat() if r.start_time else None,
-        "end_time": r.end_time.isoformat() if r.end_time else None,
-        "detected_time": r.detected_time.isoformat() if r.detected_time else None,
-    } for r in promos]
+    promo_total = promo_q.count()
+    promo_ordered = promo_q.order_by(Promotion.detected_time.desc().nullslast(),
+                                     Promotion.id.desc())
+    if promo_page_size is None:
+        promos = promo_ordered.limit(5000).all()
+        promo_page_value = 1
+        promo_page_size_value = promo_total
+    else:
+        try:
+            promo_page_value = max(1, int(promo_page or 1))
+        except (TypeError, ValueError):
+            promo_page_value = 1
+        try:
+            promo_page_size_value = max(1, min(500, int(promo_page_size or 20)))
+        except (TypeError, ValueError):
+            promo_page_size_value = 20
+        promos = (promo_ordered
+                  .offset((promo_page_value - 1) * promo_page_size_value)
+                  .limit(promo_page_size_value)
+                  .all())
+    promo_products: dict[tuple[str | None, str | None], Product] = {}
+    if promos:
+        promo_skus = sorted({r.sku for r in promos if r.sku})
+        if promo_skus:
+            promo_products = {
+                (row.site, row.sku): row for row in (
+                    db.query(Product)
+                    .filter(Product.site == p.site, Product.sku.in_(promo_skus))
+                    .all()
+                )
+            }
+    promo_rows = []
+    listing_sku = variant_skus[0] if variant_skus else p.sku
+    listing_variant_count = len(variant_skus) or (1 if p.sku else 0)
+    for r in promos:
+        promo_product = promo_products.get((r.site, r.sku))
+        promo_rows.append({
+            "id": r.id,
+            "sku": r.sku,
+            "listing_sku": listing_sku,
+            "variant_skus": variant_skus,
+            "variant_count": listing_variant_count,
+            "site": r.site,
+            "promotion_type": r.promotion_type,
+            "promotion_name": r.promotion_name,
+            "original_price": r.original_price,
+            "promotion_price": r.promotion_price,
+            "currency": _display_currency(
+                promo_product.currency if promo_product else p.currency, p.site),
+            "discount_percent": r.discount_percent,
+            "threshold": r.threshold,
+            "product_title": r.product_title or (
+                promo_product.title if promo_product else p.title),
+            "product_image": r.product_image or (
+                (promo_product.image_urls or [None])[0]
+                if promo_product else (p.image_urls or [None])[0]
+            ),
+            "product_label": promo_product.label if promo_product else p.label,
+            "product_tags": promo_product.tags if promo_product else p.tags,
+            "is_new": bool(promo_product.is_new) if promo_product else bool(p.is_new),
+            "is_bestseller": (
+                bool(promo_product.is_bestseller)
+                if promo_product else bool(p.is_bestseller)
+            ),
+            "start_time": r.start_time.isoformat() if r.start_time else None,
+            "end_time": r.end_time.isoformat() if r.end_time else None,
+            "detected_time": r.detected_time.isoformat() if r.detected_time else None,
+        })
 
     has_review_signal = sum(1 for h in rows if h.review_count is not None) >= 2
     current_period = trend_rows[-1] if trend_rows else None
     previous_period = trend_rows[-2] if len(trend_rows) >= 2 else None
+    data_notes = []
+    if used_snapshot_fallback:
+        data_notes.append("暂无价格历史，已展示当前商品快照")
+    data_notes.append("销量/收入由评论增量按留评率估算" if has_review_signal else "评论历史不足，销量/收入优先展示当前商品字段")
+    data_notes.append("流量/转化率需要接入第三方数据源")
     return {
         "product": product_dict(p),
+        "variants": variant_rows,
         "summary": {
             "thirty_day_sales": p.thirty_day_sales or 0,
             "thirty_day_revenue": p.thirty_day_revenue or 0,
             "price": p.sale_price if p.sale_price is not None else p.original_price,
             "original_price": p.original_price,
-            "currency": p.currency or _currency_for_site(p.site),
+            "currency": _display_currency(p.currency, p.site),
             "ratings": p.ratings,
             "review_count": p.review_count or 0,
             "review_rate": rate,
             "history_points": len(rows),
             "visible_points": len(trend_rows),
-            "promotion_count": len(promo_rows),
+            "promotion_count": int(promo_total or 0),
+            "promotion_page": promo_page_value,
+            "promotion_page_size": promo_page_size_value,
+            "promotion_total": int(promo_total or 0),
             "granularity": granularity,
             "date_from": date_from,
             "date_to": date_to,
+            "promo_sku": promo_sku,
             "current_period": current_period,
             "previous_period": previous_period,
+            "snapshot_fallback": used_snapshot_fallback,
             "has_review_signal": has_review_signal,
             "traffic": None,
             "conversion_rate": None,
-            "data_notes": [
-                "销量/收入由评论增量按留评率估算" if has_review_signal else "评论历史不足，销量/收入暂无法估算",
-                "流量/转化率需要接入第三方数据源",
-            ],
+            "data_notes": data_notes,
         },
         "trend": trend_rows,
         "promotions": promo_rows,
@@ -1332,6 +1709,9 @@ def product_trend(pid: int, user: str = Depends(require_user),
                   date_to: str | None = None,
                   promo_search: str | None = None,
                   promo_type: str | None = None,
+                  promo_sku: str | None = None,
+                  promo_page: int = Query(1, ge=1),
+                  promo_page_size: int = Query(20, ge=1, le=500),
                   x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
                   db: Session = Depends(get_db)):
     """单品趋势分析 —— 销售/收入/价格/评分/评论 + SKU 促销明细。"""
@@ -1342,7 +1722,8 @@ def product_trend(pid: int, user: str = Depends(require_user),
     _require_site_in_workspace(p.site, _workspace_site_names(db, ws.id))
     return _build_product_trend_payload(
         db, p, granularity=granularity, date_from=date_from, date_to=date_to,
-        promo_search=promo_search, promo_type=promo_type,
+        promo_search=promo_search, promo_type=promo_type, promo_sku=promo_sku,
+        promo_page=promo_page, promo_page_size=promo_page_size,
     )
 
 
@@ -1366,17 +1747,50 @@ def list_promotions(site: str | None = None, page: int = 1,
     total = q.count()
     rows = (q.order_by(Promotion.detected_time.desc().nullslast(), Promotion.id.desc())
             .offset((page - 1) * page_size).limit(page_size).all())
-    return {"total": total, "items": [{
-        "id": r.id, "sku": r.sku, "site": r.site,
-        "promotion_type": r.promotion_type, "promotion_name": r.promotion_name,
-        "original_price": r.original_price, "promotion_price": r.promotion_price,
-        "currency": _currency_for_site(r.site),
-        "discount_percent": r.discount_percent, "threshold": r.threshold,
-        "product_title": r.product_title, "product_image": r.product_image,
-        "start_time": r.start_time.isoformat() if r.start_time else None,
-        "end_time": r.end_time.isoformat() if r.end_time else None,
-        "detected_time": r.detected_time.isoformat() if r.detected_time else None,
-    } for r in rows]}
+    product_lookup: dict[tuple[str | None, str | None], Product] = {}
+    variant_context: dict[int, dict] = {}
+    if rows:
+        row_sites = sorted({r.site for r in rows if r.site})
+        row_skus = sorted({r.sku for r in rows if r.sku})
+        if row_sites and row_skus:
+            product_lookup = {
+                (p.site, p.sku): p for p in (
+                    db.query(Product)
+                    .filter(Product.site.in_(row_sites), Product.sku.in_(row_skus))
+                    .all()
+                )
+            }
+            variant_context = _variant_context_for_products(
+                db, list(product_lookup.values())
+            )
+    items = []
+    for r in rows:
+        product = product_lookup.get((r.site, r.sku))
+        variants = variant_context.get(product.id, {}) if product else {}
+        items.append({
+            "id": r.id, "sku": r.sku, "site": r.site,
+            "listing_sku": variants.get("listing_sku") or r.sku,
+            "variant_skus": variants.get("variant_skus") or ([r.sku] if r.sku else []),
+            "variant_count": variants.get("variant_count") or (1 if r.sku else 0),
+            "promotion_type": r.promotion_type, "promotion_name": r.promotion_name,
+            "original_price": r.original_price, "promotion_price": r.promotion_price,
+            "currency": _currency_for_site(r.site),
+            "discount_percent": r.discount_percent, "threshold": r.threshold,
+            "product_title": r.product_title or (product.title if product else None),
+            "product_image": r.product_image or (
+                (product.image_urls or [None])[0] if product else None
+            ),
+            "product_url": product.product_url if product else None,
+            "product_label": product.label if product else None,
+            "product_tags": product.tags if product else None,
+            "is_new": bool(product.is_new) if product else False,
+            "is_bestseller": bool(product.is_bestseller) if product else False,
+            "start_time": r.start_time.isoformat() if r.start_time else None,
+            "end_time": r.end_time.isoformat() if r.end_time else None,
+            "detected_time": r.detected_time.isoformat() if r.detected_time else None,
+        })
+    return {"total": total, "page": page, "page_size": page_size,
+            "items": items}
 
 
 # ---------- 趋势 / 分类（API-004）----------
@@ -1478,6 +1892,7 @@ def create_report_config(payload: dict, user: str = Depends(require_user),
                          x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
                          db: Session = Depends(get_db)):
     ws = _current_workspace(user, db, x_workspace_id)
+    _require_report_editor(user, db, ws)
     allowed = set(_workspace_site_names(db, ws.id, include_hidden=True))
     sites = [s for s in ((payload or {}).get("sites") or []) if s in allowed]
     if not sites:
@@ -1508,6 +1923,7 @@ def update_report_config(config_id: int, payload: dict,
                          x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
                          db: Session = Depends(get_db)):
     ws = _current_workspace(user, db, x_workspace_id)
+    _require_report_editor(user, db, ws)
     row = db.get(ReportConfig, config_id)
     if not row or row.workspace_id != ws.id:
         raise HTTPException(404, "报告配置不存在")
@@ -1535,7 +1951,7 @@ def update_report_config(config_id: int, payload: dict,
 
 # ---------- 采集任务看板（C-030 / C-003）----------
 @router.get("/jobs")
-def list_jobs(limit: int = 30, status: str | None = None,
+def list_jobs(limit: int = 30, page: int = 1, status: str | None = None,
               ids: str | None = None, user: str = Depends(require_user),
               x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
               db: Session = Depends(get_db)):
@@ -1557,9 +1973,25 @@ def list_jobs(limit: int = 30, status: str | None = None,
         if job_ids:
             q = q.filter(CrawlJob.id.in_(job_ids))
         else:
-            return []
-    rows = q.order_by(CrawlJob.id.desc()).limit(limit).all()
-    return [{
+            return {"total": 0, "page": page, "page_size": limit,
+                    "items": [], "jobs": [], "summary": {}}
+    limit = max(1, min(int(limit or 30), 500))
+    page = max(1, int(page or 1))
+    total = q.count()
+    status_rows = (q.with_entities(CrawlJob.status, func.count(CrawlJob.id))
+                   .group_by(CrawlJob.status).all())
+    summary = {str(status or "unknown"): int(count or 0)
+               for status, count in status_rows}
+    summary["running"] = summary.get("running", 0)
+    summary["queued"] = summary.get("queued", 0) + summary.get("pending", 0)
+    summary["success"] = summary.get("success", 0) + summary.get("completed", 0)
+    summary["failed"] = summary.get("failed", 0)
+    summary["active"] = summary["running"] + summary["queued"]
+    rows = (q.order_by(CrawlJob.id.desc())
+            .offset((page - 1) * limit)
+            .limit(limit)
+            .all())
+    items = [{
         "id": j.id, "site": j.site, "status": j.status,
         "products_count": j.products_count, "new_count": j.new_count,
         "promotion_count": j.promotion_count, "success_rate": j.success_rate,
@@ -1576,6 +2008,8 @@ def list_jobs(limit: int = 30, status: str | None = None,
         "retryable": j.retryable,
         "suggested_action": j.suggested_action,
     } for j in rows]
+    return {"total": total, "page": page, "page_size": limit,
+            "items": items, "jobs": items, "summary": summary}
 
 
 @router.get("/crawl/diagnostics")
@@ -1984,6 +2418,7 @@ def _workspace_site_response(row: WorkspaceSite, site: Site | None = None) -> di
         "hidden": row.hidden,
         "sort_order": row.sort_order,
         "target_coverage_pct": row.target_coverage_pct,
+        "target_sku_count": row.target_sku_count,
         "report_config": row.report_config,
         "brand": site.brand if site else None,
         "country": site.country if site else None,
@@ -2022,6 +2457,8 @@ def admin_add_workspace_site(workspace_id: int, payload: dict,
     if row:
         row.enabled = True
         row.hidden = bool(payload.get("hidden", row.hidden))
+        if "target_sku_count" in payload:
+            row.target_sku_count = _optional_int(payload.get("target_sku_count"))
     else:
         row = WorkspaceSite(
             workspace_id=workspace_id,
@@ -2031,6 +2468,7 @@ def admin_add_workspace_site(workspace_id: int, payload: dict,
             hidden=bool(payload.get("hidden", False)),
             sort_order=int(payload.get("sort_order") or 0),
             target_coverage_pct=payload.get("target_coverage_pct"),
+            target_sku_count=_optional_int(payload.get("target_sku_count")),
             report_config=payload.get("report_config"),
         )
         db.add(row)
@@ -2058,6 +2496,8 @@ def admin_update_workspace_site(workspace_id: int, workspace_site_id: int,
         row.sort_order = int(payload["sort_order"])
     if "target_coverage_pct" in payload:
         row.target_coverage_pct = payload["target_coverage_pct"]
+    if "target_sku_count" in payload:
+        row.target_sku_count = _optional_int(payload.get("target_sku_count"))
     db.commit()
     return _workspace_site_response(row, db.query(Site).filter(Site.site == row.site).first())
 
@@ -2395,6 +2835,10 @@ def export_products(token: str, site: str | None = None,
                     free_shipping: bool | None = None,
                     created_from: str | None = None,
                     created_to: str | None = None,
+                    scope: str | None = None,
+                    export_scope: str = Query("all", pattern="^(all|page)$"),
+                    page: int = 1,
+                    page_size: int = 50,
                     format: str = "xlsx",
                     include_price_history: bool = False,
                     include_voc: bool = False,
@@ -2411,6 +2855,7 @@ def export_products(token: str, site: str | None = None,
     """
     u = _user_from_token(db, token)
     ws = _current_workspace(u.username, db, str(workspace_id) if workspace_id else None)
+    _require_report_editor(u.username, db, ws)
     allowed_sites = _workspace_site_names(db, ws.id)
     site_list = _scoped_sites_from_params(site, sites, allowed_sites)
     if not site_list:
@@ -2464,7 +2909,7 @@ def export_products(token: str, site: str | None = None,
         has_video is not None, free_shipping is not None,
         created_from, created_to,
     ])
-    if page_filter_active:
+    if scope == "products" or page_filter_active:
         import pandas as pd
         from ..export import products_sample_df_from_rows
         q = _filtered_products_query(
@@ -2478,10 +2923,16 @@ def export_products(token: str, site: str | None = None,
             has_video=has_video, free_shipping=free_shipping,
             created_from=created_from, created_to=created_to,
         )
-        rows = q.order_by(*_product_order_cols(tab)).all()
+        q = q.order_by(*_product_order_cols(tab))
+        if export_scope == "page":
+            page_num = max(1, int(page or 1))
+            size = min(max(1, int(page_size or 50)), 500)
+            q = q.offset((page_num - 1) * size).limit(size)
+        rows = q.all()
+        variant_counts = _variant_counts_for_products(db, rows)
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            products_sample_df_from_rows(rows).to_excel(
+            products_sample_df_from_rows(rows, variant_counts).to_excel(
                 writer, index=False, sheet_name="产品分析")
         output.seek(0)
         return StreamingResponse(
@@ -2509,22 +2960,44 @@ def export_promotions(token: str, site: str | None = None,
                       type: str | None = None,
                       date_from: str | None = None,
                       date_to: str | None = None,
+                      export_scope: str = Query("all", pattern="^(all|page)$"),
+                      page: int = 1,
+                      page_size: int = 50,
                       db: Session = Depends(get_db)):
     """导出销售促销，筛选条件与 /api/promotions 保持一致。"""
     u = _user_from_token(db, token)
     ws = _current_workspace(u.username, db, str(workspace_id) if workspace_id else None)
+    _require_report_editor(u.username, db, ws)
     allowed_sites = _workspace_site_names(db, ws.id)
     q = _filtered_promotions_query(
         db, allowed_sites, site=site, search=search, type=type,
         date_from=date_from, date_to=date_to,
     )
-    rows = q.order_by(Promotion.detected_time.desc().nullslast(),
-                      Promotion.id.desc()).all()
+    q = q.order_by(Promotion.detected_time.desc().nullslast(),
+                   Promotion.id.desc())
+    if export_scope == "page":
+        page_num = max(1, int(page or 1))
+        size = min(max(1, int(page_size or 50)), 500)
+        q = q.offset((page_num - 1) * size).limit(size)
+    rows = q.all()
+    product_by_key: dict[tuple[str | None, str | None], Product] = {}
+    if rows:
+        row_sites = sorted({row.site for row in rows if row.site})
+        row_skus = sorted({row.sku for row in rows if row.sku})
+        if row_sites and row_skus:
+            product_by_key = {
+                (product.site, product.sku): product
+                for product in (
+                    db.query(Product)
+                    .filter(Product.site.in_(row_sites), Product.sku.in_(row_skus))
+                    .all()
+                )
+            }
     import pandas as pd
     from ..export import promotions_sample_df_from_rows
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        promotions_sample_df_from_rows(rows).to_excel(
+        promotions_sample_df_from_rows(rows, product_by_key).to_excel(
             writer, index=False, sheet_name="销售促销")
     output.seek(0)
     site_suffix = site or "all"
@@ -2545,20 +3018,28 @@ def export_product_trend(token: str, pid: int,
                          date_to: str | None = None,
                          promo_search: str | None = None,
                          promo_type: str | None = None,
+                         promo_sku: str | None = None,
+                         export_scope: str = Query("all", pattern="^(all|page)$"),
+                         promo_page: int = Query(1, ge=1),
+                         promo_page_size: int = Query(20, ge=1, le=500),
                          db: Session = Depends(get_db)):
     """导出单品趋势分析，筛选条件与 /api/products/{pid}/trend 保持一致。"""
     from openpyxl import Workbook
 
     u = _user_from_token(db, token)
     ws = _current_workspace(u.username, db, str(workspace_id) if workspace_id else None)
+    _require_report_editor(u.username, db, ws)
     p = db.get(Product, pid)
     if not p:
         raise HTTPException(404, "商品不存在")
     _require_site_in_workspace(p.site, _workspace_site_names(db, ws.id))
     payload = _build_product_trend_payload(
         db, p, granularity=granularity, date_from=date_from, date_to=date_to,
-        promo_search=promo_search, promo_type=promo_type,
+        promo_search=promo_search, promo_type=promo_type, promo_sku=promo_sku,
+        promo_page=promo_page if export_scope == "page" else 1,
+        promo_page_size=promo_page_size if export_scope == "page" else None,
     )
+    currency = payload.get("summary", {}).get("currency") or _display_currency(p.currency, p.site)
 
     wb = Workbook()
     sh = wb.active
@@ -2572,28 +3053,39 @@ def export_product_trend(token: str, pid: int,
             row.get("estimated_revenue") or 0,
             row.get("avg_rating"),
             row.get("review_total"),
-            row.get("sale_price"),
-            row.get("original_price"),
+            _report_money(row.get("sale_price"), currency),
+            _report_money(row.get("original_price"), currency),
             row.get("points", 1),
         ])
 
     promo_sh = wb.create_sheet("Sales Promotion")
-    promo_sh.append(["Updated Time", "SKU", "Product Title", "Type", "Name",
-                     "Discount", "Pre-price", "Post-price", "Threshold",
-                     "Start Time", "End Time"])
+    promo_sh.append(["Updated Time", "SKU", "Products Details", "Product Image",
+                     "Type", "Name", "Discount", "Pre-price", "Post-price",
+                     "Threshold", "Start Time", "End Time"])
     for promo in payload["promotions"]:
+        discount = promo.get("discount_percent")
+        if discount is not None:
+            discount = f"{discount}%"
+        else:
+            original = promo.get("original_price")
+            promotion = promo.get("promotion_price")
+            if original is not None and promotion is not None and original > promotion:
+                discount = _report_money(round(original - promotion, 2), currency)
+            else:
+                discount = _report_money(promotion, currency)
         promo_sh.append([
-            promo.get("detected_time"),
+            _report_time(promo.get("detected_time")),
             promo.get("sku"),
             promo.get("product_title"),
-            promo.get("promotion_type"),
-            promo.get("promotion_name"),
-            promo.get("discount_percent"),
-            promo.get("original_price"),
-            promo.get("promotion_price"),
+            promo.get("product_image"),
+            _report_promo_type(promo.get("promotion_type")),
+            promo.get("promotion_name") or _report_promo_type(promo.get("promotion_type")),
+            discount,
+            _report_money(promo.get("original_price"), currency),
+            _report_money(promo.get("promotion_price"), currency),
             promo.get("threshold"),
-            promo.get("start_time"),
-            promo.get("end_time"),
+            _report_time(promo.get("start_time")),
+            _report_time(promo.get("end_time")),
         ])
 
     buf = io.BytesIO()
@@ -2772,6 +3264,43 @@ _FULL_ESTIMATES: dict[str, int] = {
     # 其他：缺数据，0 = 不计入覆盖率
 }
 
+# 来自《标杆平台验收报告.xlsx / 爬取数据》里可明确映射到站点编码的人工统计目标。
+# workspace_sites.target_sku_count 仍然优先；这里作为默认验收口径，避免只能靠人肉比对偏差。
+_ACCEPTANCE_TARGETS: dict[str, int] = {
+    "idealo_de": 824,
+    "costway_es": 10435,
+    "costway_pl": 12846,
+    "costway_fr": 13234,
+    "vidaxl_fr": 177694,
+    "cratebarrel_us": 14044,
+    "vidaxl_de": 177352,
+    "vidaxl_es": 138819,
+    "vidaxl_ie": 88104,
+    "vidaxl_it": 175282,
+    "vidaxl_pt": 176957,
+    "costway_uk": 8643,
+    "yaheetech_uk": 180,
+    "costway_us": 13162,
+    "article_us": 2537,
+    "vidaxl_ro": 175824,
+    "costway_ca": 13159,
+    "costway_nl": 12615,
+    "homary_us": 3039,
+    "woltu_de": 1130,
+    "yaheetech_us": 653,
+    "costway_it": 11044,
+    "vidaxl_uk": 81369,
+    "vidaxl_pl": 177009,
+    "homary_de": 1923,
+    "homary_es": 1831,
+    "overstock_us": 162828,
+    "vonhaus_uk": 635,
+    "homary_fr": 3039,
+    "costway_de": 11123,
+    "homary_uk": 1883,
+    "vidaxl_nl": 177539,
+}
+
 _SITEMAP_TOTALS_PATH = os.environ.get(
     "SITEMAP_TOTALS_PATH", "/app/data/sitemap_totals.json")
 
@@ -2842,6 +3371,7 @@ def data_coverage(
     """
     ws = _current_workspace(user, db, x_workspace_id)
     allowed_sites = _workspace_site_names(db, ws.id, include_hidden=include_hidden)
+    target_sku_counts = _workspace_site_targets(db, ws.id, include_hidden=include_hidden)
     cache_key = f"cov:{ws.id}:{include_hidden}"
     cached = _coverage_cache_get(cache_key)
     if cached is not None:
@@ -2879,7 +3409,19 @@ def data_coverage(
         sku_count = sku_counts.get(s.site, 0)
         cur_raw = fetched if fetched >= sku_count else sku_count
         # 真实 sitemap 总数优先（爬虫每次跑都更新），缺失时回退人工估算
-        est = sitemap_totals.get(s.site) or _FULL_ESTIMATES.get(s.site, 0)
+        configured_target = target_sku_counts.get(s.site)
+        acceptance_target = _ACCEPTANCE_TARGETS.get(s.site)
+        target_sku = configured_target or acceptance_target
+        target_source = (
+            "workspace" if configured_target else
+            "acceptance" if acceptance_target else None
+        )
+        est = target_sku or sitemap_totals.get(s.site) or _FULL_ESTIMATES.get(s.site, 0)
+        sku_deviation_pct = (
+            round((sku_count - target_sku) / target_sku * 100, 2)
+            if target_sku else None
+        )
+        sku_deviation_abs = (sku_count - target_sku) if target_sku else None
         # 覆盖率钳位:cur 不超 est (爬取期间 sitemap 新增 URL 会让 fetched > sitemap,
         # 但展示给客户的覆盖率必须 ≤ 100% · "超额"不算更覆盖 · 见 chen-mj 反馈)
         if est == 0:
@@ -2903,6 +3445,10 @@ def data_coverage(
             "site": s.site, "brand": s.brand, "country": s.country,
             "url": s.url, "platform": s.platform,
             "current": cur, "current_raw": cur_raw, "estimated_full": est,
+            "target_sku_count": target_sku,
+            "target_sku_source": target_source,
+            "sku_deviation_abs": sku_deviation_abs,
+            "sku_deviation_pct": sku_deviation_pct,
             "coverage_pct": pct, "status": status,
             "last_crawled": s.last_crawled.isoformat() if s.last_crawled else None,
         })
@@ -2916,6 +3462,11 @@ def data_coverage(
     warning = sum(1 for r in rows if r["status"] == "warning")
     healthy = sum(1 for r in rows if r["status"] == "healthy")
     empty = sum(1 for r in rows if r["status"] == "empty")
+    high_deviation = sum(
+        1 for r in rows
+        if r.get("sku_deviation_pct") is not None
+        and abs(float(r["sku_deviation_pct"])) > 50
+    )
 
     result = {
         "sites": rows,
@@ -2930,6 +3481,7 @@ def data_coverage(
             "warning_count": warning,
             "healthy_count": healthy,
             "empty_count": empty,
+            "high_deviation_count": high_deviation,
         },
     }
     _coverage_cache_set(cache_key, result)
@@ -2939,17 +3491,199 @@ def data_coverage(
 def _empty_data_quality_payload() -> dict:
     return {"items": [], "summary": {
         "total_sites": 0, "healthy": 0, "needs_rerun": 0,
+        "rerun_after_setup": 0,
+        "rerun_precondition_total": 0,
+        "rerun_preconditions": [],
+        "no_products": 0, "never_crawled": 0,
+        "weak_titles": 0, "high_deviation": 0,
         "missing_prices": 0, "missing_sales": 0,
+        "missing_traffic": 0, "missing_conversion": 0,
         "missing_promotions": 0, "coverage_risk": 0,
+        "partial_crawls": 0, "pdp_price_required": 0,
+        "configured_price_sources": 0,
         "pending_jobs": 0, "running_jobs": 0, "stuck_jobs": 0,
-        "failed_jobs": 0, "stale_pending_jobs": 0,
+        "failed_jobs": 0, "blocked_jobs": 0, "skipped_jobs": 0,
+        "stale_pending_jobs": 0,
+        "sites_without_jobs": 0,
+        "sites_with_active_jobs": 0,
+        "sites_with_failed_jobs": 0,
     }}
 
 
-def _build_data_quality_payload(db: Session, sites: list[Site]) -> dict:
+_NON_RERUN_FAILURE_CODES = {"market_paused", "empty_sitemap"}
+_PROXY_FAILURE_CODES = {"proxy_unavailable", "proxy_auth_failed"}
+_ANTI_BOT_FAILURE_CODES = {
+    "http_401", "http_403", "http_429", "anti_bot_challenge",
+}
+_PDP_PRICE_REQUIRED_PLATFORMS = {"overstock", "cratebarrel", "bol"}
+_EXTERNAL_DATA_ISSUES = {
+    "traffic_missing", "conversion_missing", "pdp_price_required",
+}
+_RERUN_PRECONDITION_ISSUES = {
+    "traffic_missing",
+    "conversion_missing",
+    "pdp_price_required",
+    "proxy_unavailable",
+    "proxy_auth_failed",
+    "anti_bot_blocked",
+    "sales_history_insufficient",
+}
+_RERUN_CANDIDATE_ISSUES = {
+    "no_products",
+    "coverage_low",
+    "sku_deviation_high",
+    "title_weak",
+    "price_missing",
+    "pdp_price_required",
+    "currency_missing",
+    "currency_mismatch",
+    "sales_missing",
+    "revenue_missing",
+    "sales_history_insufficient",
+    "promotions_missing",
+    "latest_job_failed",
+    "partial_crawl",
+    "job_pending_stale",
+    "never_crawled",
+    "proxy_unavailable",
+    "proxy_auth_failed",
+    "anti_bot_blocked",
+}
+_NON_RERUN_ISSUES = set(_NON_RERUN_FAILURE_CODES)
+
+
+def _compact_error(text: str | None, *, limit: int = 260) -> str | None:
+    if not text:
+        return None
+    first = str(text).strip().splitlines()[0].strip()
+    if len(first) <= limit:
+        return first
+    return first[:limit - 1] + "…"
+
+
+def _job_failure_payload(job: CrawlJob | None,
+                         failure: CrawlFailure | None = None) -> dict | None:
+    if job is None and failure is None:
+        return None
+    if job is not None and job.status not in {"failed", "blocked", "partial"} and not (
+        job.failure_code or job.failure_stage or job.failure_detail or job.error
+    ):
+        return None
+    code = (job.failure_code if job else None) or (failure.code if failure else None)
+    stage = (job.failure_stage if job else None) or (failure.stage if failure else None)
+    detail = ((job.failure_detail or job.error) if job else None) or (
+        failure.detail if failure else None)
+    suggested = (job.suggested_action if job else None) or (
+        failure.suggested_action if failure else None)
+    retryable = (job.retryable if job else None)
+    if retryable is None and failure is not None:
+        retryable = failure.retryable
+    return {
+        "code": code,
+        "stage": stage,
+        "detail": _compact_error(detail),
+        "retryable": retryable,
+        "suggested_action": suggested,
+        "job_id": job.id if job else failure.job_id,
+        "status": job.status if job else None,
+        "occurred_at": (
+            job.finished_at.isoformat() if job and job.finished_at else
+            failure.occurred_at.isoformat() if failure and failure.occurred_at else None
+        ),
+    }
+
+
+def _configured_price_source(site: Site) -> dict:
+    config = site.crawler_config or {}
+    source_type = str(config.get("price_source_type") or "").strip().lower()
+    feed_url = next((
+        str(config.get(key) or "").strip()
+        for key in ("price_feed_url", "feed_url", "price_feed")
+        if str(config.get(key) or "").strip()
+    ), "")
+    api_url = next((
+        str(config.get(key) or "").strip()
+        for key in ("pdp_price_api_url", "price_api_url")
+        if str(config.get(key) or "").strip()
+    ), "")
+    selector = next((
+        str(config.get(key) or "").strip()
+        for key in ("pdp_price_selector", "price_selector")
+        if str(config.get(key) or "").strip()
+    ), "")
+    if not source_type:
+        source_type = "feed" if feed_url else "api" if api_url else "pdp" if selector else ""
+    configured = bool(source_type != "external" and (feed_url or api_url or selector))
+    return {
+        "configured": configured,
+        "type": source_type or None,
+        "source": feed_url or api_url or ("pdp_selector" if selector else None),
+    }
+
+
+def _data_quality_suggestion(*, status: str, issues: list[str],
+                             failure: dict | None,
+                             price_source_configured: bool = False) -> str:
+    code = (failure or {}).get("code")
+    if "job_pending_stale" in issues:
+        return "任务已排队超过30分钟；检查 worker/队列容量/代理可用性，必要时取消旧任务后重排"
+    if "job_in_progress" in issues:
+        return "已有抓取任务处理中；打开队列明细查看进度，不要重复入队"
+    if code in _NON_RERUN_FAILURE_CODES:
+        return "目标站当前无可采商品或市场暂停；重跑不能解决，需等待业务恢复或改用官方/API 数据源"
+    if code in _PROXY_FAILURE_CODES:
+        return "当前代理不可用；先在代理池补充/修复可用住宅代理，再重跑该站点"
+    if code in _ANTI_BOT_FAILURE_CODES:
+        return "目标站反爬/封禁；切换可用住宅代理、浏览器策略或外部数据源后再重跑"
+    if "partial_crawl" in issues and failure and failure.get("suggested_action"):
+        return f"最近采集部分成功但存在失败信号；{failure['suggested_action']}"
+    if "partial_crawl" in issues:
+        return "最近采集部分成功但存在失败信号；检查失败码/阶段后重跑或调整代理/解析策略"
+    if "pdp_price_required" in issues:
+        return "该站 sitemap 可枚举商品，但价格在 PDP/官方接口内；需接入可访问 PDP 的住宅代理、站点 API 或外部价格源后再补抓"
+    if "price_missing" in issues and price_source_configured:
+        return "已配置价格源；重跑该站点验证 feed/API/PDP 补价结果，失败时到队列详情查看 configured_price_source_failed"
+    if (
+        ("traffic_missing" in issues or "conversion_missing" in issues)
+        and ("sku_deviation_high" in issues or "coverage_low" in issues)
+    ):
+        return "该站同时存在商品覆盖偏差和第三方流量/转化缺口；抓取重跑只能改善商品覆盖，流量/转化需先接入外部数据源"
+    if "sku_deviation_high" in issues:
+        return "SKU 数与验收目标偏差超过50%；优先检查分类覆盖、分页/去重策略和站点目标口径后重跑"
+    if "title_weak" in issues and "price_missing" in issues:
+        return "检查标题/价格解析与 PDP enrich；修复 selector 或配置可用住宅代理后重跑"
+    if "title_weak" in issues:
+        return "检查列表/PDP 标题解析；弱标题站点需要补抓详情页或修复 selector 后重跑"
+    if "currency_mismatch" in issues or "currency_missing" in issues:
+        return "检查站点币种映射和历史商品 currency 字段；先做币种回填/修正后再导出报表"
+    if "price_missing" in issues:
+        return "检查价格解析/PDP enrich；必要时配置可用住宅代理后重跑"
+    if "sales_history_insufficient" in issues:
+        return "已有评论信号但历史快照不足；保持定时抓取，至少形成两次评论快照后重算销量/收入"
+    if "traffic_missing" in issues or "conversion_missing" in issues:
+        return "缺少第三方流量/转化率数据源；接入 SimilarWeb/GA/BI 后刷新报表，单纯重跑抓取不能生成"
+    if "latest_job_failed" in issues and failure and failure.get("suggested_action"):
+        return f"已有数据但最近任务失败；{failure['suggested_action']}"
+    if failure and failure.get("suggested_action"):
+        return str(failure["suggested_action"])
+    if status == "critical":
+        return "重跑抓取并查看失败明细"
+    if "latest_job_failed" in issues:
+        return "已有数据但最近任务失败；查看队列失败明细后决定是否重跑"
+    if status == "warning":
+        return "补跑促销/销量估算或等待任务完成"
+    return "数据质量正常"
+
+
+def _build_data_quality_payload(
+    db: Session,
+    sites: list[Site],
+    target_sku_by_site: dict[str, int] | None = None,
+) -> dict:
     site_codes = [s.site for s in sites]
     if not site_codes:
         return _empty_data_quality_payload()
+    target_sku_by_site = target_sku_by_site or {}
 
     sitemap_totals = _load_sitemap_totals()
     try:
@@ -2966,6 +3700,16 @@ def _build_data_quality_payload(db: Session, sites: list[Site]) -> dict:
         except Exception:
             pass
 
+    weak_title_expr = or_(
+        func.length(func.trim(func.coalesce(Product.title, ""))) == 0,
+        func.length(func.trim(func.coalesce(Product.title, ""))) < 4,
+        func.lower(func.trim(func.coalesce(Product.title, ""))).in_(
+            ("product", "item", "sku", "untitled", "detail", "details",
+             "view product", "shop now")
+        ),
+        func.lower(func.trim(func.coalesce(Product.title, ""))) ==
+        func.lower(func.trim(func.coalesce(Product.sku, ""))),
+    )
     product_rows = {
         row[0]: {
             "sku_count": int(row[1] or 0),
@@ -2973,7 +3717,9 @@ def _build_data_quality_payload(db: Session, sites: list[Site]) -> dict:
             "price_signal_count": int(row[3] or 0),
             "sales_signal_count": int(row[4] or 0),
             "revenue_signal_count": int(row[5] or 0),
-            "last_product_updated": row[6],
+            "review_signal_count": int(row[6] or 0),
+            "weak_title_count": int(row[7] or 0),
+            "last_product_updated": row[8],
         }
         for row in db.query(
             Product.site,
@@ -2984,14 +3730,57 @@ def _build_data_quality_payload(db: Session, sites: list[Site]) -> dict:
             ),
             func.count(Product.id).filter(func.coalesce(Product.thirty_day_sales, 0) > 0),
             func.count(Product.id).filter(func.coalesce(Product.thirty_day_revenue, 0) > 0),
+            func.count(Product.id).filter(func.coalesce(Product.review_count, 0) > 0),
+            func.count(Product.id).filter(weak_title_expr),
             func.max(Product.updated_time),
         ).filter(Product.site.in_(site_codes)).group_by(Product.site).all()
     }
+    review_history_skus: dict[str, int] = {site: 0 for site in site_codes}
+    for site, _sku, days in (
+            db.query(PriceHistory.site, PriceHistory.sku,
+                     func.count(func.distinct(PriceHistory.date)))
+            .filter(PriceHistory.site.in_(site_codes),
+                    PriceHistory.review_count.isnot(None))
+            .group_by(PriceHistory.site, PriceHistory.sku)
+            .all()):
+        if int(days or 0) >= 2:
+            review_history_skus[site] = int(review_history_skus.get(site, 0)) + 1
+    expected_currency_by_site = {
+        site: _currency_for_site(site) for site in site_codes
+    }
+    currency_quality: dict[str, dict[str, int]] = {
+        site: {"missing": 0, "mismatch": 0} for site in site_codes
+    }
+    for site, currency, count in (
+            db.query(Product.site, Product.currency, func.count(Product.id))
+            .filter(Product.site.in_(site_codes))
+            .group_by(Product.site, Product.currency)
+            .all()):
+        expected_currency = expected_currency_by_site.get(site)
+        if not expected_currency:
+            continue
+        value = str(currency or "").strip().upper()
+        n = int(count or 0)
+        if not value:
+            currency_quality.setdefault(site, {"missing": 0, "mismatch": 0})["missing"] += n
+        elif value != expected_currency:
+            currency_quality.setdefault(site, {"missing": 0, "mismatch": 0})["mismatch"] += n
     promotion_counts = {
         row[0]: int(row[1] or 0)
         for row in db.query(Promotion.site, func.count(Promotion.id))
                      .filter(Promotion.site.in_(site_codes))
                      .group_by(Promotion.site).all()
+    }
+    trend_signal_rows = {
+        row[0]: {
+            "traffic_signal_count": int(row[1] or 0),
+            "conversion_signal_count": int(row[2] or 0),
+        }
+        for row in db.query(
+            Trend.site,
+            func.count(Trend.id).filter(Trend.traffic.isnot(None)),
+            func.count(Trend.id).filter(Trend.conversion_rate.isnot(None)),
+        ).filter(Trend.site.in_(site_codes)).group_by(Trend.site).all()
     }
     latest_jobs: dict[str, CrawlJob] = {}
     for job in (db.query(CrawlJob)
@@ -2999,6 +3788,12 @@ def _build_data_quality_payload(db: Session, sites: list[Site]) -> dict:
                 .order_by(CrawlJob.site, CrawlJob.id.desc())
                 .all()):
         latest_jobs.setdefault(job.site, job)
+    latest_failures: dict[str, CrawlFailure] = {}
+    for failure in (db.query(CrawlFailure)
+                    .filter(CrawlFailure.site.in_(site_codes))
+                    .order_by(CrawlFailure.site, CrawlFailure.id.desc())
+                    .all()):
+        latest_failures.setdefault(failure.site, failure)
     failure_counts = {
         row[0]: int(row[1] or 0)
         for row in db.query(CrawlFailure.site, func.count(CrawlFailure.id))
@@ -3079,31 +3874,88 @@ def _build_data_quality_payload(db: Session, sites: list[Site]) -> dict:
         sku_count = int(product.get("sku_count") or 0)
         spu_count = int(product.get("spu_count") or 0)
         fetched = max(fetched_counts.get(s.site, 0), sku_count)
-        estimated = sitemap_totals.get(s.site) or _FULL_ESTIMATES.get(s.site, 0) or fetched
+        configured_target_sku = int(target_sku_by_site.get(s.site) or 0)
+        acceptance_target_sku = int(_ACCEPTANCE_TARGETS.get(s.site) or 0)
+        target_sku_count = configured_target_sku or acceptance_target_sku
+        target_sku_source = (
+            "workspace" if configured_target_sku else
+            "acceptance" if acceptance_target_sku else None
+        )
+        estimated = target_sku_count or sitemap_totals.get(s.site) or _FULL_ESTIMATES.get(s.site, 0) or fetched
         coverage_pct = round(min(fetched, estimated) / estimated * 100, 2) if estimated else 0
+        sku_deviation_pct = (
+            round((sku_count - target_sku_count) / target_sku_count * 100, 2)
+            if target_sku_count else None
+        )
+        sku_deviation_abs = (sku_count - target_sku_count) if target_sku_count else None
         price_signal_count = int(product.get("price_signal_count") or 0)
         sales_signal_count = int(product.get("sales_signal_count") or 0)
         revenue_signal_count = int(product.get("revenue_signal_count") or 0)
+        review_signal_count = int(product.get("review_signal_count") or 0)
+        review_history_signal_count = int(review_history_skus.get(s.site, 0) or 0)
+        weak_title_count = int(product.get("weak_title_count") or 0)
+        currency_counts = currency_quality.get(s.site, {})
+        currency_missing_count = int(currency_counts.get("missing") or 0)
+        currency_mismatch_count = int(currency_counts.get("mismatch") or 0)
         promotion_count = promotion_counts.get(s.site, 0)
+        trend_signal = trend_signal_rows.get(s.site, {})
+        traffic_signal_count = int(trend_signal.get("traffic_signal_count") or 0)
+        conversion_signal_count = int(trend_signal.get("conversion_signal_count") or 0)
         latest_job = latest_jobs.get(s.site)
+        latest_failure = _job_failure_payload(
+            latest_job, latest_failures.get(s.site))
+        latest_failure_code = (latest_failure or {}).get("code")
         queue_counts = queue_by_site.get(s.site, {})
+        price_source = _configured_price_source(s)
         issues: list[str] = []
         if sku_count == 0:
             issues.append("no_products")
         if estimated and coverage_pct < 50:
             issues.append("coverage_low")
+        if sku_deviation_pct is not None and abs(sku_deviation_pct) > 50:
+            issues.append("sku_deviation_high")
         if sku_count > 0 and price_signal_count == 0:
             issues.append("price_missing")
+            if (
+                (s.platform or "").lower() in _PDP_PRICE_REQUIRED_PLATFORMS
+                and not price_source["configured"]
+            ):
+                issues.append("pdp_price_required")
         if sku_count > 0 and sales_signal_count == 0:
             issues.append("sales_missing")
+            if review_signal_count > 0 and review_history_signal_count == 0:
+                issues.append("sales_history_insufficient")
         if sku_count > 0 and revenue_signal_count == 0:
             issues.append("revenue_missing")
+        if sku_count > 0 and traffic_signal_count == 0:
+            issues.append("traffic_missing")
+        if sku_count > 0 and conversion_signal_count == 0:
+            issues.append("conversion_missing")
+        if sku_count > 0 and weak_title_count > 0:
+            issues.append("title_weak")
+        if sku_count > 0 and currency_missing_count > 0:
+            issues.append("currency_missing")
+        if sku_count > 0 and currency_mismatch_count > 0:
+            issues.append("currency_mismatch")
         if promotion_count == 0:
             issues.append("promotions_missing")
-        if latest_job and latest_job.status == "failed":
+        if latest_job and latest_job.status in {"failed", "blocked"}:
             issues.append("latest_job_failed")
+        if latest_job and (
+            latest_job.status == "partial" or
+            (latest_job.status == "success" and latest_job.failure_code)
+        ):
+            issues.append("partial_crawl")
         if latest_job and latest_job.status in {"pending", "running"}:
             issues.append("job_in_progress")
+        if latest_failure_code in _NON_RERUN_FAILURE_CODES:
+            issues.append(str(latest_failure_code))
+        elif latest_failure_code == "proxy_auth_failed":
+            issues.append("proxy_auth_failed")
+        elif latest_failure_code == "proxy_unavailable":
+            issues.append("proxy_unavailable")
+        elif latest_failure_code in _ANTI_BOT_FAILURE_CODES:
+            issues.append("anti_bot_blocked")
         if int(queue_counts.get("stale_pending", 0) or 0) > 0:
             issues.append("job_pending_stale")
         if not latest_job and sku_count == 0:
@@ -3114,24 +3966,37 @@ def _build_data_quality_payload(db: Session, sites: list[Site]) -> dict:
         elif issues:
             status = "warning"
         last_product_updated = product.get("last_product_updated")
-        if "job_pending_stale" in issues:
-            suggested_action = "任务已排队超过30分钟；检查 worker/队列容量/代理可用性，必要时取消旧任务后重排"
-        elif "job_in_progress" in issues:
-            suggested_action = "已有抓取任务处理中；打开队列明细查看进度，不要重复入队"
-        elif status == "critical":
-            suggested_action = (
-                "重跑抓取并查看失败明细；价格缺失需检查价格解析/PDP enrich"
-                if "price_missing" in issues else
-                "重跑抓取并查看失败明细"
-            )
-        elif "price_missing" in issues:
-            suggested_action = "检查价格解析/PDP enrich；必要时配置可用住宅代理后重跑"
-        elif "latest_job_failed" in issues:
-            suggested_action = "已有数据但最近任务失败；查看队列失败明细后决定是否重跑"
-        elif status == "warning":
-            suggested_action = "补跑促销/销量估算或等待任务完成"
-        else:
-            suggested_action = "数据质量正常"
+        if latest_failure_code in _NON_RERUN_FAILURE_CODES and status == "critical":
+            status = "warning"
+        external_data_required = any(issue in _EXTERNAL_DATA_ISSUES
+                                     for issue in issues)
+        rerun_candidate = any(issue in _RERUN_CANDIDATE_ISSUES
+                              for issue in issues)
+        non_rerun_failure = any(issue in _NON_RERUN_ISSUES
+                                for issue in issues)
+        rerun_preconditions = [
+            issue for issue in issues if issue in _RERUN_PRECONDITION_ISSUES
+        ]
+        rerun_ready = (
+            rerun_candidate
+            and not non_rerun_failure
+            and not rerun_preconditions
+        )
+        rerun_after_setup = (
+            rerun_candidate
+            and not non_rerun_failure
+            and bool(rerun_preconditions)
+        )
+        rerun_recommended = rerun_ready
+        rerun_blocked = non_rerun_failure or bool(rerun_preconditions) or (
+            external_data_required and not rerun_candidate
+        )
+        suggested_action = _data_quality_suggestion(
+            status=status, issues=issues, failure=latest_failure,
+            price_source_configured=bool(price_source["configured"]))
+        severity = {"critical": "critical", "warning": "warning",
+                    "healthy": "ok"}.get(status, status)
+        last_error = (latest_failure or {}).get("detail")
         items.append({
             "site": s.site,
             "brand": s.brand,
@@ -3142,11 +4007,27 @@ def _build_data_quality_payload(db: Session, sites: list[Site]) -> dict:
             "spu_count": spu_count,
             "fetched_count": fetched,
             "estimated_full": estimated,
+            "target_sku_count": target_sku_count or None,
+            "target_sku_source": target_sku_source,
+            "sku_deviation_abs": sku_deviation_abs,
+            "sku_deviation_pct": sku_deviation_pct,
             "coverage_pct": coverage_pct,
             "promotion_count": promotion_count,
             "price_signal_count": price_signal_count,
+            "price_source_configured": bool(price_source["configured"]),
+            "price_source_type": price_source["type"],
+            "price_source": price_source["source"],
             "sales_signal_count": sales_signal_count,
             "revenue_signal_count": revenue_signal_count,
+            "review_signal_count": review_signal_count,
+            "review_history_signal_count": review_history_signal_count,
+            "weak_title_count": weak_title_count,
+            "expected_currency": expected_currency_by_site.get(s.site),
+            "currency_missing_count": currency_missing_count,
+            "currency_mismatch_count": currency_mismatch_count,
+            "traffic_signal_count": traffic_signal_count,
+            "conversion_signal_count": conversion_signal_count,
+            "title_quality_pct": round((sku_count - weak_title_count) / sku_count * 100, 2) if sku_count else 0,
             "price_signal_pct": round(price_signal_count / sku_count * 100, 2) if sku_count else 0,
             "sales_signal_pct": round(sales_signal_count / sku_count * 100, 2) if sku_count else 0,
             "revenue_signal_pct": round(revenue_signal_count / sku_count * 100, 2) if sku_count else 0,
@@ -3184,11 +4065,25 @@ def _build_data_quality_payload(db: Session, sites: list[Site]) -> dict:
                 "promotion_count": latest_job.promotion_count or 0,
                 "failure_code": latest_job.failure_code,
                 "failure_stage": latest_job.failure_stage,
+                "failure_detail": _compact_error(
+                    latest_job.failure_detail or latest_job.error),
+                "retryable": latest_job.retryable,
                 "suggested_action": latest_job.suggested_action,
             } if latest_job else None,
+            "latest_failure": latest_failure,
+            "last_error": last_error,
+            "last_error_code": latest_failure_code,
             "issues": issues,
             "status": status,
+            "severity": severity,
+            "rerun_recommended": rerun_recommended,
+            "rerun_ready": rerun_ready,
+            "rerun_after_setup": rerun_after_setup,
+            "rerun_blocked": rerun_blocked,
+            "rerun_preconditions": rerun_preconditions,
+            "external_data_required": external_data_required,
             "suggested_action": suggested_action,
+            "suggestion": suggested_action,
         })
 
     items.sort(key=lambda r: (
@@ -3199,17 +4094,61 @@ def _build_data_quality_payload(db: Session, sites: list[Site]) -> dict:
     summary = {
         "total_sites": len(items),
         "healthy": sum(1 for r in items if r["status"] == "healthy"),
-        "needs_rerun": sum(1 for r in items if r["status"] == "critical"),
+        "needs_rerun": sum(1 for r in items if r.get("rerun_ready")),
+        "rerun_after_setup": sum(1 for r in items if r.get("rerun_after_setup")),
+        "rerun_blocked": sum(1 for r in items if r.get("rerun_blocked")),
+        "external_data_required": sum(
+            1 for r in items if r.get("external_data_required")),
+        "no_products": sum(1 for r in items if "no_products" in r["issues"]),
+        "never_crawled": sum(1 for r in items if "never_crawled" in r["issues"]),
+        "weak_titles": sum(1 for r in items if "title_weak" in r["issues"]),
+        "currency_missing": sum(1 for r in items if "currency_missing" in r["issues"]),
+        "currency_mismatch": sum(1 for r in items if "currency_mismatch" in r["issues"]),
+        "currency_issues": sum(1 for r in items if (
+            "currency_missing" in r["issues"] or "currency_mismatch" in r["issues"]
+        )),
+        "high_deviation": sum(1 for r in items if "sku_deviation_high" in r["issues"]),
         "missing_prices": sum(1 for r in items if "price_missing" in r["issues"]),
         "missing_sales": sum(1 for r in items if "sales_missing" in r["issues"]),
+        "insufficient_sales_history": sum(
+            1 for r in items if "sales_history_insufficient" in r["issues"]),
+        "missing_traffic": sum(1 for r in items if "traffic_missing" in r["issues"]),
+        "missing_conversion": sum(1 for r in items if "conversion_missing" in r["issues"]),
         "missing_promotions": sum(1 for r in items if "promotions_missing" in r["issues"]),
+        "partial_crawls": sum(1 for r in items if "partial_crawl" in r["issues"]),
+        "pdp_price_required": sum(1 for r in items if "pdp_price_required" in r["issues"]),
+        "configured_price_sources": sum(
+            1 for r in items if r.get("price_source_configured")),
         "coverage_risk": sum(1 for r in items if "coverage_low" in r["issues"]),
         "pending_jobs": sum(r["crawl_queue"]["pending"] for r in items),
         "running_jobs": sum(r["crawl_queue"]["running"] for r in items),
         "stuck_jobs": sum(r["crawl_queue"]["stuck"] for r in items),
         "failed_jobs": sum(r["crawl_queue"]["failed"] for r in items),
+        "blocked_jobs": sum(r["crawl_queue"]["blocked"] for r in items),
+        "skipped_jobs": sum(r["crawl_queue"]["skipped"] for r in items),
         "stale_pending_jobs": sum(r["crawl_queue"]["stale_pending"] for r in items),
+        "sites_without_jobs": sum(1 for r in items if r["crawl_queue"]["total"] == 0),
+        "sites_with_active_jobs": sum(1 for r in items if r["crawl_queue"]["active_count"] > 0),
+        "sites_with_failed_jobs": sum(1 for r in items if (
+            r["crawl_queue"]["failed"] > 0 or r["crawl_queue"]["blocked"] > 0
+        )),
     }
+    precondition_rows = []
+    for issue in sorted(_RERUN_PRECONDITION_ISSUES):
+        sites_for_issue = [
+            r["site"] for r in items
+            if issue in set(r.get("rerun_preconditions") or [])
+        ]
+        if sites_for_issue:
+            precondition_rows.append({
+                "issue": issue,
+                "count": len(sites_for_issue),
+                "sites": sites_for_issue[:20],
+            })
+    summary["rerun_preconditions"] = precondition_rows
+    summary["rerun_precondition_total"] = len({
+        r["site"] for r in items if r.get("rerun_preconditions")
+    })
     return {"items": items, "summary": summary}
 
 
@@ -3223,12 +4162,13 @@ def data_quality(
     """站点数据质量明细：把验收关注的 SKU/促销/销量收入/任务失败集中展示。"""
     ws = _current_workspace(user, db, x_workspace_id)
     allowed_sites = _workspace_site_names(db, ws.id, include_hidden=include_hidden)
+    target_sku_counts = _workspace_site_targets(db, ws.id, include_hidden=include_hidden)
     hidden = _load_hidden_sites() if not include_hidden else set()
     sites = [
         s for s in db.query(Site).filter(Site.site.in_(allowed_sites)).all()
         if s.site not in hidden
     ]
-    return _build_data_quality_payload(db, sites)
+    return _build_data_quality_payload(db, sites, target_sku_counts)
 
 
 # ---------- 按 record 计费 · 用量查询 ----------

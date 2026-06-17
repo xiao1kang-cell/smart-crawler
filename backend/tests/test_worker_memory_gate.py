@@ -21,7 +21,7 @@ def test_run_loop_skips_claim_when_gate_blocks(monkeypatch):
 
     claimed = []
     monkeypatch.setattr(worker, "claim_job",
-                        lambda wid: claimed.append(wid))
+                        lambda wid, trigger_allowlist=None: claimed.append(wid))
     monkeypatch.setattr(worker.time, "sleep", lambda s: None)
 
     # should_continue:跑 2 轮后停,避免死循环
@@ -42,7 +42,7 @@ def test_run_loop_claims_when_gate_open(monkeypatch):
 
     claimed = []
 
-    def fake_claim(wid):
+    def fake_claim(wid, trigger_allowlist=None):
         claimed.append(wid)
         return None                        # 没有 job,走 sleep continue 分支
 
@@ -72,7 +72,7 @@ def test_run_loop_sleeps_and_warns_when_blocked_by_high_memory(monkeypatch):
     monkeypatch.setattr(worker.logger, "warning",
                         lambda *a, **k: warnings.append(a))
     monkeypatch.setattr(worker, "claim_job",
-                        lambda wid: pytest.fail("内存高位不该领 job"))
+                        lambda wid, trigger_allowlist=None: pytest.fail("内存高位不该领 job"))
 
     ticks = iter([True, False])
     worker.run_loop(should_continue=lambda: next(ticks, False))
@@ -99,4 +99,3 @@ def test_run_loop_shutdown_during_block_exits_without_sleep(monkeypatch):
     worker.run_loop(should_continue=lambda: next(ticks, False))
 
     assert slept == []                       # 停机路径:不 sleep,快速退出
-

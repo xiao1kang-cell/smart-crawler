@@ -1,22 +1,32 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { asList, fmtNumber, fmtPrice, qs } from '../api/client'
+import { Download, Eye, ExternalLink, RefreshCw, RotateCw, X } from 'lucide-vue-next'
+import { asList, fmtDate, fmtNumber, fmtPrice, qs } from '../api/client'
 import { getProduct, listProducts, listSites, productPriceHistory } from '../api/products'
 import { useAuthStore } from '../stores/auth'
 import DataLoadingPanel from '../components/common/DataLoadingPanel.vue'
 import PageLoading from '../components/common/PageLoading.vue'
 import StatusBadge from '../components/common/StatusBadge.vue'
+import { useJobTrigger } from '../composables/useJobTrigger'
 
 const auth = useAuthStore()
 const sites = ref<Record<string, any>[]>([])
 const products = ref<Record<string, any>[]>([])
 const selectedSite = ref(localStorage.getItem('sc_site') || '')
 const search = ref('')
+const tab = ref('all')
+const statusFilter = ref('')
+const minPrice = ref('')
+const maxPrice = ref('')
+const minSales = ref('')
+const maxSales = ref('')
 const total = ref(0)
 const page = ref(1)
-const PAGE_SIZE = 30
+const pageSize = ref(30)
 const loading = ref(false)
 const error = ref('')
+const exportMessage = ref('')
+const jobTrigger = useJobTrigger({ onDone: () => load() })
 
 // 商品详情 + 价格历史弹窗
 const detail = ref<Record<string, any> | null>(null)
@@ -24,7 +34,22 @@ const priceHistory = ref<Record<string, any>[]>([])
 const detailLoading = ref(false)
 
 function totalPages() {
-  return Math.max(1, Math.ceil((total.value || 0) / PAGE_SIZE))
+  return Math.max(1, Math.ceil((total.value || 0) / pageSize.value))
+}
+
+function productQueryParams() {
+  return {
+    site: selectedSite.value,
+    tab: tab.value,
+    search: search.value.trim(),
+    status: statusFilter.value,
+    min_price: minPrice.value,
+    max_price: maxPrice.value,
+    min_sales: minSales.value,
+    max_sales: maxSales.value,
+    page: page.value,
+    page_size: pageSize.value,
+  }
 }
 
 async function loadSites() {
@@ -46,14 +71,9 @@ async function load() {
       total.value = 0
       return
     }
-    const productData = await listProducts({
-      site: selectedSite.value,
-      search: search.value,
-      page: page.value,
-      page_size: PAGE_SIZE,
-    })
+    const productData = await listProducts(productQueryParams())
     products.value = asList(productData, ['items', 'products'])
-    total.value = Number(productData?.total || products.value.length || 0)
+    total.value = Number(productData?.total ?? products.value.length ?? 0)
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -68,6 +88,18 @@ function onSiteChange() {
 }
 
 function runSearch() {
+  page.value = 1
+  load()
+}
+
+function resetFilters() {
+  search.value = ''
+  tab.value = 'all'
+  statusFilter.value = ''
+  minPrice.value = ''
+  maxPrice.value = ''
+  minSales.value = ''
+  maxSales.value = ''
   page.value = 1
   load()
 }
@@ -101,7 +133,21 @@ function closeDetail() {
 }
 
 function exportProducts() {
-  window.open(`/api/export/products${qs({ site: selectedSite.value, token: auth.token, workspace_id: auth.workspaceId })}`, '_blank')
+  if (!selectedSite.value) return
+  exportMessage.value = '已按当前筛选打开导出'
+  window.open(`/api/export/products${qs({
+    ...productQueryParams(),
+    page: undefined,
+    page_size: undefined,
+    token: auth.token,
+    workspace_id: auth.workspaceId,
+    scope: 'products',
+  })}`, '_blank')
+}
+
+async function triggerCrawl() {
+  if (!selectedSite.value) return
+  await jobTrigger.trigger(selectedSite.value)
 }
 
 function rememberSite() {
@@ -116,6 +162,10 @@ function productPrice(p: Record<string, any>) {
   return fmtPrice(p.sale_price ?? p.price ?? p.original_price, p.currency)
 }
 
+function productRevenue(p: Record<string, any>) {
+  return fmtPrice(p.thirty_day_revenue, p.currency)
+}
+
 onMounted(load)
 </script>
 
@@ -128,24 +178,71 @@ onMounted(load)
         <select v-model="selectedSite" @change="onSiteChange">
           <option v-for="site in sites" :key="site.site || site.name" :value="site.site || site.name">{{ site.site || site.name }}</option>
         </select>
+        <select v-model="tab" @change="runSearch">
+          <option value="all">全部商品</option>
+          <option value="bestseller">畅销商品</option>
+          <option value="new">最新商品</option>
+        </select>
+        <select v-model="statusFilter" @change="runSearch">
+          <option value="">全部状态</option>
+          <option value="active">Active</option>
+          <option value="sold_out">Sold out</option>
+          <option value="offline">Offline</option>
+        </select>
         <input v-model="search" placeholder="搜索 SKU / 标题 / 类目" @keydown.enter="runSearch" />
-        <button class="btn-go" :disabled="loading" @click="runSearch">{{ loading ? '刷新中…' : '🔄 刷新' }}</button>
-        <button class="btn-go" @click="exportProducts">📥 导出表格</button>
+        <input v-model="minPrice" class="num-filter" inputmode="decimal" placeholder="最低价" @keydown.enter="runSearch" />
+        <input v-model="maxPrice" class="num-filter" inputmode="decimal" placeholder="最高价" @keydown.enter="runSearch" />
+        <input v-model="minSales" class="num-filter" inputmode="numeric" placeholder="最低销量" @keydown.enter="runSearch" />
+        <input v-model="maxSales" class="num-filter" inputmode="numeric" placeholder="最高销量" @keydown.enter="runSearch" />
+        <select v-model.number="pageSize" class="page-size" @change="runSearch">
+          <option :value="30">30 / 页</option>
+          <option :value="60">60 / 页</option>
+          <option :value="100">100 / 页</option>
+        </select>
+        <button class="btn-go" :disabled="loading" title="按当前筛选刷新列表" @click="runSearch">
+          <RefreshCw :size="15" :class="{ spin: loading }" />
+          <span>{{ loading ? '刷新中' : '刷新列表' }}</span>
+        </button>
+        <button class="btn-go" title="清空筛选" @click="resetFilters">
+          <X :size="15" />
+          <span>清空</span>
+        </button>
+        <button class="btn-go primary" :disabled="!selectedSite || jobTrigger.isBusy(selectedSite)" title="提交当前站点抓取任务" @click="triggerCrawl">
+          <RotateCw :size="15" />
+          <span>{{ jobTrigger.labelFor(selectedSite, '触发抓取') }}</span>
+        </button>
+        <button class="btn-go" :disabled="!selectedSite" title="按当前筛选导出商品" @click="exportProducts">
+          <Download :size="15" />
+          <span>导出表格</span>
+        </button>
+    </div>
+    <div v-if="jobTrigger.detailFor(selectedSite) || exportMessage" class="catalog-action-note" :class="jobTrigger.classFor(selectedSite)">
+      {{ jobTrigger.detailFor(selectedSite) || exportMessage }}
     </div>
 
     <DataLoadingPanel class="cat-table-wrap" :loading="loading" :has-data="products.length > 0" label="正在更新商品列表">
       <PageLoading v-if="loading && !products.length" compact title="加载商品数据..." note="正在读取站点商品库" />
       <table v-else class="cat-table">
-        <thead><tr><th></th><th>商品编码</th><th>商品</th><th>价格</th><th>评分</th><th>30 天销量</th><th>状态</th></tr></thead>
+        <thead><tr><th></th><th>商品编码</th><th>商品</th><th>价格</th><th>评分</th><th>30 天销量</th><th>30 天收入</th><th>更新时间</th><th>状态</th><th>操作</th></tr></thead>
         <tbody>
-          <tr v-for="p in products" :key="p.id || `${p.site}-${p.sku}`" style="cursor:pointer" @click="openDetail(p.id)">
+          <tr v-for="p in products" :key="p.id || `${p.site}-${p.sku}`">
             <td><img v-if="p.image" :src="p.image" class="thumb-img" alt="" /><div v-else class="thumb">📦</div></td>
             <td><code v-if="!p.product_url">{{ p.sku || p.item_id || p.id }}</code><a v-else :href="p.product_url" target="_blank" rel="noopener" class="sku-link" @click.stop><code>{{ p.sku || p.item_id || p.id }}</code></a></td>
             <td><span class="title-text" :title="productTitle(p)">{{ productTitle(p) }}</span></td>
             <td><span>{{ productPrice(p) }}</span><div v-if="p.original_price && p.original_price !== p.sale_price" class="price-sub">原价 {{ fmtPrice(p.original_price, p.currency) }}</div></td>
             <td>{{ p.ratings || p.rating || '—' }}</td>
             <td>{{ p.thirty_day_sales || 0 }}</td>
+            <td>{{ productRevenue(p) }}</td>
+            <td>{{ fmtDate(p.updated_time || p.created_time) }}</td>
             <td><StatusBadge :status="p.status" /></td>
+            <td>
+              <button class="row-icon" title="查看商品详情" @click="openDetail(p.id)">
+                <Eye :size="15" />
+              </button>
+              <a v-if="p.product_url" class="row-icon link" title="打开商品原页" :href="p.product_url" target="_blank" rel="noopener">
+                <ExternalLink :size="15" />
+              </a>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -175,11 +272,14 @@ onMounted(load)
             <div class="prod-detail-meta">
               <div class="prod-detail-title">{{ productTitle(detail) }}</div>
               <div class="sub">SKU: {{ detail.sku }} · {{ detail.site }}</div>
+              <div class="sub">更新时间: {{ fmtDate(detail.updated_time || detail.created_time) }}</div>
               <div class="prod-detail-stats">
                 <span>价格 <b>{{ productPrice(detail) }}</b></span>
                 <span v-if="detail.original_price">原价 <s>{{ fmtPrice(detail.original_price, detail.currency) }}</s></span>
                 <span>评分 <b>{{ detail.ratings || '—' }}</b> ({{ detail.review_count || 0 }})</span>
                 <span>30天销量 <b>{{ detail.thirty_day_sales || 0 }}</b></span>
+                <span>30天收入 <b>{{ productRevenue(detail) }}</b></span>
+                <span>库存 <b>{{ detail.inventory ?? '—' }}</b></span>
               </div>
               <div class="prod-detail-badges">
                 <StatusBadge :status="detail.status" />
@@ -195,8 +295,8 @@ onMounted(load)
               <tbody>
                 <tr v-for="(h, i) in priceHistory" :key="i">
                   <td>{{ (h.date || '').slice(0, 10) }}</td>
-                  <td>{{ h.sale_price != null ? h.sale_price : '—' }}</td>
-                  <td>{{ h.original_price != null ? h.original_price : '—' }}</td>
+                  <td>{{ fmtPrice(h.sale_price, detail.currency) }}</td>
+                  <td>{{ fmtPrice(h.original_price, detail.currency) }}</td>
                   <td>{{ h.review_count != null ? h.review_count : '—' }}</td>
                 </tr>
               </tbody>
@@ -209,10 +309,100 @@ onMounted(load)
 </template>
 
 <style scoped>
+.cat-filters {
+  align-items: center;
+}
+.cat-filters select,
+.cat-filters input {
+  min-height: 34px;
+}
+.cat-filters .num-filter {
+  width: 96px;
+}
+.cat-filters .page-size {
+  width: 92px;
+}
+.cat-filters .btn-go,
+.cat-pager .btn-go {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(167, 139, 250, .28);
+  border-radius: 7px;
+  background: var(--ui-card-soft);
+  color: var(--ui-purple-strong, #7c3aed);
+  white-space: nowrap;
+}
+.cat-filters .btn-go.primary {
+  border-color: rgba(124, 58, 237, .34);
+  background: var(--ui-purple-soft);
+}
+.cat-filters .btn-go:disabled,
+.cat-pager .btn-go:disabled {
+  cursor: not-allowed;
+}
+.spin {
+  animation: catalog-spin .8s linear infinite;
+}
+@keyframes catalog-spin {
+  to { transform: rotate(360deg); }
+}
+.catalog-action-note {
+  margin: -4px 0 10px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--ui-border);
+  background: var(--ui-card-soft);
+  color: var(--ui-muted);
+  font-size: .75rem;
+}
+.catalog-action-note.trigger-queued,
+.catalog-action-note.trigger-running,
+.catalog-action-note.trigger-submitting,
+.catalog-action-note.trigger-unknown {
+  border-color: rgba(167, 139, 250, .28);
+  background: var(--ui-purple-soft);
+  color: var(--ui-purple-strong);
+}
+.catalog-action-note.trigger-success {
+  border-color: rgba(16, 185, 129, .3);
+  background: rgba(16, 185, 129, .14);
+  color: #047857;
+}
+.catalog-action-note.trigger-failed,
+.catalog-action-note.trigger-blocked {
+  border-color: rgba(248, 113, 113, .3);
+  background: rgba(248, 113, 113, .12);
+  color: #be123c;
+}
 .title-text { display:-webkit-box; max-width:420px; overflow:hidden; -webkit-line-clamp:2; -webkit-box-orient:vertical; line-height:1.35; vertical-align:bottom; }
 .sku-link { text-decoration:none; }
 .sku-link code { color:var(--ui-primary, #7c6ce0); }
 .thumb-img { width:32px; height:32px; border-radius:6px; object-fit:cover; display:block; border:1px solid var(--ui-border, #2a2a3a); }
+.row-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-right: 5px;
+  border: 1px solid var(--ui-border);
+  border-radius: 7px;
+  background: var(--ui-card-soft);
+  color: var(--ui-muted);
+  cursor: pointer;
+  vertical-align: middle;
+}
+.row-icon:hover {
+  color: var(--ui-purple-strong, #7c3aed);
+  border-color: rgba(167, 139, 250, .34);
+}
+.row-icon.link {
+  text-decoration: none;
+}
 .price-sub { color:var(--ui-muted, #9ca3af); font-size:.72rem; margin-top:2px; }
 .cat-pager { display:flex; justify-content:center; align-items:center; gap:12px; margin-top:14px; }
 .cat-pager-info { color:var(--ui-muted, #9ca3af); font-size:0.82rem; }

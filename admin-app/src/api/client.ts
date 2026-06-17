@@ -42,8 +42,20 @@ export function fmtNumber(value: unknown) {
   return Number.isFinite(n) ? n.toLocaleString() : '0'
 }
 
+function padDatePart(value: number) {
+  return String(value).padStart(2, '0')
+}
+
 export function fmtDate(value?: string | null) {
   if (!value) return '-'
   const d = new Date(value)
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString()
+  if (Number.isNaN(d.getTime())) return value
+  return `${d.getFullYear()}-${padDatePart(d.getMonth() + 1)}-${padDatePart(d.getDate())} ${padDatePart(d.getHours())}:${padDatePart(d.getMinutes())}`
+}
+
+export function fmtDateOnly(value?: string | null) {
+  if (!value) return '-'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return String(value).slice(0, 10) || value
+  return `${d.getFullYear()}-${padDatePart(d.getMonth() + 1)}-${padDatePart(d.getDate())}`
 }

@@ -37,8 +37,8 @@ const nav = [
   { path: '/app/settings', label: '🔧 设置', icon: Settings }
 ]
 
-const totalSku = computed(() => Number(coverageSummary.value.total_current_sku || 0))
-const coveragePct = computed(() => Number(coverageSummary.value.overall_coverage_pct || 0))
+const totalSku = computed(() => Number(coverageSummary.value.total_current_sku ?? 0))
+const coveragePct = computed(() => Number(coverageSummary.value.overall_coverage_pct ?? 0))
 
 async function guarded(label: string, fn: () => Promise<void>) {
   busy.value = label

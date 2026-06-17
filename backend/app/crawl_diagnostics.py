@@ -32,6 +32,7 @@ PARSE_NO_PRICE = "parse_no_price"
 VALIDATION_FAILED = "validation_failed"
 ZERO_PRODUCTS = "zero_products"
 JOB_TIMEOUT = "job_timeout"
+BROWSER_DEPENDENCY_MISSING = "browser_dependency_missing"
 UNKNOWN = "unknown"
 
 STAGE_DISCOVER = "discover"
@@ -99,6 +100,10 @@ def classify_exception(exc: Exception, *, stage: str = STAGE_JOB) -> FailureInfo
         return FailureInfo(
             JOB_TIMEOUT, STAGE_JOB, text, True,
             "任务超过运行时限；检查代理/目标站响应和 URL 失败分布后重跑")
+    if "executable doesn't exist" in low or "playwright install" in low:
+        return FailureInfo(
+            BROWSER_DEPENDENCY_MISSING, STAGE_JOB, text, False,
+            "运行 playwright install chromium 安装浏览器依赖后重跑")
     if "timed out" in low or "timeout" in low:
         return FailureInfo(
             NETWORK_TIMEOUT, stage, text, True,
@@ -111,6 +116,10 @@ def classify_exception(exc: Exception, *, stage: str = STAGE_JOB) -> FailureInfo
         return FailureInfo(
             PROXY_UNAVAILABLE, STAGE_FETCH, text, True,
             "检查代理服务、端口、防火墙和来源 IP 白名单")
+    if "anti_bot_challenge" in low or "verify you are human" in low:
+        return FailureInfo(
+            ANTI_BOT_CHALLENGE, STAGE_FETCH, text, True,
+            "切换可用住宅代理或启用浏览器/外部数据源")
     if "pausing orders" in low or "market" in low and "paused" in low:
         return FailureInfo(
             MARKET_PAUSED, STAGE_DISCOVER, text, False,

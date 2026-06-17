@@ -10,24 +10,27 @@
 from __future__ import annotations
 
 import io
+from datetime import datetime, timedelta
 
 import pandas as pd
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from .currency import currency_for_site, normalize_currency_for_site
 from .models import (Category, PriceHistory, Product, Promotion,
                       Review, Site, Trend)
 
-# ---- 对标 product_analysis_report.xlsx 的 20 列（列名/顺序与样本完全一致）----
+# ---- 对标 product_analysis_report.xlsx，并补齐前台产品分析页当前展示字段 ----
 PRODUCT_SAMPLE_COLS = [
-    "NO.", "Sku", "Image", "Title", "label", "VariantId", "Attributes",
-    "Sale Price", "Price", "30-Days Sales", "30-Days Revenue", "Ratings",
-    "Reviews", "Status", "Category", "Inventory", "Video", "Free shipping",
-    "Created Time", "Update Time",
+    "NO.", "SKU", "Image", "Products Details", "Product URL", "label", "VariantId",
+    "Variants", "Attributes", "Sales Price", "Price", "Sales",
+    "Revenues", "Ratings", "Reviews", "Status", "Category",
+    "Inventory", "Video", "Free shipping", "Created Time", "Updated Time",
 ]
 # ---- 对标 sales_promotion_report.xlsx 的 13 列 ----
 PROMO_SAMPLE_COLS = [
-    "NO.", "SKU", "Update Time", "Product Title", "Product Image", "Type",
-    "Name", "Discount", "Orignal-Price", "Post-Price", "Threshold",
+    "NO.", "SKU", "Updated Time", "Products Details", "Product Image", "Type",
+    "Name", "Discount", "Pre-price", "Post-price", "Threshold",
     "Start Time", "End Time",
 ]
 # ---- 对标 trend_report.xlsx 的 8 列 ----
@@ -65,7 +68,37 @@ def _list(v) -> str:
 
 
 def _dt(v) -> str:
-    return v.strftime("%Y-%m-%d %H:%M:%S") if v else ""
+    return v.strftime("%Y-%m-%d %H:%M") if v else ""
+
+
+def _money(value, currency: str | None) -> str:
+    if value is None:
+        return ""
+    amount = f"{value:g}" if isinstance(value, (int, float)) else str(value)
+    return f"{currency} {amount}" if currency else amount
+
+
+def _promo_discount(p: Promotion):
+    currency = currency_for_site(p.site)
+    if p.discount_percent is not None:
+        return f"{p.discount_percent}%"
+    if (p.original_price is not None and p.promotion_price is not None
+            and p.original_price > p.promotion_price):
+        return _money(round(p.original_price - p.promotion_price, 2), currency)
+    if p.promotion_price is not None:
+        return _money(p.promotion_price, currency)
+    return ""
+
+
+def _promo_type_label(value: str | None) -> str:
+    key = (value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if key in {"coupon", "coupons"}:
+        return "Coupons"
+    if key in {"price", "price_promotion", "sale", "discount"}:
+        return "Price Promotion"
+    if key in {"bundle", "bundle_promotion"}:
+        return "Bundle"
+    return value or ""
 
 
 def _apply_cat_filter(q, model_class, categories: list[str] | None):
@@ -91,20 +124,34 @@ def _apply_site_filter(q, model_class, site):
 
 
 # ---------- 对标样本：商品分析报表 ----------
-def products_sample_df_from_rows(products) -> pd.DataFrame:
+def products_sample_df_from_rows(products,
+                                 variant_counts_by_id: dict[int, int] | None = None) -> pd.DataFrame:
     rows = []
+    variant_counts_by_id = variant_counts_by_id or {}
+    variant_counts: dict[tuple[str | None, str | None], int] = {}
+    for p in products:
+        key = (p.site, p.spu or p.sku)
+        variant_counts[key] = variant_counts.get(key, 0) + 1
     for i, p in enumerate(products, start=1):
+        variant_key = (p.site, p.spu or p.sku)
+        currency = normalize_currency_for_site(p.currency, p.site)
         rows.append({
-            "NO.": i, "Sku": p.sku, "Image": (p.image_urls or [""])[0],
-            "Title": p.title, "label": p.label or "", "VariantId": p.variant_id,
-            "Attributes": _attrs(p.attributes), "Sale Price": p.sale_price,
-            "Price": p.original_price, "30-Days Sales": p.thirty_day_sales or 0,
-            "30-Days Revenue": p.thirty_day_revenue or 0.0,
+            "NO.": i, "SKU": p.sku, "Image": (p.image_urls or [""])[0],
+            "Products Details": p.title, "Product URL": p.product_url or "",
+            "label": p.label or "", "VariantId": p.variant_id,
+            "Variants": variant_counts_by_id.get(p.id,
+                                                  variant_counts.get(variant_key, 1)),
+            "Attributes": _attrs(p.attributes),
+            "Sales Price": _money(p.sale_price, currency),
+            "Price": _money(p.original_price, currency),
+            "Sales": p.thirty_day_sales or 0,
+            "Revenues": p.thirty_day_revenue or 0.0,
             "Ratings": p.ratings or 0.0, "Reviews": p.review_count or 0,
             "Status": _STATUS.get(p.status, p.status), "Category": p.category_path,
             "Inventory": p.inventory, "Video": _yn(p.has_video),
             "Free shipping": _yn(p.has_free_shipping),
-            "Created Time": _dt(p.created_time), "Update Time": _dt(p.updated_time),
+            "Created Time": _dt(p.published_at or p.created_time),
+            "Updated Time": _dt(p.updated_time),
         })
     return pd.DataFrame(rows, columns=PRODUCT_SAMPLE_COLS)
 
@@ -113,19 +160,30 @@ def products_sample_df(session: Session, site=None,
                        categories: list[str] | None = None) -> pd.DataFrame:
     q = _apply_site_filter(session.query(Product), Product, site)
     q = _apply_cat_filter(q, Product, categories)
-    return products_sample_df_from_rows(q.order_by(Product.id).all())
+    return products_sample_df_from_rows(
+        q.order_by(Product.updated_time.desc().nullslast(),
+                   Product.created_time.desc().nullslast(),
+                   Product.id.desc()).all()
+    )
 
 
 # ---------- 对标样本：销售促销报表 ----------
-def promotions_sample_df_from_rows(promotions) -> pd.DataFrame:
+def promotions_sample_df_from_rows(promotions,
+                                   product_by_key: dict[tuple[str | None, str | None], Product] | None = None) -> pd.DataFrame:
     rows = []
+    product_by_key = product_by_key or {}
     for i, p in enumerate(promotions, start=1):
+        currency = currency_for_site(p.site)
+        product = product_by_key.get((p.site, p.sku))
         rows.append({
-            "NO.": i, "SKU": p.sku, "Update Time": _dt(p.detected_time),
-            "Product Title": p.product_title, "Product Image": p.product_image,
-            "Type": p.promotion_type, "Name": p.promotion_name or p.promotion_type,
-            "Discount": p.discount_percent, "Orignal-Price": p.original_price,
-            "Post-Price": p.promotion_price, "Threshold": p.threshold or "/",
+            "NO.": i, "SKU": p.sku, "Updated Time": _dt(p.detected_time),
+            "Products Details": p.product_title or (product.title if product else None),
+            "Product Image": p.product_image or (
+                (product.image_urls or [""])[0] if product else None),
+            "Type": _promo_type_label(p.promotion_type),
+            "Name": p.promotion_name or _promo_type_label(p.promotion_type),
+            "Discount": _promo_discount(p), "Pre-price": _money(p.original_price, currency),
+            "Post-price": _money(p.promotion_price, currency), "Threshold": p.threshold or "/",
             "Start Time": _dt(p.start_time), "End Time": _dt(p.end_time),
         })
     return pd.DataFrame(rows, columns=PROMO_SAMPLE_COLS)
@@ -144,7 +202,24 @@ def promotions_sample_df(session: Session, site=None,
             q = q.filter(Promotion.sku.in_(skus))
         else:
             q = q.filter(Promotion.id == -1)  # empty result
-    return promotions_sample_df_from_rows(q.all())
+    promotions = (q.order_by(Promotion.detected_time.desc().nullslast(),
+                             Promotion.id.desc()).all())
+    return promotions_sample_df_from_rows(
+        promotions, _product_lookup_for_promotions(session, promotions))
+
+
+def _product_lookup_for_promotions(session: Session, promotions) -> dict[tuple[str | None, str | None], Product]:
+    skus_by_site: dict[str, set[str]] = {}
+    for promo in promotions:
+        if promo.site and promo.sku:
+            skus_by_site.setdefault(promo.site, set()).add(promo.sku)
+    out: dict[tuple[str | None, str | None], Product] = {}
+    for site, skus in skus_by_site.items():
+        rows = (session.query(Product)
+                .filter(Product.site == site, Product.sku.in_(sorted(skus)))
+                .all())
+        out.update({(row.site, row.sku): row for row in rows})
+    return out
 
 
 # ---------- 对标样本：趋势报表 ----------
@@ -160,7 +235,51 @@ def trends_sample_df(session: Session, site=None) -> pd.DataFrame:
             "Conversion Rate": t.conversion_rate
             if t.conversion_rate is not None else "/",
         })
+    if not rows:
+        rows = _trend_snapshot_rows(session, site)
     return pd.DataFrame(rows, columns=TREND_SAMPLE_COLS)
+
+
+def _latest_snapshot_datetime(session: Session, site=None) -> datetime | None:
+    for model, column in (
+        (Site, Site.last_crawled),
+        (Product, Product.updated_time),
+        (Product, Product.created_time),
+        (Product, Product.published_at),
+        (Site, Site.updated_at),
+        (Site, Site.created_at),
+    ):
+        q = _apply_site_filter(session.query(func.max(column)), model, site)
+        value = q.scalar()
+        if value:
+            return value
+    return None
+
+
+def _trend_snapshot_rows(session: Session, site=None) -> list[dict]:
+    product_q = _apply_site_filter(session.query(Product), Product, site)
+    sku_count = int(product_q.count() or 0)
+    if sku_count <= 0:
+        return []
+    cutoff = datetime.utcnow() - timedelta(days=30)
+    new_product_count = int(
+        product_q.filter(or_(Product.created_time >= cutoff,
+                             Product.published_at >= cutoff)).count() or 0)
+    sales, revenue = product_q.with_entities(
+        func.coalesce(func.sum(Product.thirty_day_sales), 0),
+        func.coalesce(func.sum(Product.thirty_day_revenue), 0.0),
+    ).first()
+    snapshot_dt = _latest_snapshot_datetime(session, site) or datetime.utcnow()
+    return [{
+        "NO.": 1,
+        "Date": snapshot_dt.date().isoformat(),
+        "Sku Count": sku_count,
+        "New Product Count": new_product_count,
+        "Sales": int(sales or 0),
+        "Revenue": round(float(revenue or 0), 2),
+        "Traffic": "/",
+        "Conversion Rate": "/",
+    }]
 
 
 # ---------- 扩展表：商品全字段（32 字段，信息只多不少）----------
@@ -169,14 +288,21 @@ def products_full_df(session: Session, site=None,
     q = _apply_site_filter(session.query(Product), Product, site)
     q = _apply_cat_filter(q, Product, categories)
     rows = []
-    for i, p in enumerate(q.order_by(Product.id).all(), start=1):
+    for i, p in enumerate(
+        q.order_by(Product.updated_time.desc().nullslast(),
+                   Product.created_time.desc().nullslast(),
+                   Product.id.desc()).all(),
+        start=1,
+    ):
         rows.append({
             "NO.": i, "site": p.site, "brand": p.brand, "sku": p.sku,
             "spu": p.spu, "variant_id": p.variant_id, "title": p.title,
             "description": (p.description or "")[:500], "category_path": p.category_path,
             "product_type": p.product_type, "attributes": _attrs(p.attributes),
             "tags": _list(p.tags), "label": p.label, "sale_price": p.sale_price,
-            "original_price": p.original_price, "currency": p.currency,
+            "original_price": p.original_price,
+            "currency": normalize_currency_for_site(p.currency, p.site)
+            or currency_for_site(p.site),
             "ratings": p.ratings, "review_count": p.review_count,
             "thirty_day_sales": p.thirty_day_sales,
             "thirty_day_revenue": p.thirty_day_revenue, "status": p.status,

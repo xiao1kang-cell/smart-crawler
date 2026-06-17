@@ -6,8 +6,10 @@ Vidaxl 站点跑在 Salesforce Commerce Cloud，反爬重，`.com` 美国站封�
   路径1（首选）官方 Dropshipping API：设置环境变量
       VIDAXL_API_EMAIL / VIDAXL_API_TOKEN  → 走 b2b.vidaxl.com/api_customer/products
       （合法、完整、稳定，无需对抗反爬）
-  路径2 欧洲国家站爬取：无 API 凭据时，解析 sitemap_index → 商品页 JSON-LD
-  路径3 美国站住宅代理：vidaxl_us 站点 proxy_tier=residential，配 proxies.txt 后
+  路径2 官方/供应商产品 Feed：设置 VIDAXL_US_FEED_URL / VIDAXL_FEED_URL，
+      支持 CSV / JSON / XML / .gz / .zip，适合 storefront 不可访问的市场
+  路径3 欧洲国家站爬取：无 API/Feed 时，解析 sitemap_index → 商品页 JSON-LD
+  路径4 美国站住宅代理：vidaxl_us 站点 proxy_tier=residential，配 proxies.txt 后
       自动经住宅代理走路径2 的逻辑
 
 详见 docs/风控策略评估.md 与 Vidaxl 研究结论。
@@ -15,11 +17,16 @@ Vidaxl 站点跑在 Salesforce Commerce Cloud，反爬重，`.com` 美国站封�
 from __future__ import annotations
 
 import gzip
+import csv
+import io
 import json
 import os
 import re
 import threading
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from xml.etree import ElementTree as ET
 
 from curl_cffi import requests as creq
 
@@ -29,6 +36,7 @@ from .base import BaseCrawler, CrawlResult
 API_BASE = "https://b2b.vidaxl.com/api_customer/products"
 STOREFRONT_LIMIT = int(os.environ.get("VIDAXL_LIMIT", "999999"))
 DEFAULT_STOREFRONT_LIMIT = int(os.environ.get("VIDAXL_DEFAULT_LIMIT", "1000"))
+RUN_TARGET_LIMIT = int(os.environ.get("VIDAXL_RUN_TARGET_LIMIT", "200"))
 API_PAGE = 500
 _LD_RE = re.compile(
     r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', re.S)
@@ -44,8 +52,12 @@ class VidaxlCrawler(BaseCrawler):
         super().__init__(site)
         self.base = site.url.rstrip("/")
         self.currency = _CURRENCY.get(site.country, "EUR")
-        self.api_email = os.environ.get("VIDAXL_API_EMAIL")
-        self.api_token = os.environ.get("VIDAXL_API_TOKEN")
+        self._crawler_config = site.crawler_config or {}
+        self.api_email = os.environ.get("VIDAXL_API_EMAIL") or self._config_value(
+            "api_email", "vidaxl_api_email")
+        self.api_token = os.environ.get("VIDAXL_API_TOKEN") or self._config_value(
+            "api_token", "vidaxl_api_token")
+        self.feed_url = self._resolve_feed_url()
         self.limit = self._resolve_limit(STOREFRONT_LIMIT)
         if self.limit <= 0:
             self.limit = DEFAULT_STOREFRONT_LIMIT
@@ -53,7 +65,33 @@ class VidaxlCrawler(BaseCrawler):
     def crawl(self) -> CrawlResult:
         if self.api_email and self.api_token:
             return self._crawl_api()
+        if self.feed_url:
+            return self._crawl_feed()
         return self._crawl_storefront()
+
+    def _config_value(self, *keys: str) -> str | None:
+        for key in keys:
+            value = self._crawler_config.get(key)
+            if value:
+                return str(value).strip()
+        return None
+
+    def _resolve_feed_url(self) -> str | None:
+        country = (self.site.country or "").upper()
+        site_key = re.sub(r"\W+", "_", (self.site.site or "").upper())
+        keys = [
+            f"{site_key}_FEED_URL" if site_key else "",
+            f"VIDAXL_{country}_FEED_URL" if country else "",
+            f"VIDAXL_{site_key}_FEED_URL" if site_key else "",
+            "VIDAXL_FEED_URL",
+        ]
+        for key in keys:
+            if key and os.environ.get(key):
+                return os.environ[key].strip()
+        value = self._config_value("feed_url", "vidaxl_feed_url")
+        if value:
+            return value
+        return None
 
     # ---------- 路径1：官方 Dropshipping API ----------
     def _crawl_api(self) -> CrawlResult:
@@ -90,6 +128,148 @@ class VidaxlCrawler(BaseCrawler):
             self.sleep()
         result.notes.append(f"路径1 官方 API：拉取 {total} 个商品")
         return result
+
+    # ---------- 路径2：官方/供应商 Feed ----------
+    def _crawl_feed(self) -> CrawlResult:
+        result = CrawlResult()
+        try:
+            raw = self._load_feed_bytes(self.feed_url or "")
+            items = self._parse_feed_items(raw, self.feed_url or "")
+        except Exception as exc:
+            result.notes.append(f"Feed 读取失败: {exc}")
+            return result
+
+        total = 0
+        seen: set[str] = set()
+        for it in items:
+            if len(result.products) >= self.limit:
+                break
+            row = self._map_feed(it)
+            if not row:
+                continue
+            sku = row["sku"]
+            if sku in seen:
+                continue
+            seen.add(sku)
+            result.products.append(row)
+            total += 1
+        result.notes.append(
+            f"路径2 官方 Feed：读取 {len(items)} 行，产出 {total} 个去重商品")
+        return result
+
+    def _load_feed_bytes(self, feed_url: str) -> bytes:
+        if not feed_url:
+            raise ValueError("feed_url required")
+        path = feed_url[7:] if feed_url.startswith("file://") else feed_url
+        if not re.match(r"^https?://", feed_url) and Path(path).exists():
+            data = Path(path).read_bytes()
+        else:
+            fetcher = self.make_fetcher(kind="api", source="vidaxl_feed",
+                                        timeout=90, use_proxy=False)
+            res = fetcher.get(feed_url)
+            if not res.ok:
+                raise RuntimeError(f"Feed HTTP {res.status or 0}")
+            data = res.content or (res.text or "").encode("utf-8")
+        if feed_url.endswith(".gz") or data[:2] == b"\x1f\x8b":
+            data = gzip.decompress(data)
+        if feed_url.endswith(".zip") or data[:4] == b"PK\x03\x04":
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                names = [n for n in zf.namelist() if not n.endswith("/")]
+                if not names:
+                    raise ValueError("Feed zip is empty")
+                preferred = next(
+                    (n for n in names if n.lower().endswith(
+                        (".csv", ".json", ".xml", ".txt"))),
+                    names[0],
+                )
+                data = zf.read(preferred)
+        return data
+
+    def _parse_feed_items(self, data: bytes, feed_url: str) -> list[dict]:
+        text = data.decode("utf-8-sig", "replace")
+        stripped = text.lstrip()
+        low_url = feed_url.lower()
+        if low_url.endswith(".json") or stripped.startswith(("{", "[")):
+            doc = json.loads(text)
+            if isinstance(doc, list):
+                return [x for x in doc if isinstance(x, dict)]
+            if isinstance(doc, dict):
+                items = doc.get("data") or doc.get("products") or doc.get("items") or []
+                return [x for x in items if isinstance(x, dict)]
+            return []
+        if low_url.endswith(".xml") or stripped.startswith("<"):
+            return self._parse_feed_xml(text)
+        return self._parse_feed_csv(text)
+
+    @staticmethod
+    def _parse_feed_csv(text: str) -> list[dict]:
+        sample = text[:4096]
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+        except csv.Error:
+            dialect = csv.excel
+        reader = csv.DictReader(io.StringIO(text), dialect=dialect)
+        return [dict(row) for row in reader if row]
+
+    @staticmethod
+    def _parse_feed_xml(text: str) -> list[dict]:
+        root = ET.fromstring(text)
+
+        def tag_name(tag: str) -> str:
+            return tag.rsplit("}", 1)[-1].lower()
+
+        candidates = [
+            node for node in root.iter()
+            if tag_name(node.tag) in {"product", "item", "entry"}
+        ]
+        if not candidates and tag_name(root.tag) in {"product", "item", "entry"}:
+            candidates = [root]
+        rows: list[dict] = []
+        for node in candidates:
+            row: dict[str, str] = {}
+            for child in node.iter():
+                if child is node:
+                    continue
+                key = tag_name(child.tag)
+                value = (child.text or "").strip()
+                if not value:
+                    continue
+                if key in row:
+                    row[key] = f"{row[key]}|{value}"
+                else:
+                    row[key] = value
+            if row:
+                rows.append(row)
+        return rows
+
+    def _map_feed(self, it: dict) -> dict | None:
+        sku = _first(it, "sku", "code", "item_code", "product_code", "id", "ean", "gtin")
+        if not sku:
+            return None
+        price = _num(_first(it, "price", "b2b_price", "selling_price", "sale_price"))
+        srp = _num(_first(it, "srp", "retail_price", "rrp", "msrp", "original_price"))
+        stock = _int(_first(it, "stock", "quantity", "qty", "inventory"))
+        images = _split_values(_first(
+            it, "images", "image", "image_url", "main_image", "picture", "pictures"))
+        url = _first(it, "url", "product_url", "link", "deeplink")
+        title = _first(it, "title", "name", "product_name", "item_name") or str(sku)
+        return {
+            "sku": str(sku),
+            "spu": str(_first(it, "spu", "parent_sku", "item_group_id", "sku") or sku),
+            "title": title,
+            "description": _first(it, "description", "desc", "long_description"),
+            "image_urls": images,
+            "category_path": _first(it, "category", "category_path", "taxonomy"),
+            "sale_price": price,
+            "original_price": srp if srp is not None else price,
+            "currency": _first(it, "currency", "price_currency") or self.currency,
+            "gtin": _first(it, "ean", "gtin", "gtin13", "barcode"),
+            "inventory": stock,
+            "status": "on_sale" if stock is None or stock > 0 else "out_of_stock",
+            "brand": _first(it, "brand", "manufacturer") or self.site.brand,
+            "product_url": url,
+            "site": self.site.site,
+        }
 
     def _map_api(self, it: dict) -> dict | None:
         sku = it.get("sku") or it.get("code") or it.get("ean")
@@ -135,16 +315,33 @@ class VidaxlCrawler(BaseCrawler):
                     timeout=int(os.environ.get("PROXY_PREFLIGHT_TIMEOUT", "8")),
                 )
                 if not probe.ok and probe.failure:
+                    failure = probe.failure
+                    if (
+                        self.site.site == "vidaxl_us"
+                        and failure.code in ("http_401", "http_403", "http_5xx")
+                    ):
+                        from ..crawl_diagnostics import FailureInfo, STAGE_DISCOVER
+                        failure = FailureInfo(
+                            failure.code,
+                            STAGE_DISCOVER,
+                            "VidaXL US storefront 当前不可访问（公网/现有代理返回 "
+                            f"HTTP {failure.http_status or 'blocked'}），"
+                            "需官方 Dropshipping API 凭据或可访问 vidaxl.com 的美国住宅出口",
+                            True,
+                            "配置 VIDAXL_API_EMAIL / VIDAXL_API_TOKEN，或更换可访问 "
+                            "vidaxl.com 的美国住宅代理后重跑",
+                            failure.http_status,
+                        )
                     _record_site_failure(
                         self.site.site,
                         self.job_id,
                         sitemap_url,
-                        probe.failure,
-                        http_status=probe.status_code,
+                        failure,
+                        http_status=failure.http_status or probe.status_code,
                     )
                     result.notes.append(
-                        f"⚠ 代理预检失败: {probe.failure.code} · "
-                        f"{probe.failure.detail}")
+                        f"⚠ 目标预检失败: {failure.code} · "
+                        f"{failure.detail}")
                     return result
                 if probe.proxy_url:
                     _preflight_proxy = probe.proxy_url
@@ -240,12 +437,13 @@ class VidaxlCrawler(BaseCrawler):
         # 期望 unique parent 数 ≈ 总 parent × (1 - (1 - limit/总URL)^5)）
         import random
         random.shuffle(fresh)
-        targets = fresh[: self.limit]
+        run_limit = min(self.limit, RUN_TARGET_LIMIT) if RUN_TARGET_LIMIT > 0 else self.limit
+        targets = fresh[: run_limit]
         _register_frontier_targets(self.site.site, targets)
         result.notes.append(
             f"路径2 storefront：{len(prod_sitemaps)} 个 sitemap · "
             f"sitemap 总 URL {len(urls)} · 已抓 URL {len(already)} · "
-            f"本次目标 {len(targets)}")
+            f"本次目标 {len(targets)}（VIDAXL_RUN_TARGET_LIMIT={RUN_TARGET_LIMIT}）")
 
         # 走代理池：并发 N 线程（默认 10，与 residential 池容量匹配）
         from .. import proxy_pool
@@ -442,33 +640,39 @@ def _persist_sitemap_total(site: str, total: int) -> None:
 
 
 def _already_crawled_urls(site: str) -> set[str]:
-    """读取该 site 已 fetched 过的所有 URL —— 100% 推进 sitemap 的关键。
+    """读取该 site 已处理过的 URL —— 100% 推进 sitemap 的关键。
 
-    优先 fetched_urls 表（每次 fetch 都记录 · 即便 SKU dup 也算已抓过）。
-    回退 Product.product_url（旧路径 · 不全 · upsert 会 overwrite）。
+    统一使用 crawl_urls frontier。已解析 / 已阻断 / 有抓取尝试次数的 URL
+    都不再进入本轮随机目标；Product.product_url 作为旧数据回填兜底。
     """
     try:
         from ..db import SessionLocal
-        from sqlalchemy import text
+        from ..models import CrawlUrl, Product
     except Exception:
         return set()
     db = SessionLocal()
     try:
-        try:
-            rows = db.execute(
-                text("SELECT url FROM fetched_urls WHERE site = :s"),
-                {"s": site},
-            ).all()
-            return {r[0] for r in rows if r[0]}
-        except Exception:
-            # 表不存在 → fallback 旧路径
-            db.rollback()
-            from ..models import Product
-            rows = (db.query(Product.product_url)
-                    .filter(Product.site == site)
-                    .filter(Product.product_url.isnot(None))
-                    .all())
-            return {r[0] for r in rows if r[0]}
+        frontier = {
+            r.url for r in (
+                db.query(CrawlUrl.url)
+                .filter(CrawlUrl.site == site)
+                .filter(CrawlUrl.url.isnot(None))
+                .filter((CrawlUrl.status.in_(("parsed", "blocked")))
+                        | (CrawlUrl.attempts > 0))
+                .all()
+            )
+            if r.url
+        }
+        products = {
+            r.product_url for r in (
+                db.query(Product.product_url)
+                .filter(Product.site == site)
+                .filter(Product.product_url.isnot(None))
+                .all()
+            )
+            if r.product_url
+        }
+        return frontier | products
     finally:
         db.close()
 
@@ -508,34 +712,7 @@ def _log_fetched(site: str, url: str, status_code: int, *,
                  parsed: bool = False,
                  parse_failed: bool = False,
                  job_id: int | None = None) -> None:
-    """记录每次 URL fetch · 即便 4xx / 5xx / parse_none 也记 · 防再抓.
-
-    INSERT ... ON CONFLICT DO NOTHING · 同 URL 重复进表只算一次。
-    SQL 错误一律静默 (主流程优先 · 不能因 logging 失败拖崩 crawl)。
-    """
-    try:
-        from ..db import SessionLocal
-        from sqlalchemy import text
-    except Exception:
-        return
-    db = SessionLocal()
-    try:
-        db.execute(
-            text(
-                "INSERT INTO fetched_urls (site, url, fetched_at, status_code) "
-                "VALUES (:s, :u, NOW(), :c) "
-                "ON CONFLICT (site, url) DO NOTHING"
-            ),
-            {"s": site, "u": url, "c": status_code},
-        )
-        db.commit()
-    except Exception:
-        try:
-            db.rollback()
-        except Exception:
-            pass
-    finally:
-        db.close()
+    """记录每次 URL fetch 到 crawl_urls frontier 和 crawl_failures。"""
     _record_frontier_fetch(site, url, status_code, parsed=parsed,
                            parse_failed=parse_failed, job_id=job_id)
 
@@ -684,6 +861,25 @@ def _already_crawled_skus(site: str) -> set[str]:
         return {r[0] for r in rows if r[0]}
     finally:
         db.close()
+
+
+def _first(data: dict, *keys: str):
+    lowered = {str(k).lower(): v for k, v in (data or {}).items()}
+    for key in keys:
+        value = lowered.get(key.lower())
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _split_values(value) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    text = str(value)
+    parts = re.split(r"\s*[|,]\s*", text)
+    return [p for p in (part.strip() for part in parts) if p]
 
 
 def _num(v):

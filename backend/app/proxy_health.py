@@ -11,6 +11,26 @@ from sqlalchemy import and_, or_
 from .crawl_diagnostics import FailureInfo
 from .models import ProxyHealth
 
+_PROXY_HEALTH_FAILURE_CODES = {
+    "proxy_auth_failed",
+    "proxy_unavailable",
+    "network_timeout",
+    "dns_error",
+}
+
+
+def is_proxy_health_failure(failure: FailureInfo | None) -> bool:
+    """Whether a crawl failure should degrade proxy availability.
+
+    Target-site blocks such as HTTP 401/403/429 or anti-bot challenge mean the
+    chosen exit was not useful for that site, but the proxy itself still carried
+    traffic. Marking those as proxy-down empties the residential pool and hides
+    the real site-level blocker from operators.
+    """
+    if failure is None:
+        return False
+    return failure.code in _PROXY_HEALTH_FAILURE_CODES
+
 
 def record_proxy_result(
     session: Session,
@@ -38,7 +58,7 @@ def record_proxy_result(
     row.proxy_redacted = redact_proxy(proxy_url)
     row.last_checked_at = now
     row.updated_at = now
-    if success:
+    if success or not is_proxy_health_failure(failure):
         row.status = "healthy"
         row.success_count = (row.success_count or 0) + 1
         row.consecutive_failures = 0

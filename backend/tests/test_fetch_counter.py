@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.antiban import BlockedError
 from app.fetching import CrawlCounter, CrawlerFetcher, FetchContext, FetchResult
 from app.models import Site
 
@@ -16,6 +17,11 @@ def _site() -> Site:
 def _ctx(counter, retries=0):
     return FetchContext(site=_site(), counter=counter, use_proxy=False,
                         retries=retries)
+
+
+def _fail_fast_ctx(counter=None):
+    return FetchContext(site=_site(), counter=counter, use_proxy=False,
+                        retries=0, fail_fast_blocked=True)
 
 
 def test_counter_pages_is_sum():
@@ -48,6 +54,31 @@ def test_failure_does_not_count(monkeypatch):
     monkeypatch.setattr(fetcher, "_request_once", fake_once)
     fetcher.get("https://example.com/p/1")
     assert c.api_calls == 0
+
+
+def test_fail_fast_blocked_raises_on_anti_bot_challenge(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+        text = "<html>Cloudflare verify you are human</html>"
+        content = text.encode()
+        url = "https://example.com/challenge"
+
+    class FakeSession:
+        def __init__(self, **kwargs):
+            self.headers = {}
+            self.proxies = {}
+
+        def request(self, method, url, timeout=30, **kwargs):
+            return FakeResponse()
+
+    fetcher = CrawlerFetcher(_fail_fast_ctx(), middlewares=[])
+    monkeypatch.setattr("app.fetching.creq.Session", FakeSession)
+    monkeypatch.setattr("app.fetching._record_fetch", lambda *args, **kwargs: None)
+
+    with pytest.raises(BlockedError) as exc:
+        fetcher.get("https://example.com/challenge")
+
+    assert "anti_bot_challenge" in str(exc.value)
 
 
 def test_retry_to_success_counts_once(monkeypatch):

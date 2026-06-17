@@ -32,13 +32,18 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
+from urllib.parse import urljoin
 
 from selectolax.parser import HTMLParser
 
 from .base import BaseCrawler, CrawlResult
 
 DEFAULT_LIMIT = int(os.environ.get("ARTICLE_LIMIT", "1000"))
+PDP_TIMEOUT = int(os.environ.get("ARTICLE_PDP_TIMEOUT", "12"))
+MAX_ELAPSED_SEC = float(os.environ.get("ARTICLE_MAX_ELAPSED_SEC", "240"))
 SITEMAP_URL = "https://www.article.com/product_sitemap.xml"
+BROWSE_URL = "https://www.article.com/browse"
 
 _LD_RE = re.compile(
     r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', re.S)
@@ -71,8 +76,12 @@ class ArticleCrawler(BaseCrawler):
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
         fetcher = self.make_fetcher(kind="product", source="article")
+        started = time.monotonic()
 
-        # ---- Step 1：拉 sitemap ----
+        # ---- Step 1：优先从当前 browse 页发现 live PDP ----
+        live_urls = self._discover_browse_urls(fetcher, result)
+
+        # ---- Step 2：拉 sitemap 兜底（Article 的 sitemap 有大量 stale URL）----
         try:
             res = fetcher.get(
                 SITEMAP_URL,
@@ -91,17 +100,25 @@ class ArticleCrawler(BaseCrawler):
 
         urls = re.findall(r"<loc>\s*(.*?)\s*</loc>", res.text)
         product_urls = [u for u in urls if "/product/" in u]
-        total = len(product_urls)
-        targets = product_urls[: self.limit]
+        all_urls = self._dedupe(live_urls + product_urls)
+        total = len(all_urls)
+        targets = all_urls[: self.limit]
         result.notes.append(
-            f"sitemap 共 {total} 个 /product/ URL，本次抓取 {len(targets)} 条"
+            f"browse 当前 {len(live_urls)} 个 PDP，sitemap {len(product_urls)} 个"
+            f" /product/ URL，去重后 {total} 个，本次抓取 {len(targets)} 条"
             f"（ARTICLE_LIMIT={self.limit}）")
 
-        # ---- Step 2：逐 URL 抓取 ----
+        # ---- Step 3：逐 URL 抓取 ----
         ok = 0
         discontinued = 0
         skipped = 0
         for url in targets:
+            elapsed = time.monotonic() - started
+            if elapsed >= MAX_ELAPSED_SEC:
+                result.notes.append(
+                    f"达到 ARTICLE_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
+                    f"提前返回已解析结果（ok={ok}, 停售={discontinued}, 跳过={skipped}）")
+                break
             try:
                 row, status = self._fetch_and_parse(fetcher, url)
                 if status == "discontinued":
@@ -121,6 +138,42 @@ class ArticleCrawler(BaseCrawler):
             f"成功解析 {ok}/{len(targets)} | 停售 {discontinued} | 跳过 {skipped}")
         return result
 
+    def _discover_browse_urls(self, fetcher, result: CrawlResult) -> list[str]:
+        """从当前 browse 页抽取 live PDP 链接。
+
+        Article 的 product_sitemap.xml 长期滞后，很多旧 URL 会重定向到 /browse。
+        browse 页 SSR HTML 里会直接包含当前商品链接，所以优先使用它能显著减少
+        stale URL 和空跑时间。
+        """
+        try:
+            res = fetcher.get(
+                BROWSE_URL,
+                headers=self._headers(),
+                cookies={"currency": self._cur_cookie},
+                timeout=30,
+            )
+            self.guard(res.status or 0, "browse")
+            if (res.status or 0) != 200:
+                result.notes.append(f"⚠ browse 返回 {res.status}")
+                return []
+        except Exception as exc:
+            result.notes.append(f"⚠ browse 不可达: {exc}")
+            return []
+
+        tree = HTMLParser(res.text)
+        urls: list[str] = []
+        for node in tree.css("a[href]"):
+            href = node.attributes.get("href") or ""
+            if "/product/" not in href:
+                continue
+            full = urljoin(self.base + "/", href.split("#", 1)[0])
+            if _PRODUCT_URL_RE.search(full):
+                urls.append(full)
+        urls = self._dedupe(urls)
+        if urls:
+            result.notes.append(f"browse 发现 {len(urls)} 个当前商品链接")
+        return urls
+
     # ------------------------------------------------------------------
     # 单页解析
     # ------------------------------------------------------------------
@@ -131,7 +184,7 @@ class ArticleCrawler(BaseCrawler):
             headers=self._headers(),
             cookies={"currency": self._cur_cookie},
             allow_redirects=True,
-            timeout=30,
+            timeout=PDP_TIMEOUT,
         )
         self.guard(res.status or 0, "pdp")
         final_url = res.final_url or url
@@ -146,6 +199,18 @@ class ArticleCrawler(BaseCrawler):
         self.snapshot(slug, html)
 
         return self._parse(html, final_url), "ok"
+
+    @staticmethod
+    def _dedupe(urls: list[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for url in urls:
+            key = url.rstrip("/")
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(url)
+        return out
 
     def _parse(self, html: str, url: str) -> dict | None:
         tree = HTMLParser(html)

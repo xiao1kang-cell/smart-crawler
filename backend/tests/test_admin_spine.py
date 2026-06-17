@@ -45,6 +45,393 @@ def test_jobs_stats_ok_for_admin():
         assert k in out
 
 
+def test_site_crawler_config_update_masks_sensitive_values():
+    init_db()
+    from app.api import admin_spine
+    from app.db import SessionLocal
+    from app.models import AdminAuditLog, Site
+
+    s = SessionLocal()
+    site = s.query(Site).filter(Site.site == "vidaxl_us").first()
+    assert site is not None
+    site.crawler_config = {}
+    s.commit()
+
+    before = s.query(AdminAuditLog).count()
+    out = admin_spine.site_crawler_config_update(
+        "vidaxl_us",
+        {"feed_url": "https://feed.example.com/very-secret-feed-token.csv",
+         "price_feed_url": "https://feed.example.com/private-price-feed.csv",
+         "api_token": "super-secret-token",
+         "proxy_tier": "residential"},
+        user="admin",
+        db=s,
+        ip="127.0.0.1",
+    )
+    s.refresh(site)
+    assert site.proxy_tier == "residential"
+    assert out["proxy_tier"] == "residential"
+    assert out["configured_keys"] == ["api_token", "feed_url", "price_feed_url"]
+    assert out["crawler_config"]["feed_url"] != "https://feed.example.com/very-secret-feed-token.csv"
+    assert out["crawler_config"]["price_feed_url"] != "https://feed.example.com/private-price-feed.csv"
+    assert out["crawler_config"]["api_token"] != "super-secret-token"
+    assert s.query(AdminAuditLog).count() == before + 1
+
+    shown = admin_spine.site_crawler_config("vidaxl_us", user="admin", db=s)
+    assert shown["configured_keys"] == ["api_token", "feed_url", "price_feed_url"]
+    assert shown["crawler_config"]["api_token"] == out["crawler_config"]["api_token"]
+    assert shown["crawler_config"]["price_feed_url"] == out["crawler_config"]["price_feed_url"]
+
+    admin_spine.site_crawler_config_update(
+        "vidaxl_us",
+        {"crawler_config": {
+            "api_token": shown["crawler_config"]["api_token"],
+            "feed_url": shown["crawler_config"]["feed_url"],
+            "price_feed_url": shown["crawler_config"]["price_feed_url"],
+        }},
+        user="admin",
+        db=s,
+        ip="127.0.0.1",
+    )
+    s.refresh(site)
+    assert site.crawler_config["api_token"] == "super-secret-token"
+    assert site.crawler_config["feed_url"] == "https://feed.example.com/very-secret-feed-token.csv"
+    assert site.crawler_config["price_feed_url"] == "https://feed.example.com/private-price-feed.csv"
+
+    cleared = admin_spine.site_crawler_config_update(
+        "vidaxl_us",
+        {"api_token": None},
+        user="admin",
+        db=s,
+        ip="127.0.0.1",
+    )
+    assert cleared["configured_keys"] == ["feed_url", "price_feed_url"]
+    s.close()
+
+
+def test_site_crawler_config_test_price_source_dry_run(tmp_path):
+    init_db()
+    from datetime import datetime
+    import uuid
+    from app.api import admin_spine
+    from app.db import SessionLocal
+    from app.models import Product, Site
+
+    s = SessionLocal()
+    site_code = f"price_test_{uuid.uuid4().hex[:8]}"
+    s.add(Site(site=site_code, brand="PriceTest", country="US",
+               url="https://price-test.example.com", platform="bol",
+               proxy_tier="none"))
+    sku = f"SKU-{uuid.uuid4().hex[:8]}"
+    s.add(Product(site=site_code, brand="PriceTest", sku=sku,
+                  title="Needs price", product_url="https://price-test.example.com/p/1",
+                  sale_price=None, original_price=None, currency=None,
+                  updated_time=datetime.utcnow()))
+    s.commit()
+    feed = tmp_path / "prices.csv"
+    feed.write_text(
+        "product_id,final_price,regular_price,currency,title\n"
+        f"{sku},19.99,29.99,USD,Feed title\n",
+        encoding="utf-8",
+    )
+
+    out = admin_spine.site_crawler_config_test_price_source(
+        site_code,
+        {
+            "sample_limit": 5,
+            "crawler_config": {
+                "price_source_type": "feed",
+                "price_feed_url": str(feed),
+                "price_feed_sku_field": "product_id",
+                "price_feed_sale_price_field": "final_price",
+                "price_feed_original_price_field": "regular_price",
+            },
+        },
+        user="admin",
+        db=s,
+    )
+    assert out["status"] == "ok"
+    assert out["stats"]["matched"] == 1
+    assert out["stats"]["updated"] == 1
+    assert out["samples"][0]["sku"] == sku
+    assert out["samples"][0]["after"]["sale_price"] == 19.99
+    assert out["samples"][0]["after"]["original_price"] == 29.99
+    assert out["samples"][0]["after"]["currency"] == "USD"
+    s.close()
+
+
+def test_admin_analytics_recompute_from_review_snapshots():
+    init_db()
+    from datetime import date, timedelta
+
+    from app.api import admin_spine
+    from app.db import SessionLocal
+    from app.models import Product, PriceHistory, Trend
+
+    s = SessionLocal()
+    site = "songmics_us"
+    for sku in ("TEST-ANALYTICS-1", "TEST-ANALYTICS-2"):
+        s.query(PriceHistory).filter(PriceHistory.site == site,
+                                     PriceHistory.sku == sku).delete()
+        s.query(Product).filter(Product.site == site, Product.sku == sku).delete()
+    today = date.today()
+    s.add(Product(site=site, sku="TEST-ANALYTICS-1",
+                  title="Analytics product", product_url="https://example.com/a",
+                  sale_price=10.0, review_count=15))
+    s.add(Product(site=site, sku="TEST-ANALYTICS-2",
+                  title="Analytics product 2", product_url="https://example.com/b",
+                  sale_price=20.0, review_count=7))
+    s.add_all([
+        PriceHistory(site=site, sku="TEST-ANALYTICS-1",
+                     date=today - timedelta(days=2), sale_price=10,
+                     review_count=10),
+        PriceHistory(site=site, sku="TEST-ANALYTICS-1",
+                     date=today, sale_price=10, review_count=15),
+        PriceHistory(site=site, sku="TEST-ANALYTICS-2",
+                     date=today, sale_price=20, review_count=7),
+    ])
+    s.commit()
+
+    out = admin_spine.admin_analytics_recompute(
+        {"sites": [site]}, user="admin", db=s, ip="127.0.0.1")
+
+    one = s.query(Product).filter(Product.site == site,
+                                  Product.sku == "TEST-ANALYTICS-1").one()
+    two = s.query(Product).filter(Product.site == site,
+                                  Product.sku == "TEST-ANALYTICS-2").one()
+    assert out["status"] == "recomputed"
+    assert out["by_site"][site]["estimated_skus"] == 1
+    assert out["by_site"][site]["insufficient_history_skus"] == 1
+    assert one.thirty_day_sales == 200
+    assert one.thirty_day_revenue == 2000
+    assert two.thirty_day_sales == 0
+    assert s.query(Trend).filter(Trend.site == site).count() >= 1
+    s.close()
+
+
+def test_admin_third_party_metrics_import_upserts_trends():
+    init_db()
+    from datetime import date
+    import uuid
+    import pytest
+    from fastapi import HTTPException
+
+    from app.api import admin_spine
+    from app.db import SessionLocal
+    from app.models import (AdminAuditLog, Product, Site, Trend, Workspace,
+                            WorkspaceSite)
+
+    site = f"third_party_metric_{uuid.uuid4().hex[:8]}"
+    s = SessionLocal()
+    s.query(Trend).filter(Trend.site == site).delete()
+    s.query(Product).filter(Product.site == site).delete()
+    s.query(Site).filter(Site.site == site).delete()
+    s.add(Site(site=site, brand="QA", country="US",
+               url="https://third-party-metric.example.com",
+               platform="generic"))
+    s.add(Product(site=site, sku="TP-1",
+                  title="Third Party Metric Product",
+                  product_url="https://example.com/tp-1",
+                  sale_price=10.0, review_count=3))
+    workspace = s.query(Workspace).filter(Workspace.status == "active").first()
+    assert workspace is not None
+    s.add(WorkspaceSite(workspace_id=workspace.id, site=site,
+                        display_name=site, enabled=True, hidden=False))
+    s.commit()
+
+    template = admin_spine.admin_third_party_metrics_template(
+        tenant=workspace.id, date_value="2026-06-17", user="admin", db=s)
+    assert template["count"] >= 1
+    assert template["summary"]["missing_traffic"] >= 1
+    assert template["summary"]["missing_conversion"] >= 1
+    assert site in template["csv"]
+    template_item = next(item for item in template["items"] if item["site"] == site)
+    assert template_item["missing_traffic"] is True
+    assert template_item["missing_conversion"] is True
+
+    validation = admin_spine.admin_third_party_metrics_validate(
+        {
+            "csv": (
+                "site,date,traffic,conversion_rate\n"
+                f"{site},2026-06-17,12345,2.5\n"
+            )
+        },
+        user="admin",
+        db=s,
+    )
+    assert validation["valid"] is True
+    assert validation["valid_rows"] == 1
+    assert validation["created"] == 1
+    assert validation["updated"] == 0
+    assert validation["by_site"][site]["rows"] == 1
+
+    invalid_before = s.query(Trend).filter(Trend.site == site).count()
+    invalid = admin_spine.admin_third_party_metrics_validate(
+        {
+            "csv": (
+                "site,date,traffic,conversion_rate\n"
+                f"{site},bad-date,,\n"
+                "missing_site,2026-06-17,100,2.0\n"
+            )
+        },
+        user="admin",
+        db=s,
+    )
+    assert invalid["valid"] is False
+    assert len(invalid["errors"]) == 2
+    with pytest.raises(HTTPException) as exc:
+        admin_spine.admin_third_party_metrics_import(
+            {
+                "csv": (
+                    "site,date,traffic,conversion_rate\n"
+                    f"{site},bad-date,,\n"
+                )
+            },
+            user="admin",
+            db=s,
+            ip="127.0.0.1",
+        )
+    assert exc.value.status_code == 422
+    assert s.query(Trend).filter(Trend.site == site).count() == invalid_before
+
+    before_audit = s.query(AdminAuditLog).count()
+    out = admin_spine.admin_third_party_metrics_import(
+        {
+            "csv": (
+                "site,date,traffic,conversion_rate\n"
+                f"{site},2026-06-17,12345,2.5\n"
+            )
+        },
+        user="admin",
+        db=s,
+        ip="127.0.0.1",
+    )
+
+    trend = (s.query(Trend)
+             .filter(Trend.site == site, Trend.date == date(2026, 6, 17))
+             .one())
+    assert out["status"] == "imported"
+    assert out["rows"] == 1
+    assert out["created"] == 1
+    assert out["updated"] == 0
+    assert out["by_site"][site]["rows"] == 1
+    assert trend.traffic == 12345
+    assert trend.conversion_rate == 2.5
+    assert trend.sku_count == 1
+    assert trend.review_total == 3
+    assert s.query(AdminAuditLog).count() == before_audit + 1
+
+    out2 = admin_spine.admin_third_party_metrics_import(
+        {
+            "rows": [{
+                "site": site,
+                "date": "2026-06-17",
+                "traffic": "23,456",
+                "conversion_rate": "3.1%",
+            }]
+        },
+        user="admin",
+        db=s,
+        ip="127.0.0.1",
+    )
+
+    s.refresh(trend)
+    assert out2["rows"] == 1
+    assert out2["created"] == 0
+    assert out2["updated"] == 1
+    assert out2["by_site"][site]["updated"] == 1
+    assert trend.traffic == 23456
+    assert trend.conversion_rate == 3.1
+    s.close()
+
+
+def test_proxy_anti_bot_diagnostics_and_batch_check(monkeypatch):
+    init_db()
+    from datetime import datetime, timedelta
+    from types import SimpleNamespace
+    import uuid
+
+    from app.api import admin_spine
+    from app.db import SessionLocal
+    from app.models import (AdminAuditLog, CrawlJob, ProxyRule, Site, Workspace,
+                            WorkspaceSite)
+
+    site = f"anti_bot_{uuid.uuid4().hex[:8]}"
+    s = SessionLocal()
+    workspace = s.query(Workspace).filter(Workspace.status == "active").first()
+    assert workspace is not None
+    s.add(Site(site=site, brand="AntiBot", country="US",
+               url="https://anti-bot.example.com", platform="generic",
+               proxy_tier="residential"))
+    s.add(WorkspaceSite(workspace_id=workspace.id, site=site,
+                        display_name=site, enabled=True, hidden=False))
+    failed = CrawlJob(site=site, status="failed",
+                      requested_by_workspace_id=workspace.id,
+                      failure_code="http_403",
+                      failure_stage="fetch",
+                      failure_detail="blocked by target",
+                      retryable=True,
+                      suggested_action="切换住宅代理",
+                      created_at=datetime.utcnow() - timedelta(minutes=5),
+                      finished_at=datetime.utcnow() - timedelta(minutes=4))
+    s.add(failed)
+    s.commit()
+
+    diagnostics = admin_spine.proxies_anti_bot_diagnostics(
+        tenant=workspace.id, include_hidden=False, user="admin", db=s)
+    row = next(item for item in diagnostics["items"] if item["site"] == site)
+    assert "anti_bot_blocked" in row["issues"]
+    assert row["recommended_rule"]["pool_slug"] == "residential"
+    assert diagnostics["summary"]["anti_bot_blocked"] >= 1
+
+    before_apply_audit = s.query(AdminAuditLog).count()
+    applied = admin_spine.proxies_anti_bot_apply_rules(
+        {"tenant": workspace.id, "sites": [site]},
+        user="admin",
+        db=s,
+        ip="127.0.0.1",
+    )
+    assert applied["applied_count"] == 1
+    assert applied["applied"][0]["site"] == site
+    rule = (s.query(ProxyRule)
+            .filter(ProxyRule.site_pattern == site,
+                    ProxyRule.match_type == "exact")
+            .one())
+    assert rule.proxy_mode == "pool"
+    assert rule.pool_slug == "residential"
+    assert rule.fallback_pool_slug == "datacenter"
+    assert rule.enabled is True
+    assert s.query(AdminAuditLog).count() == before_apply_audit + 1
+
+    diagnostics_after_apply = admin_spine.proxies_anti_bot_diagnostics(
+        tenant=workspace.id, include_hidden=False, user="admin", db=s)
+    applied_row = next(
+        item for item in diagnostics_after_apply["items"]
+        if item["site"] == site
+    )
+    assert applied_row["current_rule"]["site_pattern"] == site
+
+    def fake_probe_proxy_for_url(*, tier, site, url, timeout):
+        return SimpleNamespace(ok=True, status_code=200, failure=None)
+
+    import app.proxy_probe as proxy_probe
+    monkeypatch.setattr(proxy_probe, "probe_proxy_for_url",
+                        fake_probe_proxy_for_url)
+    before_audit = s.query(AdminAuditLog).count()
+    checked = admin_spine.proxies_anti_bot_check(
+        {"tenant": workspace.id, "sites": [site], "limit": 5, "timeout": 5},
+        user="admin",
+        db=s,
+        ip="127.0.0.1",
+    )
+    assert checked["checked"] == 1
+    assert checked["ok"] == 1
+    assert checked["items"][0]["probe"]["ok"] is True
+    assert checked["items"][0]["probe"]["site"] == site
+    assert s.query(AdminAuditLog).count() == before_audit + 1
+    s.close()
+
+
 def test_jobs_list_detail_retry_enqueue():
     init_db()
     from app.api import admin_spine
@@ -77,6 +464,7 @@ def test_jobs_list_detail_retry_enqueue():
 def test_jobs_stats_aggregates_all_queue_tables():
     init_db()
     from datetime import datetime, timedelta
+    from unittest.mock import patch
     from app.api import admin_spine
     from app.db import SessionLocal
     from app.models import CrawlJob, OnDemandJob, SpineJob
@@ -113,6 +501,9 @@ def test_jobs_stats_aggregates_all_queue_tables():
     stuck = admin_spine.jobs_list(status="stuck", dataset=None, tenant=None,
                                   source="all", page=1, size=20,
                                   user="admin", db=s)
+    stale_pending = admin_spine.jobs_list(status="stale_pending", dataset=None,
+                                          tenant=None, source="all", page=1,
+                                          size=20, user="admin", db=s)
     failed = admin_spine.jobs_list(status="failed", dataset=None, tenant=None,
                                    source="all", page=1, size=20,
                                    user="admin", db=s)
@@ -123,15 +514,26 @@ def test_jobs_stats_aggregates_all_queue_tables():
     assert stats["pending"] == 2
     assert stats["stale_pending"] == 1
     assert stats["partial"] == 1
+    assert stats["status_meta"]["running_raw"] == 1
+    assert stats["status_meta"]["running_active"] == 0
+    assert stats["status_meta"]["stuck"] == 1
+    assert stats["status_meta"]["stale_pending"] == 1
+    assert "运行中统计" in stats["status_count_note"]
     assert stats["by_queue"]["crawl"]["total"] == 4
     assert stats["by_queue"]["crawl"]["stale_pending"] == 1
+    assert stats["by_queue"]["crawl"]["status_meta"]["running_raw"] == 1
+    assert stats["by_queue"]["crawl"]["status_meta"]["running_active"] == 0
     assert stats["by_queue"]["ondemand"]["total"] == 2
     assert stats["breakdowns"]["crawl_blocked_by_site"] == [{"key": "site_b", "count": 1}]
+    assert stats["breakdowns"]["crawl_running_by_site"] == []
     assert stats["breakdowns"]["crawl_stale_pending_by_site"] == [{"key": "site_d", "count": 1}]
     assert stats["breakdowns"]["crawl_failure_codes"] == [{"key": "anti_bot_challenge", "count": 1}]
     assert {row["source"] for row in listed["items"]} == {"crawl", "ondemand"}
     assert running["total"] == 0
     assert stuck["total"] == 1
+    assert stale_pending["total"] == 1
+    assert stale_pending["items"][0]["site"] == "site_d"
+    assert stale_pending["items"][0]["is_stale_pending"] is True
     assert failed["total"] == 0
     blocked = admin_spine.jobs_list(status="blocked", dataset="site_b", tenant=None,
                                     source="crawl", page=1, size=20,
@@ -141,6 +543,157 @@ def test_jobs_stats_aggregates_all_queue_tables():
     assert blocked["items"][0]["failure_stage"] == "fetch"
     assert blocked["items"][0]["retryable"] is True
     assert blocked["items"][0]["suggested_action"] == "use residential proxy"
+    assert blocked["items"][0]["attempts"] is None
+    stuck_crawl_id = s.query(CrawlJob).filter(CrawlJob.site == "site_c").one().id
+    with patch("app.runner.enqueue", return_value=321):
+        retried = admin_spine.job_retry(job_id=stuck_crawl_id, source="crawl",
+                                        user="admin", db=s, ip="127.0.0.1")
+    assert retried == {
+        "job_id": 321,
+        "source": "crawl",
+        "status": "pending",
+        "retried_from": stuck_crawl_id,
+    }
+    assert blocked["items"][0]["retries"] is None
+    s.close()
+
+
+def test_jobs_list_exposes_queue_detail_fields_and_fuzzy_filters():
+    init_db()
+    import uuid
+    from datetime import datetime, timedelta
+    from app.api import admin_spine
+    from app.db import SessionLocal
+    from app.models import CrawlJob, OnDemandJob, SpineJob
+
+    suffix = uuid.uuid4().hex[:10]
+    site = f"queue_fuzzy_{suffix}"
+    dataset = f"queue_dataset_{suffix}"
+    stuck_dataset = f"queue_stuck_{suffix}"
+    platform = f"queue_platform_{suffix}"
+    now = datetime.utcnow()
+    s = SessionLocal()
+    s.add(CrawlJob(
+        site=site,
+        status="failed",
+        trigger="admin_quality_rerun",
+        worker="worker-a",
+        created_at=now - timedelta(minutes=7),
+        started_at=now - timedelta(minutes=6),
+        finished_at=now - timedelta(minutes=1),
+        duration_sec=300,
+        error="parse returned no products",
+        failure_code="parse_none",
+        failure_stage="parse",
+        failure_detail="no product cards matched",
+        retryable=True,
+        suggested_action="检查解析规则",
+    ))
+    s.add(SpineJob(
+        url=f"https://example.com/{suffix}/item",
+        dataset=dataset,
+        status="running",
+        worker="spine-worker",
+        created_at=now - timedelta(minutes=10),
+        started_at=now - timedelta(minutes=9),
+        heartbeat_at=now - timedelta(seconds=30),
+    ))
+    s.add(SpineJob(
+        url=f"https://example.com/{suffix}/stuck",
+        dataset=stuck_dataset,
+        status="running",
+        worker="spine-worker",
+        created_at=now - timedelta(hours=3),
+        started_at=now - timedelta(hours=3),
+        heartbeat_at=now - timedelta(hours=3),
+    ))
+    s.add(OnDemandJob(
+        url=f"https://shop.example.com/{suffix}",
+        platform=platform,
+        kind="listing",
+        status="failed",
+        batch_id=f"batch_{suffix}",
+        attempts=2,
+        error="platform boom",
+        created_at=now - timedelta(minutes=8),
+        finished_at=now - timedelta(minutes=2),
+    ))
+    s.commit()
+
+    stats = admin_spine.jobs_stats(user="admin", db=s)
+    assert any(row["key"] == dataset for row in stats["breakdowns"]["spine_running_by_dataset"])
+    assert any(row["key"] == stuck_dataset for row in stats["breakdowns"]["spine_stuck_by_dataset"])
+    assert any(row["key"] == platform for row in stats["breakdowns"]["ondemand_failed_by_platform"])
+
+    crawl = admin_spine.jobs_list(
+        status="failed",
+        dataset=suffix,
+        tenant=None,
+        source="crawl",
+        page=1,
+        size=20,
+        failure_code="parse_none",
+        user="admin",
+        db=s,
+    )
+    assert crawl["total"] == 1
+    crawl_row = crawl["items"][0]
+    assert crawl_row["site"] == site
+    assert crawl_row["finished_at"] is not None
+    assert crawl_row["duration_sec"] == 300
+    assert crawl_row["active_sec"] >= 300
+    assert crawl_row["retryable"] is True
+    assert crawl_row["suggested_action"] == "检查解析规则"
+
+    running = admin_spine.jobs_list(
+        status="running",
+        dataset=suffix,
+        tenant=None,
+        source="spine",
+        page=1,
+        size=20,
+        user="admin",
+        db=s,
+    )
+    assert running["total"] == 1
+    assert running["items"][0]["dataset"] == dataset
+    assert running["items"][0]["active_sec"] > 0
+    assert running["items"][0]["stuck_reason"] is None
+
+    stuck = admin_spine.jobs_list(
+        status="stuck",
+        dataset="stuck",
+        tenant=None,
+        source="spine",
+        page=1,
+        size=20,
+        user="admin",
+        db=s,
+    )
+    assert any(row["dataset"] == stuck_dataset
+               and row["stuck_reason"] == "heartbeat_missing_or_expired"
+               for row in stuck["items"])
+
+    ondemand = admin_spine.jobs_list(
+        status="failed",
+        dataset=platform,
+        tenant=None,
+        source="ondemand",
+        page=1,
+        size=20,
+        user="admin",
+        db=s,
+    )
+    assert ondemand["total"] == 1
+    assert ondemand["items"][0]["retryable"] is True
+    assert ondemand["items"][0]["duration_sec"] > 0
+
+    s.query(CrawlJob).filter(CrawlJob.site == site).delete()
+    s.query(SpineJob).filter(SpineJob.dataset.in_([dataset, stuck_dataset])).delete(
+        synchronize_session=False
+    )
+    s.query(OnDemandJob).filter(OnDemandJob.platform == platform).delete()
+    s.commit()
     s.close()
 
 
@@ -177,6 +730,13 @@ def test_job_detail_supports_all_queue_sources():
                                              user="admin", db=s)
     assert ondemand_detail["source"] == "ondemand"
     assert ondemand_detail["error"] == "ondemand boom"
+    listed = admin_spine.jobs_list(status="failed", dataset=None, tenant=None,
+                                   source="all", page=1, size=20,
+                                   user="admin", db=s)
+    source_ids = {(row["source"], row["id"]) for row in listed["items"]}
+    assert ("spine", spine.id) in source_ids
+    assert ("crawl", crawl.id) in source_ids
+    assert ("ondemand", ondemand.id) in source_ids
 
     with pytest.raises(HTTPException) as exc:
         admin_spine.job_detail(spine.id, source="missing", user="admin", db=s)
@@ -269,6 +829,138 @@ def test_admin_crawl_enqueue_creates_or_reuses_site_jobs():
         admin_spine.admin_crawl_enqueue({"site": "missing_quality_site"},
                                         user="admin", db=s, ip="")
     assert exc.value.status_code == 404
+    s.close()
+
+
+def test_promotions_rebuild_uses_existing_product_signals():
+    init_db()
+    from app.api import admin_spine
+    from app.db import SessionLocal
+    from app.models import AdminAuditLog, Product, Promotion, Site
+
+    site = "admin_promo_rebuild"
+    s = SessionLocal()
+    s.query(Promotion).filter(Promotion.site == site).delete()
+    s.query(Product).filter(Product.site == site).delete()
+    s.query(Site).filter(Site.site == site).delete()
+    s.add(Site(site=site, brand="QA", country="US",
+               url="https://promo-rebuild.example.com", platform="generic"))
+    s.add(Product(site=site, brand="QA", sku="PROMO-1",
+                  title="Adjustable Desk", sale_price=120.0,
+                  attributes={
+                      "coupon": "Save 20% with code",
+                      "promo_type": "coupon",
+                      "minimum_order": "orders over $100",
+                      "valid_from": "2026-06-01",
+                      "valid_until": "2026-06-30",
+                  }))
+    s.commit()
+    n_audit = s.query(AdminAuditLog).count()
+
+    out = admin_spine.admin_promotions_rebuild({"site": site},
+                                               user="admin", db=s, ip="1.1.1.1")
+
+    assert out["status"] == "rebuilt"
+    assert out["by_site"][site]["after"] == 1
+    assert out["by_site"][site]["created"] == 1
+    promo = s.query(Promotion).filter(Promotion.site == site).one()
+    assert promo.sku == "PROMO-1"
+    assert promo.discount_percent == 20
+    assert promo.promotion_type == "coupon"
+    assert promo.threshold == "orders over $100"
+    assert promo.start_time.isoformat() == "2026-06-01T00:00:00"
+    assert promo.end_time.isoformat() == "2026-06-30T00:00:00"
+    assert s.query(AdminAuditLog).count() == n_audit + 1
+    row = s.query(AdminAuditLog).order_by(AdminAuditLog.id.desc()).first()
+    assert row.action == "promotions.rebuild"
+    assert row.target_id == site
+    s.close()
+
+
+def test_admin_data_quality_exposes_never_crawled_sites():
+    init_db()
+    import uuid
+    from app.api import admin_spine
+    from app.db import SessionLocal
+    from app.models import CrawlJob, Product, Site, Workspace, WorkspaceSite
+
+    site = f"admin_quality_never_{uuid.uuid4().hex[:8]}"
+    s = SessionLocal()
+    workspace = s.query(Workspace).filter(Workspace.status == "active").first()
+    assert workspace is not None
+    s.query(CrawlJob).filter(CrawlJob.site == site).delete()
+    s.query(Product).filter(Product.site == site).delete()
+    s.query(WorkspaceSite).filter(WorkspaceSite.site == site).delete()
+    s.query(Site).filter(Site.site == site).delete()
+    s.add(Site(site=site, brand="QA", country="US",
+               url="https://never-crawled.example.com", platform="generic"))
+    s.add(WorkspaceSite(workspace_id=workspace.id, site=site,
+                        enabled=True, hidden=False))
+    s.commit()
+
+    out = admin_spine.admin_data_quality(
+        tenant=workspace.id, include_hidden=False, user="admin", db=s)
+    row = next(item for item in out["items"] if item["site"] == site)
+
+    assert row["sku_count"] == 0
+    assert row["crawl_queue"]["total"] == 0
+    assert "no_products" in row["issues"]
+    assert "never_crawled" in row["issues"]
+    assert out["summary"]["no_products"] >= 1
+    assert out["summary"]["never_crawled"] >= 1
+    assert out["summary"]["sites_without_jobs"] >= 1
+    s.close()
+
+
+def test_data_quality_products_exposes_trend_signal_details():
+    init_db()
+    from datetime import date
+    from app.api import admin_spine
+    from app.db import SessionLocal
+    from app.models import Product, Site, Trend
+
+    site = "admin_quality_trend_detail"
+    s = SessionLocal()
+    s.query(Trend).filter(Trend.site == site).delete()
+    s.query(Product).filter(Product.site == site).delete()
+    s.query(Site).filter(Site.site == site).delete()
+    s.add(Site(site=site, brand="QA", country="US",
+               url="https://trend-detail.example.com", platform="generic"))
+    s.add(Product(site=site, brand="QA", sku="TD-1",
+                  title="Trend Detail Product", sale_price=10.0,
+                  currency="USD"))
+    s.commit()
+
+    missing = admin_spine.admin_data_quality_products(
+        site=site, issue="traffic_missing", page=1, limit=50,
+        user="admin", db=s,
+    )
+
+    assert missing["kind"] == "trend"
+    assert missing["total"] == 1
+    assert missing["items"][0]["id"] == f"trend-missing-{site}"
+    assert "traffic_missing" in missing["items"][0]["issues"]
+    assert missing["issue_counts"]["traffic_missing"] == 1
+    assert missing["issue_counts"]["conversion_missing"] == 1
+
+    s.add(Trend(site=site, date=date(2026, 6, 16), sku_count=1,
+                new_product_count=0, estimated_sales=5,
+                estimated_revenue=50.0, traffic=None,
+                conversion_rate=0.12))
+    s.commit()
+
+    trend_rows = admin_spine.admin_data_quality_products(
+        site=site, issue="traffic_missing", page=1, limit=50,
+        user="admin", db=s,
+    )
+
+    assert trend_rows["kind"] == "trend"
+    assert trend_rows["total"] == 1
+    assert trend_rows["items"][0]["date"] == "2026-06-16"
+    assert trend_rows["items"][0]["estimated_revenue"] == 50.0
+    assert trend_rows["items"][0]["conversion_rate"] == 0.12
+    assert trend_rows["issue_counts"]["traffic_missing"] == 1
+    assert trend_rows["issue_counts"]["conversion_missing"] == 0
     s.close()
 
 
@@ -442,6 +1134,74 @@ def test_proxy_rule_create_upserts_existing_pattern():
     assert first["rule_id"] == second["rule_id"] == rows[0].id
     assert rows[0].priority == 5
     assert rows[0].notes == "prefer residential"
+    s.close()
+
+
+def test_proxy_rule_status_exposes_primary_and_fallback_availability():
+    init_db()
+    import uuid
+    from app.api import admin_spine
+    from app.db import SessionLocal
+    from app.models import ProxyEndpoint, ProxyPoolConfig, ProxyPoolMember, ProxyRule
+    from app.proxy_config import upsert_proxy_endpoint
+    from app.proxy_pool import reload_pool
+
+    suffix = uuid.uuid4().hex[:10]
+    primary_slug = f"primary_{suffix}"
+    fallback_slug = f"fallback_{suffix}"
+    site = f"proxy_site_{suffix}"
+    s = SessionLocal()
+    s.query(ProxyRule).filter(ProxyRule.site_pattern == site).delete()
+    s.commit()
+
+    primary = ProxyPoolConfig(slug=primary_slug, name=primary_slug,
+                              pool_type="datacenter", active=True,
+                              fallback_pool_slug=fallback_slug)
+    fallback = ProxyPoolConfig(slug=fallback_slug, name=fallback_slug,
+                               pool_type="residential", active=True)
+    s.add_all([primary, fallback])
+    s.flush()
+    endpoint = upsert_proxy_endpoint(
+        s,
+        proxy_url=f"http://user:pass@{suffix}.proxy.test:3128",
+        endpoint_type="residential",
+        name=f"fallback-{suffix}",
+        source="test",
+    )
+    s.flush()
+    s.add(ProxyPoolMember(pool_id=fallback.id, endpoint_id=endpoint.id,
+                          active=True, priority=1, weight=1))
+    s.commit()
+    reload_pool()
+
+    created = admin_spine.proxy_rule_create({
+        "site_pattern": site,
+        "match_type": "exact",
+        "proxy_mode": "pool",
+        "pool_slug": primary_slug,
+        "priority": 1,
+    }, user="admin", db=s, ip="")
+
+    rule = next(r for r in created["rules"] if r["site_pattern"] == site)
+    assert rule["primary_pool_slug"] == primary_slug
+    assert rule["fallback_pool_slug"] == fallback_slug
+    assert rule["primary_member_count"] == 0
+    assert rule["primary_available_count"] == 0
+    assert rule["fallback_member_count"] == 1
+    assert rule["fallback_available_count"] == 1
+    assert rule["effective_status"] == "fallback_available"
+
+    s.query(ProxyRule).filter(ProxyRule.site_pattern == site).delete()
+    s.query(ProxyPoolMember).filter(ProxyPoolMember.pool_id.in_([primary.id, fallback.id])).delete(
+        synchronize_session=False
+    )
+    s.query(ProxyPoolMember).filter(ProxyPoolMember.endpoint_id == endpoint.id).delete()
+    s.query(ProxyEndpoint).filter(ProxyEndpoint.id == endpoint.id).delete()
+    s.query(ProxyPoolConfig).filter(ProxyPoolConfig.slug.in_([primary_slug, fallback_slug])).delete(
+        synchronize_session=False
+    )
+    s.commit()
+    reload_pool()
     s.close()
 
 

@@ -19,13 +19,17 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 
 from selectolax.parser import HTMLParser
 
+from ..antiban import BlockedError
 from ..config import get_sites
 from .base import BaseCrawler, CrawlResult
 
 DEFAULT_LIMIT = int(os.environ.get("SHOPER_LIMIT", "200"))
+DEFAULT_MAX_ELAPSED_SEC = int(os.environ.get("SHOPER_MAX_ELAPSED_SEC", "180"))
+DEFAULT_CANDIDATE_CAP = int(os.environ.get("SHOPER_CANDIDATE_CAP", "400"))
 _LD_RE = re.compile(
     r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', re.S)
 _PRICE_RE = re.compile(r"[\d.,]+")
@@ -49,6 +53,8 @@ class ShoperCrawler(BaseCrawler):
         hints = next((c for c in get_sites() if c["site"] == site.site), {})
         self.base = site.url.rstrip("/")
         self.limit = self._resolve_limit(DEFAULT_LIMIT)
+        self.max_elapsed_sec = DEFAULT_MAX_ELAPSED_SEC
+        self.candidate_cap = min(max(self.limit, 1) * 2, DEFAULT_CANDIDATE_CAP)
         # 用户可在 sites.yaml 显式指定类别 URL；否则自动从主页发现
         self.category_urls: list[str] = hints.get("category_urls") or []
 
@@ -61,7 +67,13 @@ class ShoperCrawler(BaseCrawler):
 
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        fetcher = self.make_fetcher(kind="product", source="shoper")
+        started = time.monotonic()
+        fetcher = self.make_fetcher(
+            kind="product",
+            source="shoper",
+            fail_fast_blocked=True,
+            retries=0,
+        )
 
         # 1. 拿类别列表
         if not self.category_urls:
@@ -78,9 +90,12 @@ class ShoperCrawler(BaseCrawler):
                 "配置 category_urls")
 
         # 2. 从类别页抓商品 slug
-        product_urls = self._collect_product_urls(fetcher, self.category_urls)
+        collect_budget = max(15, min(60, int(self.max_elapsed_sec * 0.35)))
+        product_urls = self._collect_product_urls(
+            fetcher, self.category_urls, started, collect_budget)
         result.notes.append(
-            f"从类别页收集 {len(product_urls)} 个商品候选 URL")
+            f"从类别页收集 {len(product_urls)} 个商品候选 URL"
+            f"（收集预算 {collect_budget}s / 上限 {self.candidate_cap}）")
 
         targets = product_urls[: self.limit]
         if not targets:
@@ -90,11 +105,18 @@ class ShoperCrawler(BaseCrawler):
         # 3. 抓商品页
         ok = 0
         for url in targets:
+            if self._elapsed(started) >= self.max_elapsed_sec:
+                result.notes.append(
+                    f"达到 Shoper 总耗时上限 {self.max_elapsed_sec}s，"
+                    f"提前停止，已解析 {ok}/{len(targets)}")
+                break
             try:
                 row = self._parse_product(fetcher, url)
                 if row:
                     result.products.append(row)
                     ok += 1
+            except BlockedError:
+                raise
             except Exception as exc:
                 result.notes.append(f"跳过 {url[-50:]}: {exc}")
             self.sleep()
@@ -104,7 +126,9 @@ class ShoperCrawler(BaseCrawler):
     # ---------- 类别发现 ----------
     def _discover_categories(self, fetcher) -> list[str]:
         try:
-            res = fetcher.get(self.base + "/", headers=self._headers(), timeout=20)
+            res = fetcher.get(self.base + "/", headers=self._headers(), timeout=12)
+        except BlockedError:
+            raise
         except Exception:
             return []
         if (res.status or 0) != 200:
@@ -136,13 +160,19 @@ class ShoperCrawler(BaseCrawler):
         return out
 
     def _collect_product_urls(self, fetcher,
-                               cat_urls: list[str]) -> list[str]:
+                               cat_urls: list[str],
+                               started: float,
+                               collect_budget_sec: int) -> list[str]:
         seen: set[str] = set()
         out: list[str] = []
         known_categories = {u.replace(self.base, "") for u in cat_urls}
         for cat_url in cat_urls:
+            if self._elapsed(started) >= collect_budget_sec:
+                break
             try:
-                res = fetcher.get(cat_url, headers=self._headers(), timeout=30)
+                res = fetcher.get(cat_url, headers=self._headers(), timeout=12)
+            except BlockedError:
+                raise
             except Exception:
                 continue
             if (res.status or 0) != 200:
@@ -165,14 +195,14 @@ class ShoperCrawler(BaseCrawler):
                     continue
                 seen.add(full)
                 out.append(full)
-                if len(out) >= self.limit * 2:        # 留点缓冲
+                if len(out) >= self.candidate_cap:        # 留点缓冲
                     return out
             self.sleep()
         return out
 
     # ---------- 商品解析 ----------
     def _parse_product(self, fetcher, url: str) -> dict | None:
-        res = fetcher.get(url, headers=self._headers(), timeout=30)
+        res = fetcher.get(url, headers=self._headers(), timeout=12)
         if not res.ok:
             return None
         html = res.text
@@ -311,6 +341,10 @@ class ShoperCrawler(BaseCrawler):
             return int(float(v))
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _elapsed(started: float) -> float:
+        return time.monotonic() - started
 
 
 def _is_product_type(t) -> bool:
