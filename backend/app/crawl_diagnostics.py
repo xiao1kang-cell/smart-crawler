@@ -34,6 +34,8 @@ ZERO_PRODUCTS = "zero_products"
 JOB_TIMEOUT = "job_timeout"
 BROWSER_DEPENDENCY_MISSING = "browser_dependency_missing"
 UNSUPPORTED_PLATFORM = "unsupported_platform"
+RESOURCE_EXHAUSTED = "resource_exhausted"
+WORKER_INTERRUPTED = "worker_interrupted"
 UNKNOWN = "unknown"
 
 STAGE_DISCOVER = "discover"
@@ -114,6 +116,26 @@ def classify_exception(exc: Exception, *, stage: str = STAGE_JOB) -> FailureInfo
         return FailureInfo(
             NETWORK_TIMEOUT, stage, text, True,
             "检查代理连通性，必要时降低超时和并发")
+    if "can't start new thread" in low or "cannot start new thread" in low:
+        return FailureInfo(
+            RESOURCE_EXHAUSTED, STAGE_JOB, text, True,
+            "worker 线程/资源耗尽；降低并发、重启 worker 后重跑")
+    if (
+        "broken pipe" in low
+        or "manual rerun interrupted" in low
+        or "stale-worker-cleanup" in low
+        or "stale running job" in low
+        or "watchdog-orphan-cleanup" in low
+        or "orphaned:" in low
+        or "zombie" in low
+        or "容器重建" in text
+        or "manual cleanup" in low
+        or "killed" in low
+        or "reset for fast iter" in low
+    ):
+        return FailureInfo(
+            WORKER_INTERRUPTED, STAGE_JOB, text, True,
+            "任务被重启/清理/人工中断；确认当前 worker 正常后重跑")
     if "proxy" in low and ("auth" in low or "credentials" in low):
         return FailureInfo(
             PROXY_AUTH_FAILED, STAGE_FETCH, text, False,
@@ -131,6 +153,7 @@ def classify_exception(exc: Exception, *, stage: str = STAGE_JOB) -> FailureInfo
         or "连续被拦截" in text
         or ("连续" in text and "封锁" in text)
         or "熔断 ok=0" in low
+        or ("熔断" in text and ("403" in text or "429" in text or "target" in low))
     ):
         return FailureInfo(
             ANTI_BOT_CHALLENGE, STAGE_FETCH, text, True,
@@ -149,6 +172,12 @@ def classify_exception(exc: Exception, *, stage: str = STAGE_JOB) -> FailureInfo
         return classify_http_status(403, text) or _unknown(text, stage)
     if "返回 429" in text:
         return classify_http_status(429, text) or _unknown(text, stage)
+    if "http error 503" in low or "http 503" in low:
+        return classify_http_status(503, text) or _unknown(text, stage)
+    if "http error 502" in low or "http 502" in low:
+        return classify_http_status(502, text) or _unknown(text, stage)
+    if "http error 500" in low or "http 500" in low:
+        return classify_http_status(500, text) or _unknown(text, stage)
     return _unknown(text, stage)
 
 

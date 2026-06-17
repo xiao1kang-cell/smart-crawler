@@ -160,7 +160,7 @@ def test_repair_failure_diagnostics_reclassifies_unknown_jobs():
         s.close()
 
 
-def test_repair_failure_diagnostics_does_not_repeat_still_unknown_jobs():
+def test_repair_failure_diagnostics_reclassifies_worker_interruptions_once():
     init_db()
     s = SessionLocal()
     try:
@@ -179,13 +179,15 @@ def test_repair_failure_diagnostics_does_not_repeat_still_unknown_jobs():
     finally:
         s.close()
 
-    _repair_missing_failure_diagnostics(limit=20)
+    assert _repair_missing_failure_diagnostics(limit=20) >= 1
+    assert _repair_missing_failure_diagnostics(limit=20) == 0
 
     s = SessionLocal()
     try:
         job = s.get(CrawlJob, job_id)
         after = s.query(CrawlFailure).filter(CrawlFailure.job_id == job_id).count()
-        assert job.failure_code == "unknown"
-        assert after == before
+        assert job.failure_code == "worker_interrupted"
+        assert job.retryable is True
+        assert after == before + 1
     finally:
         s.close()

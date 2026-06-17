@@ -9,7 +9,10 @@ from app.crawl_diagnostics import (
     MARKET_PAUSED,
     NETWORK_TIMEOUT,
     JOB_TIMEOUT,
+    HTTP_5XX,
+    RESOURCE_EXHAUSTED,
     UNSUPPORTED_PLATFORM,
+    WORKER_INTERRUPTED,
     classify_exception,
     classify_http_status,
     job_timeout_failure,
@@ -76,3 +79,32 @@ def test_classifies_unknown_platform_as_configuration_issue():
 
     assert info.code == UNSUPPORTED_PLATFORM
     assert info.retryable is False
+
+
+def test_classifies_target_circuit_breaker_as_anti_bot():
+    info = classify_exception(RuntimeError("熔断：target 连续 8 次 403/429，熔断（站点已进入冷却期）"))
+
+    assert info.code == ANTI_BOT_CHALLENGE
+    assert info.retryable is True
+
+
+def test_classifies_worker_interruption_cleanup():
+    info = classify_exception(RuntimeError("[Errno 32] Broken pipe Traceback ... runner.py"))
+
+    assert info.code == WORKER_INTERRUPTED
+    assert info.stage == "job"
+    assert info.retryable is True
+
+
+def test_classifies_resource_exhausted_thread_failure():
+    info = classify_exception(RuntimeError("can't start new thread"))
+
+    assert info.code == RESOURCE_EXHAUSTED
+    assert info.retryable is True
+
+
+def test_classifies_http_error_503_text():
+    info = classify_exception(RuntimeError("HTTP Error 503: service unavailable"))
+
+    assert info.code == HTTP_5XX
+    assert info.http_status == 503
