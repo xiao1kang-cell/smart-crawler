@@ -204,3 +204,71 @@ def test_admin_proxy_pools_expose_effective_fallback_availability():
     assert residential_payload["effective_status"] == "fallback_available"
 
     s.close()
+
+
+def test_admin_proxy_endpoint_check_records_endpoint_health(monkeypatch):
+    init_db()
+    from datetime import datetime, timedelta
+    from app.api import admin_spine
+    from app.models import ProxyHealth
+    from app.proxy_config import upsert_proxy_endpoint
+    from app.proxy_health import proxy_hash, redact_proxy
+    from app import proxy_probe
+
+    proxy = "http://u:p@10.0.5.1:3128"
+
+    class FakeResponse:
+        status_code = 204
+
+    class FakeSession:
+        def __init__(self, *args, **kwargs):
+            self.proxies = {}
+
+        def get(self, url, timeout):
+            assert self.proxies == {"http": proxy, "https": proxy}
+            assert url == "https://probe.example.test/health"
+            assert timeout == 5
+            return FakeResponse()
+
+    monkeypatch.setattr(proxy_probe.creq, "Session", FakeSession)
+
+    s = SessionLocal()
+    _clean_proxy_config(s)
+    endpoint = upsert_proxy_endpoint(
+        s,
+        proxy_url=proxy,
+        endpoint_type="residential",
+        source="test",
+    )
+    s.add(ProxyHealth(
+        proxy_hash=proxy_hash(proxy),
+        proxy_redacted=redact_proxy(proxy),
+        tier="residential",
+        status="down",
+        blocked_until=datetime.utcnow() + timedelta(minutes=10),
+        consecutive_failures=3,
+        updated_at=datetime.utcnow(),
+    ))
+    s.commit()
+
+    out = admin_spine.proxy_endpoint_check(
+        endpoint.id,
+        {"url": "https://probe.example.test/health", "timeout": 5},
+        user="admin",
+        db=s,
+        ip="127.0.0.1",
+    )
+    s.expire_all()
+    health = (s.query(ProxyHealth)
+              .filter(ProxyHealth.proxy_hash == proxy_hash(proxy))
+              .one())
+    endpoint_payload = next(row for row in out["endpoints"] if row["id"] == endpoint.id)
+
+    assert out["probe"]["ok"] is True
+    assert out["probe"]["endpoint_id"] == endpoint.id
+    assert health.status == "healthy"
+    assert health.consecutive_failures == 0
+    assert health.blocked_until is None
+    assert endpoint_payload["health_status"] == "healthy"
+
+    s.close()

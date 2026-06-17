@@ -9,6 +9,7 @@ import {
   proxyAntiBotDiagnostics,
   proxyCheck,
   proxyClear,
+  proxyEndpointCheck,
   proxyEndpointCreate,
   proxyEndpointUpdate,
   proxyImportFile,
@@ -213,6 +214,13 @@ function createEndpoint() {
 
 function toggleEndpoint(row: Record<string, any>) {
   return runAction(`endpoint:${row.id}`, () => proxyEndpointUpdate(row.id, { active: !row.active }), row.active ? '代理端点已停用' : '代理端点已启用')
+}
+
+function checkEndpoint(row: Record<string, any>) {
+  return runAction(`endpoint-check:${row.id}`, () => proxyEndpointCheck(row.id, {
+    url: probeForm.value.url,
+    timeout: probeForm.value.timeout || 8
+  }), '代理端点检测已完成')
 }
 
 function createPool() {
@@ -572,11 +580,19 @@ watch(() => route.fullPath, applyRouteContext)
               <td>{{ (row.pools || []).join(', ') || '-' }}</td>
               <td>{{ (row.exclude || []).join(', ') || '-' }}</td>
               <td>{{ row.source || '-' }}</td>
-              <td><span class="badge" :class="row.active ? 'ok' : 'warn'">{{ row.active ? '启用' : '停用' }}</span></td>
+              <td>
+                <div class="state-stack">
+                  <span class="badge" :class="row.active ? 'ok' : 'warn'">{{ row.active ? '启用' : '停用' }}</span>
+                  <span class="badge" :class="statusClass(row.health || {})">{{ statusLabel(row.health_status || row.health?.status) }}</span>
+                </div>
+              </td>
               <td>
                 <button class="icon-btn" :disabled="!!busy" @click="toggleEndpoint(row)">
                   <ToggleRight v-if="row.active" class="size-4" />
                   <ToggleLeft v-else class="size-4" />
+                </button>
+                <button class="btn small" :disabled="!!busy" @click="checkEndpoint(row)">
+                  {{ busy === `endpoint-check:${row.id}` ? '检测中' : '检测' }}
                 </button>
               </td>
             </tr>
@@ -951,6 +967,13 @@ watch(() => route.fullPath, applyRouteContext)
 .proxy-cell span {
   font-size: 11px;
   opacity: 0.55;
+}
+
+.state-stack {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .badge {

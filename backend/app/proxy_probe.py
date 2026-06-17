@@ -48,6 +48,28 @@ def probe_proxy_for_url(
         )
         return ProxyProbeResult(False, None, failure)
 
+    return probe_proxy_url(proxy_url=proxy, tier=tier, url=url, timeout=timeout)
+
+
+def probe_proxy_url(
+    *,
+    proxy_url: str,
+    tier: str | None,
+    url: str,
+    timeout: int = 8,
+) -> ProxyProbeResult:
+    """Verify a specific proxy endpoint, bypassing route fallback selection."""
+    proxy = (proxy_url or "").strip()
+    if not proxy:
+        failure = FailureInfo(
+            "proxy_unavailable",
+            STAGE_FETCH,
+            "代理端点为空",
+            True,
+            "检查代理端点配置",
+        )
+        return ProxyProbeResult(False, None, failure)
+
     sess = creq.Session(impersonate="chrome")
     sess.proxies = {"http": proxy, "https": proxy}
     try:

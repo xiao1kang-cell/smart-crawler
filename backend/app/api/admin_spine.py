@@ -2448,6 +2448,8 @@ def _proxy_admin_payload(db: Session) -> dict:
             {
                 **endpoint_dict(row, pools=sorted(pools_by_endpoint.get(row.id, []))),
                 "pool_available": bool((pool_by_endpoint_id.get(row.id) or {}).get("available")),
+                "health": _proxy_health_dict(health_by_hash.get(row.proxy_hash)),
+                "health_status": _proxy_health_dict(health_by_hash.get(row.proxy_hash))["status"],
             }
             for row in endpoints
         ],
@@ -2627,6 +2629,49 @@ def proxy_endpoint_update(endpoint_id: int, payload: dict,
     db.commit()
     _reload_pool_safely()
     return {"endpoint_id": row.id, **_proxy_admin_payload(db)}
+
+
+@router.post("/proxies/endpoints/{endpoint_id}/check")
+def proxy_endpoint_check(endpoint_id: int, payload: dict | None = None,
+                         user: str = Depends(require_user),
+                         db: Session = Depends(get_db),
+                         ip: str = Header(default="", alias="X-Forwarded-For")) -> dict:
+    """直接检测某个代理端点，不走站点规则或 fallback。"""
+    actor = _require_super_admin(user, db)
+    row = db.get(ProxyEndpoint, endpoint_id)
+    if row is None or not row.proxy_url:
+        raise HTTPException(404, {"error": "proxy_endpoint_not_found",
+                                  "endpoint_id": endpoint_id})
+    payload = payload or {}
+    url = payload.get("url") or "https://www.vidaxl.de/sitemap_index.xml"
+    timeout = max(3, min(30, int(payload.get("timeout") or 8)))
+    from ..proxy_probe import probe_proxy_url
+
+    result = probe_proxy_url(
+        proxy_url=row.proxy_url,
+        tier=row.endpoint_type,
+        url=url,
+        timeout=timeout,
+    )
+    failure = result.failure
+    detail = {
+        "endpoint_id": row.id,
+        "endpoint_type": row.endpoint_type,
+        "proxy": row.proxy_redacted,
+        "url": url,
+        "ok": result.ok,
+        "status_code": result.status_code,
+        "failure_code": failure.code if failure else None,
+        "failure_stage": failure.stage if failure else None,
+        "failure_detail": failure.detail if failure else None,
+    }
+    record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
+                 action="proxy.endpoint.check", target_type="proxy_endpoint",
+                 target_id=str(row.id), detail=detail, ip=ip or None)
+    db.commit()
+    _reload_pool_safely()
+    db.expire_all()
+    return {"probe": detail, **_proxy_admin_payload(db)}
 
 
 @router.post("/proxies/pools")

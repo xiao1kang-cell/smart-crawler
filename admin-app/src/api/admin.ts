@@ -25,6 +25,7 @@ export const proxyAntiBotCheck = (payload: Dict<any> = {}) => apiJson('/api/admi
 export const proxyAntiBotApplyRules = (payload: Dict<any> = {}) => apiJson('/api/admin/spine/proxies/anti-bot/apply-rules', { method: 'POST', ...jsonBody(payload) })
 export const proxyEndpointCreate = (payload: Dict<any>) => apiJson('/api/admin/spine/proxies/endpoints', { method: 'POST', ...jsonBody(payload) })
 export const proxyEndpointUpdate = (id: number, payload: Dict<any>) => apiJson(`/api/admin/spine/proxies/endpoints/${id}`, { method: 'PATCH', ...jsonBody(payload) })
+export const proxyEndpointCheck = (id: number, payload: Dict<any> = {}) => apiJson(`/api/admin/spine/proxies/endpoints/${id}/check`, { method: 'POST', ...jsonBody(payload) })
 export const proxyPoolCreate = (payload: Dict<any>) => apiJson('/api/admin/spine/proxies/pools', { method: 'POST', ...jsonBody(payload) })
 export const proxyPoolUpdate = (id: number, payload: Dict<any>) => apiJson(`/api/admin/spine/proxies/pools/${id}`, { method: 'PATCH', ...jsonBody(payload) })
 export const proxyPoolMemberUpsert = (poolId: number, payload: Dict<any>) => apiJson(`/api/admin/spine/proxies/pools/${poolId}/members`, { method: 'POST', ...jsonBody(payload) })
