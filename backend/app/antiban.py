@@ -20,7 +20,7 @@ RATE_TIERS = {
     "shopify": 1.0,
     "vue_spa": 1.5,
     "nuxt": 2.0,
-    "shoper": 0.35,
+    "shoper": 1.0,
     "generic": 2.0,
     "flexispot": 2.0,
     "vonhaus": 2.0,
@@ -104,3 +104,45 @@ def humanized_sleep(base: float) -> None:
 def _rand() -> float:
     import random
     return random.random()
+
+
+# ---------- 按站点令牌桶限速 ----------
+class SiteRateLimiter:
+    """每站点一个「下次可发包时刻」，并发线程抢同一把锁串行推进。
+
+    语义：同一 site 的相邻 acquire 至少间隔 interval 秒。8 个并发线程
+    抢同一 site 的桶时，合计放行速率不超过 1/interval —— 真正按住频率。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._next_at: dict[str, float] = {}   # site -> 下次可发包的 monotonic 时刻
+
+    def acquire(self, site: str, *, interval: float,
+                max_wait: float = 30.0) -> None:
+        """阻塞到该 site 的下次可发包时刻，单次最多 sleep max_wait 秒。
+
+        当 earliest - now > max_wait 时，调用方只 sleep max_wait，但桶仍按
+        完整 interval 预约下次时刻；即 max_wait 触发时会「提前放行、短暂超过
+        1/interval 速率」——这是有意的「限制阻塞时长优先」权衡。
+        """
+        if interval <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            earliest = self._next_at.get(site, now)
+            wait = min(max(earliest - now, 0.0), max_wait)
+            # 预约本次发包时刻，下一个等待者从这之后再排
+            self._next_at[site] = max(earliest, now) + interval
+        if wait > 0:
+            time.sleep(wait)
+
+
+_rate_limiter = SiteRateLimiter()
+
+
+def acquire_rate(site: str, platform: str,
+                 default: float = 1.5, max_wait: float = 30.0) -> None:
+    """模块级便捷入口：按 platform 的 RATE_TIERS 间隔限速该 site。"""
+    interval = rate_delay(platform, default)
+    _rate_limiter.acquire(site, interval=interval, max_wait=max_wait)
