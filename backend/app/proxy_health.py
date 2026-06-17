@@ -87,6 +87,7 @@ def record_proxy_result(
         row.blocked_until = now + timedelta(seconds=cooldown_sec)
     else:
         row.status = "degraded"
+        row.blocked_until = now + timedelta(seconds=cooldown_sec)
     return row
 
 

@@ -93,6 +93,29 @@ def test_unhealthy_proxy_hashes_returns_blocked_proxy(session):
     assert proxy_hash(proxy) in unhealthy_proxy_hashes(session)
 
 
+def test_proxy_health_cools_down_degraded_network_failure(session):
+    proxy = "http://user:pass@127.0.0.20:3128"
+    info = FailureInfo("network_timeout", STAGE_FETCH, "connect timed out", True,
+                       "check network")
+
+    record_proxy_result(session, proxy_url=proxy, tier="residential",
+                        success=False, failure=info, cooldown_sec=600)
+    session.commit()
+
+    row = session.query(ProxyHealth).filter(
+        ProxyHealth.proxy_hash == proxy_hash(proxy)).one()
+    assert row.status == "degraded"
+    assert row.blocked_until is not None
+    assert proxy_hash(proxy) in unhealthy_proxy_hashes(session)
+
+    record_proxy_result(session, proxy_url=proxy, tier="residential", success=True)
+    session.commit()
+
+    assert row.status == "healthy"
+    assert row.blocked_until is None
+    assert proxy_hash(proxy) not in unhealthy_proxy_hashes(session)
+
+
 def test_unhealthy_proxy_hashes_keeps_down_proxy_out_after_cooldown(session):
     from datetime import datetime, timedelta
 
