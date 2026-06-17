@@ -179,8 +179,7 @@ class CrawlerFetcher:
                 self._raise_if_blocked_budget_exceeded(stealth)
             if not _should_retry(self.context, result, attempt, attempts):
                 break
-            if self.context.rotate_proxy_on_retry:
-                time.sleep(min(2 * attempt, 5))
+            time.sleep(_backoff_seconds(result, attempt))
         return last or FetchResult(ok=False, url=url, failure=FailureInfo(
             "unknown", STAGE_FETCH, "fetch produced no result", True,
             "检查 fetcher 配置"))

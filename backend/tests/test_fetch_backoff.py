@@ -41,3 +41,30 @@ def test_parse_retry_after_http_date_returns_none():
     assert _parse_retry_after("Wed, 21 Oct 2026 07:28:00 GMT") is None
     assert _parse_retry_after("") is None
     assert _parse_retry_after(None) is None
+
+
+def test_retry_loop_uses_backoff_not_fixed_sleep(monkeypatch):
+    """重试循环按 _backoff_seconds 退避,而非固定 min(2*attempt,5)。"""
+    import app.fetching as fetching
+    from app.fetching import CrawlerFetcher, FetchContext, FetchResult
+    from app.crawl_diagnostics import FailureInfo, HTTP_429, STAGE_FETCH
+    from app.models import Site
+
+    slept = []
+    monkeypatch.setattr(fetching.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(fetching, "acquire_rate", lambda *a, **k: None)
+
+    site = Site(site="costway_it", platform="magento", proxy_tier="none",
+                country="IT", url="https://www.costway.it/")
+    fetcher = CrawlerFetcher(FetchContext(site=site, use_proxy=False, retries=2))
+
+    def fake_429(method, url, **kw):
+        r = FetchResult(ok=False, url=url, status=429,
+                        failure=FailureInfo(HTTP_429, STAGE_FETCH, "429", True, "慢"))
+        r.retry_after = 30.0
+        return r
+
+    monkeypatch.setattr(fetcher, "_request_once", fake_429)
+    fetcher.get("https://www.costway.it/p/1")
+    # 至少有一次按 Retry-After=30 退避(而非旧的 5s 封顶)
+    assert any(s == 30.0 for s in slept)
