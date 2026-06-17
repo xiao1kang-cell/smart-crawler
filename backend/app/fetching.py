@@ -94,6 +94,7 @@ class FetchContext:
     require_proxy: bool | None = None
     max_blocked_events: int = 0
     counter: CrawlCounter | None = None
+    residential_fallback_threshold: int = 3
 
 
 @dataclass
@@ -138,6 +139,44 @@ class CrawlerFetcher:
             AntiBotMiddleware(),
             SnapshotMetricsMiddleware(),
         ]
+        self._fail_count = 0
+        self._upgraded_tier: str | None = None
+
+    def effective_tier(self) -> str | None:
+        """当前生效的代理 tier：升级后为 residential，否则站点配置值。"""
+        return self._upgraded_tier or self.context.site.proxy_tier
+
+    def note_failure(self, result: "FetchResult") -> None:
+        """累计 429/anti_bot 失败；达阈值且住宅可用则升级。"""
+        if not (result.failure and result.failure.code in (HTTP_429, ANTI_BOT_CHALLENGE)):
+            return
+        self._fail_count += 1
+        if self._upgraded_tier is not None:
+            return
+        if self._fail_count < self.context.residential_fallback_threshold:
+            return
+        if proxy_pool.has_available_proxy("residential", site=self.context.site.site):
+            self._upgraded_tier = "residential"
+        else:
+            self._record_no_proxy_diag()
+
+    def _record_no_proxy_diag(self) -> None:
+        """达升级阈值但住宅代理池空 —— 记一条诊断，不静默裸打。"""
+        db = SessionLocal()
+        try:
+            info = FailureInfo(
+                PROXY_UNAVAILABLE, STAGE_FETCH,
+                f"{self.context.site.site} 累计 {self._fail_count} 次反爬，"
+                f"但无可用住宅代理，无法升级",
+                True, "检查住宅代理池余额/白名单/冷却状态")
+            record_failure(db, site=self.context.site.site,
+                           job_id=self.context.job_id, info=info,
+                           proxy_tier=self.context.site.proxy_tier)
+            db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
 
     def get(self, url: str, **kwargs) -> FetchResult:
         return self._retry_loop("GET", url, with_stealth=True, **kwargs)
@@ -166,6 +205,7 @@ class CrawlerFetcher:
                 self._blocked_events = 0
                 self._count(result)
                 return result
+            self.note_failure(result)
             self._raise_if_blocked_budget_exceeded(result)
             if with_stealth and self.context.allow_stealth and _should_stealth(result):
                 stealth = self._get_stealth(url, attempt=attempt)
@@ -351,19 +391,20 @@ class ProxyMiddleware:
         ctx = fetcher.context
         if "_proxy" in kwargs:
             return
-        if not ctx.use_proxy or ctx.site.proxy_tier in (None, "", "none"):
+        tier = fetcher.effective_tier()
+        if not ctx.use_proxy or tier in (None, "", "none"):
             return
-        proxy = proxy_pool.get_proxy(ctx.site.proxy_tier, site=ctx.site.site)
+        proxy = proxy_pool.get_proxy(tier, site=ctx.site.site)
         if proxy:
             kwargs["_proxy"] = proxy
             return
         require_proxy = (
             ctx.require_proxy
             if ctx.require_proxy is not None
-            else ctx.site.proxy_tier not in (None, "", "none")
+            else tier not in (None, "", "none")
         )
         if require_proxy:
-            kwargs["_proxy_unavailable_tier"] = ctx.site.proxy_tier
+            kwargs["_proxy_unavailable_tier"] = tier
 
     def after_response(self, fetcher: CrawlerFetcher,
                        result: FetchResult) -> None:
