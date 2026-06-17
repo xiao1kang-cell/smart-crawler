@@ -202,6 +202,14 @@ def test_admin_proxy_pools_expose_effective_fallback_availability():
     assert residential_payload["fallback_available_count"] == 1
     assert residential_payload["effective_available_count"] == 1
     assert residential_payload["effective_status"] == "fallback_available"
+    diagnostics = out["diagnostics"]["items"]
+    residential_diag = next(row for row in diagnostics
+                            if row["pool_slug"] == "residential")
+    assert residential_diag["severity"] == "warning"
+    assert residential_diag["status"] == "fallback_available"
+    assert residential_diag["member_count"] == 1
+    assert residential_diag["fallback_pool_slug"] == "datacenter"
+    assert residential_diag["fallback_available_count"] == 1
 
     s.close()
 

@@ -79,6 +79,8 @@ const antiBotItems = computed(() => antiBot.value?.items || [])
 const antiBotSummary = computed(() => antiBot.value?.summary || {})
 const pool = computed(() => info.value?.pool || {})
 const health = computed(() => info.value?.health || {})
+const diagnostics = computed(() => info.value?.diagnostics || {})
+const diagnosticItems = computed(() => diagnostics.value?.items || [])
 const byStatus = computed(() => health.value?.by_status || {})
 const available = computed(() => Object.values(pool.value?.by_tier || {}).reduce(
   (sum: number, row: any) => sum + Number(row?.available || 0),
@@ -234,7 +236,7 @@ function checkEndpoints(endpointType = '') {
       timeout: probeForm.value.timeout || 8,
       endpoint_type: endpointType || undefined,
       active_only: true,
-      limit: 50
+      limit: 100
     }),
     endpointType ? `${endpointType} 端点批量检测已完成` : '全部端点批量检测已完成'
   )
@@ -329,6 +331,21 @@ function ruleStatusClass(status?: string) {
   return 'bad'
 }
 
+function diagnosticClass(row: Record<string, any>) {
+  return row.severity === 'critical' ? 'bad' : 'warn'
+}
+
+function failureSummary(row: Record<string, any>) {
+  const counts = row.failure_counts || {}
+  const pairs = Object.entries(counts)
+    .filter(([, value]) => Number(value) > 0)
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .slice(0, 3)
+  return pairs.length
+    ? pairs.map(([key, value]) => `${key}: ${fmtNumber(value as number)}`).join(' · ')
+    : '暂无失败码'
+}
+
 function rulePoolSummary(row: Record<string, any>) {
   if (row.effective_status === 'direct') return '不使用代理'
   const primary = row.primary_pool_slug
@@ -391,6 +408,26 @@ watch(() => route.fullPath, applyRouteContext)
         <span>{{ routeSite || '站点未指定' }} · {{ routeIssueLabel || '代理前置条件' }}</span>
       </div>
       <span>已预填代理预检和站点规则，优先验证住宅池可用性。</span>
+    </div>
+
+    <div v-if="diagnosticItems.length" class="diagnostic-stack">
+      <div
+        v-for="row in diagnosticItems"
+        :key="row.pool_slug"
+        class="diagnostic-panel"
+        :class="diagnosticClass(row)"
+      >
+        <div>
+          <b>{{ row.pool_name || row.pool_slug }}</b>
+          <span>{{ row.message }}</span>
+          <span>{{ row.suggested_action }}</span>
+        </div>
+        <div class="diagnostic-meta">
+          <span>主池 {{ fmtNumber(row.available_count) }}/{{ fmtNumber(row.member_count) }}</span>
+          <span v-if="row.fallback_pool_slug">备用 {{ row.fallback_pool_slug }}: {{ fmtNumber(row.fallback_available_count) }}</span>
+          <span>{{ failureSummary(row) }}</span>
+        </div>
+      </div>
     </div>
 
     <div class="stat-row">
@@ -782,6 +819,55 @@ watch(() => route.fullPath, applyRouteContext)
   line-height: 1.45;
 }
 
+.diagnostic-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.diagnostic-panel {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--ui-border, rgba(255, 255, 255, 0.12));
+  font-size: 12px;
+}
+
+.diagnostic-panel.warn {
+  border-color: rgba(245, 158, 11, 0.32);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.diagnostic-panel.bad {
+  border-color: rgba(239, 68, 68, 0.32);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.diagnostic-panel > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.diagnostic-panel b {
+  font-size: 13px;
+  color: var(--ui-text, #e5e7eb);
+}
+
+.diagnostic-panel span {
+  color: var(--ui-muted, #9ca3af);
+  line-height: 1.45;
+}
+
+.diagnostic-meta {
+  flex: 0 0 auto;
+  text-align: right;
+}
+
 .block {
   display: flex;
   flex-direction: column;
@@ -1095,6 +1181,14 @@ watch(() => route.fullPath, applyRouteContext)
   .page-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .diagnostic-panel {
+    flex-direction: column;
+  }
+
+  .diagnostic-meta {
+    text-align: left;
   }
 
   .head-actions {

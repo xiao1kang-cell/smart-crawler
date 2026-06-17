@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date, datetime, timedelta
 import csv
 import io
@@ -2394,6 +2395,86 @@ def _proxy_pool_availability(
     }
 
 
+def _proxy_pool_diagnostics(
+    *,
+    pools: list[ProxyPoolConfig],
+    endpoints: list[ProxyEndpoint],
+    pools_by_endpoint: dict[int, list[str]],
+    health_by_hash: dict[str, ProxyHealth],
+    pool_available_count: dict[str, int],
+    pool_member_count_by_slug: dict[str, int],
+) -> dict:
+    items: list[dict] = []
+    active_endpoints = [row for row in endpoints if row.active]
+    for pool in pools:
+        slug = pool.slug
+        if not slug:
+            continue
+        members = [
+            row for row in active_endpoints
+            if slug in set(pools_by_endpoint.get(row.id, []))
+        ]
+        member_count = int(pool_member_count_by_slug.get(slug, 0) or 0)
+        available_count = int(pool_available_count.get(slug, 0) or 0)
+        fallback_slug = (pool.fallback_pool_slug or "").strip() or None
+        fallback_available = (
+            int(pool_available_count.get(fallback_slug, 0) or 0)
+            if fallback_slug else 0
+        )
+        if not pool.active or member_count <= 0 or available_count > 0:
+            continue
+
+        health_rows = [health_by_hash.get(row.proxy_hash) for row in members]
+        status_counts = Counter((row.status or "unknown") if row else "unknown"
+                                for row in health_rows)
+        failure_counts = Counter(
+            row.last_failure_code or "unknown"
+            for row in health_rows
+            if row and (row.status or "") in {"down", "degraded", "blocked"}
+        )
+        latest_failure = max(
+            (row for row in health_rows if row and row.last_checked_at),
+            key=lambda row: row.last_checked_at,
+            default=None,
+        )
+        top_failure_code = failure_counts.most_common(1)[0][0] if failure_counts else None
+        if top_failure_code == "proxy_auth_failed":
+            suggested_action = "检查代理账号密码、协议类型和来源 IP 白名单。"
+        elif top_failure_code in {"network_timeout", "proxy_unavailable", "dns_error"}:
+            suggested_action = "检查代理服务端口、防火墙、路由和生产服务器来源 IP 白名单。"
+        else:
+            suggested_action = "批量检测该池端点，按最近失败明细修复后再复检。"
+        severity = "warning" if fallback_available > 0 else "critical"
+        items.append({
+            "pool_slug": slug,
+            "pool_name": pool.name,
+            "pool_type": pool.pool_type,
+            "severity": severity,
+            "status": "fallback_available" if fallback_available > 0 else "unavailable",
+            "member_count": member_count,
+            "available_count": available_count,
+            "fallback_pool_slug": fallback_slug,
+            "fallback_available_count": fallback_available,
+            "status_counts": dict(status_counts),
+            "failure_counts": dict(failure_counts),
+            "top_failure_code": top_failure_code,
+            "latest_failure_detail": (
+                latest_failure.last_failure_detail if latest_failure else None
+            ),
+            "message": (
+                f"{pool.name or slug} 主池 {member_count} 个 active 端点当前 0 个可用"
+                + (f"，已降级到 {fallback_slug} 池。" if fallback_available > 0 else "，且没有可用备用池。")
+            ),
+            "suggested_action": suggested_action,
+        })
+    return {
+        "items": items,
+        "count": len(items),
+        "critical_count": sum(1 for row in items if row["severity"] == "critical"),
+        "warning_count": sum(1 for row in items if row["severity"] == "warning"),
+    }
+
+
 def _proxy_rule_matches_site(row: ProxyRule, site: str) -> bool:
     pattern = (row.site_pattern or "").strip().lower()
     value = (site or "").strip().lower()
@@ -2543,6 +2624,14 @@ def _proxy_admin_payload(db: Session) -> dict:
         row.slug: row.fallback_pool_slug
         for row in pool_configs
     }
+    diagnostics = _proxy_pool_diagnostics(
+        pools=pool_configs,
+        endpoints=endpoints,
+        pools_by_endpoint=pools_by_endpoint,
+        health_by_hash=health_by_hash,
+        pool_available_count=pool_available_count,
+        pool_member_count_by_slug=pool_member_count_by_slug,
+    )
     rules = db.query(ProxyRule).order_by(ProxyRule.priority.asc(), ProxyRule.id.asc()).all()
 
     ordered_hashes: list[str] = []
@@ -2623,6 +2712,7 @@ def _proxy_admin_payload(db: Session) -> dict:
             }
             for row in rules
         ],
+        "diagnostics": diagnostics,
         "updated_at": datetime.utcnow().isoformat(),
     }
 
