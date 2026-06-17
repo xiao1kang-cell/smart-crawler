@@ -738,7 +738,7 @@ def _crawl_job_dict(j: CrawlJob, *, now: datetime | None = None) -> dict:
         "retryable": j.retryable,
         "suggested_action": j.suggested_action,
         "is_stale_pending": is_stale_pending,
-        "stuck_reason": "heartbeat_missing_or_expired" if is_stuck else (
+        "stuck_reason": "running_timeout" if is_stuck else (
             "pending_too_long" if is_stale_pending else None
         ),
     }
@@ -803,14 +803,36 @@ def _queue_jobs_list(db: Session, *, status: str | None, dataset: str | None,
     page = max(1, int(page or 1))
     size = max(1, min(200, int(size or 20)))
     now = datetime.utcnow()
+    spine_cutoff = now - timedelta(seconds=_STUCK_SEC)
+    crawl_cutoff = now - timedelta(seconds=_CRAWL_STUCK_SEC)
+    ondemand_cutoff = now - timedelta(seconds=_ONDEMAND_STUCK_SEC)
     rows: list[dict] = []
+    total = 0
+    fetch_limit = page * size
 
-    def matches_status(row: dict) -> bool:
+    def apply_status_filter(q, filters: list):
         if not wanted:
-            return True
-        if row.get("normalized_status") in wanted:
-            return True
-        return "stale_pending" in wanted and bool(row.get("is_stale_pending"))
+            return q
+        return q.filter(or_(*filters)) if filters else q.filter(False)
+
+    def append_page(query, mapper):
+        nonlocal total
+        total += int(query.count() or 0)
+        for job in (query.order_by(job_created_expr(query).desc().nullslast(),
+                                   job_id_expr(query).desc())
+                    .limit(fetch_limit)
+                    .all()):
+            rows.append(mapper(job, now=now))
+
+    def job_created_expr(query):
+        column_descriptions = getattr(query, "column_descriptions", [])
+        entity = column_descriptions[0].get("entity") if column_descriptions else None
+        return getattr(entity, "created_at")
+
+    def job_id_expr(query):
+        column_descriptions = getattr(query, "column_descriptions", [])
+        entity = column_descriptions[0].get("entity") if column_descriptions else None
+        return getattr(entity, "id")
 
     if source in ("all", "spine"):
         q = db.query(SpineJob)
@@ -823,10 +845,21 @@ def _queue_jobs_list(db: Session, *, status: str | None, dataset: str | None,
         if tenant is not None:
             q = q.filter(SpineJob.workspace_id == tenant)
         if not code:
-            for job in q.order_by(SpineJob.id.desc()).all():
-                row = _spine_job_dict(job, now=now)
-                if matches_status(row):
-                    rows.append(row)
+            active_running = and_(
+                SpineJob.status == "running",
+                SpineJob.heartbeat_at.isnot(None),
+                SpineJob.heartbeat_at >= spine_cutoff,
+            )
+            filters = []
+            if "stuck" in wanted:
+                filters.append(and_(*_spine_stuck_filter(spine_cutoff)))
+            if "running" in wanted:
+                filters.append(active_running)
+            raw = wanted - {"stuck", "running", "stale_pending"}
+            if raw:
+                filters.append(SpineJob.status.in_(tuple(raw)))
+            q = apply_status_filter(q, filters)
+            append_page(q, _spine_job_dict)
 
     if source in ("all", "crawl"):
         q = db.query(CrawlJob)
@@ -841,10 +874,29 @@ def _queue_jobs_list(db: Session, *, status: str | None, dataset: str | None,
             q = q.filter(CrawlJob.requested_by_workspace_id == tenant)
         if code:
             q = q.filter(CrawlJob.failure_code == code)
-        for job in q.order_by(CrawlJob.id.desc()).all():
-            row = _crawl_job_dict(job, now=now)
-            if matches_status(row):
-                rows.append(row)
+        active_running = and_(
+            CrawlJob.status == "running",
+            or_(CrawlJob.started_at.is_(None),
+                CrawlJob.started_at >= crawl_cutoff,
+                CrawlJob.heartbeat_at >= crawl_cutoff),
+        )
+        stale_pending = and_(
+            CrawlJob.status == "pending",
+            CrawlJob.created_at.isnot(None),
+            CrawlJob.created_at < crawl_cutoff,
+        )
+        filters = []
+        if "stuck" in wanted:
+            filters.append(and_(*_crawl_stuck_filter(crawl_cutoff)))
+        if "running" in wanted:
+            filters.append(active_running)
+        if "stale_pending" in wanted:
+            filters.append(stale_pending)
+        raw = wanted - {"stuck", "running", "stale_pending"}
+        if raw:
+            filters.append(CrawlJob.status.in_(tuple(raw)))
+        q = apply_status_filter(q, filters)
+        append_page(q, _crawl_job_dict)
 
     if source in ("all", "ondemand"):
         q = db.query(OnDemandJob)
@@ -857,13 +909,26 @@ def _queue_jobs_list(db: Session, *, status: str | None, dataset: str | None,
         if tenant is not None:
             q = q.filter(OnDemandJob.workspace_id == tenant)
         if not code:
-            for job in q.order_by(OnDemandJob.id.desc()).all():
-                row = _ondemand_job_dict(job, now=now)
-                if matches_status(row):
-                    rows.append(row)
+            active_running = and_(
+                OnDemandJob.status == "running",
+                or_(OnDemandJob.created_at.is_(None),
+                    OnDemandJob.created_at >= ondemand_cutoff),
+            )
+            filters = []
+            if "stuck" in wanted:
+                filters.append(and_(*_ondemand_stuck_filter(ondemand_cutoff)))
+            if "running" in wanted:
+                filters.append(active_running)
+            raw = wanted - {"stuck", "running", "stale_pending"}
+            if "pending" in raw:
+                filters.append(OnDemandJob.status.in_(("queued", "pending")))
+                raw = raw - {"pending"}
+            if raw:
+                filters.append(OnDemandJob.status.in_(tuple(raw)))
+            q = apply_status_filter(q, filters)
+            append_page(q, _ondemand_job_dict)
 
     rows.sort(key=lambda row: row.get("created_at") or "", reverse=True)
-    total = len(rows)
     start = max(0, (page - 1) * size)
     end = start + size
     return {"total": total, "items": rows[start:end]}
