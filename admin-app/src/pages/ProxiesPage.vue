@@ -222,7 +222,8 @@ function doClear(row: Record<string, any>) {
 
 function createEndpoint() {
   const payload = { ...endpointForm.value }
-  return runAction('endpoint:create', () => proxyEndpointCreate(payload), '代理端点已保存').then(() => {
+  return runAction('endpoint:create', () => proxyEndpointCreate(payload), '代理端点已保存').then((data) => {
+    if (!data) return
     endpointForm.value.proxy_url = ''
     endpointForm.value.name = ''
     endpointForm.value.provider = ''
@@ -235,6 +236,7 @@ function createEndpoint() {
 function bulkUpsertEndpoints() {
   const payload = { ...bulkForm.value }
   return runAction('endpoint:bulk', () => proxyEndpointBulkUpsert(payload), '代理端点已批量同步').then((data: any) => {
+    if (!data) return
     const detail = data?.bulk || {}
     message.value = `批量同步完成：新增 ${fmtNumber(detail.added || 0)}，更新 ${fmtNumber(detail.updated || 0)}，停用重复 ${fmtNumber(detail.disabled_duplicate_variants || 0)}，跳过 ${fmtNumber(detail.skipped || 0)}`
     if (!detail.error_count) {
@@ -287,7 +289,8 @@ function recheckUnhealthyEndpoints(endpointType = '') {
 
 function createPool() {
   const payload = { ...poolForm.value }
-  return runAction('pool:create', () => proxyPoolCreate(payload), '代理池已保存').then(() => {
+  return runAction('pool:create', () => proxyPoolCreate(payload), '代理池已保存').then((data) => {
+    if (!data) return
     poolForm.value.slug = ''
     poolForm.value.name = ''
     poolForm.value.fallback_pool_slug = ''
@@ -312,7 +315,8 @@ function addMember() {
 
 function createRule() {
   const payload = { ...ruleForm.value }
-  return runAction('rule:create', () => proxyRuleCreate(payload), '站点代理规则已保存').then(() => {
+  return runAction('rule:create', () => proxyRuleCreate(payload), '站点代理规则已保存').then((data) => {
+    if (!data) return
     ruleForm.value.site_pattern = ''
     ruleForm.value.fallback_pool_slug = ''
     ruleForm.value.notes = ''
