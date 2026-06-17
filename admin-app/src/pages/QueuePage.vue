@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { enqueueJob, jobDetail, jobStats, listJobs, retryJob } from '../api/queue'
+import { enqueueJob, jobDetail, jobStats, listJobs, queueMaintenance, retryJob } from '../api/queue'
 import { fmtDate } from '../api/client'
 import StatCard from '../components/common/StatCard.vue'
 import StatusBadge from '../components/common/StatusBadge.vue'
@@ -24,6 +24,9 @@ const size = ref(20)
 const detailRow = ref<Record<string, any> | null>(null)
 const detailLoading = ref(false)
 const detailError = ref('')
+const maintenanceBusy = ref('')
+const maintenanceMsg = ref('')
+const maintenanceResult = ref<Record<string, any> | null>(null)
 
 const polling = ref(true)
 let timer: ReturnType<typeof setInterval> | null = null
@@ -67,6 +70,14 @@ const sourceCards = computed(() => {
 const breakdowns = computed(() => (stats.value.breakdowns || {}) as Record<string, any[]>)
 const statusMeta = computed(() => (stats.value.status_meta || {}) as Record<string, any>)
 const queueCountNote = computed(() => String(stats.value.status_count_note || ''))
+const maintenanceJson = computed(() => {
+  if (!maintenanceResult.value) return ''
+  try {
+    return JSON.stringify(maintenanceResult.value, null, 2)
+  } catch {
+    return String(maintenanceResult.value)
+  }
+})
 
 const breakdownCards = computed(() => [
   {
@@ -242,6 +253,27 @@ async function doRetry(row: Record<string, any>) {
   }
 }
 
+async function runMaintenance(apply = false) {
+  if (apply && !window.confirm('确认恢复当前卡住任务？crawl 卡住任务会按超时失败收尾，通用/按需卡住任务会重新入队。')) {
+    return
+  }
+  maintenanceBusy.value = apply ? 'apply' : 'dry'
+  maintenanceMsg.value = ''
+  try {
+    const res = await queueMaintenance({ apply, sample_limit: 20 })
+    maintenanceResult.value = res || {}
+    const counts = res?.counts || {}
+    maintenanceMsg.value = apply
+      ? `已处理 ${res?.total_actionable ?? 0} 个卡住任务`
+      : `待处理 ${res?.total_actionable ?? 0} 个卡住任务，久排 ${counts.crawl_stale_pending_observed ?? 0} 个`
+    await load()
+  } catch (err) {
+    maintenanceMsg.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    maintenanceBusy.value = ''
+  }
+}
+
 function changePage(delta: number) {
   const next = page.value + delta
   if (next < 1 || next > totalPages.value) return
@@ -386,6 +418,14 @@ onUnmounted(stopPolling)
         <input v-model="polling" type="checkbox" />
         <span>自动刷新 (5s)</span>
       </label>
+      <div class="head-actions">
+        <button class="btn small" :disabled="!!maintenanceBusy" @click="runMaintenance(false)">
+          {{ maintenanceBusy === 'dry' ? '体检中…' : '体检队列' }}
+        </button>
+        <button class="btn small primary" :disabled="!!maintenanceBusy" @click="runMaintenance(true)">
+          {{ maintenanceBusy === 'apply' ? '恢复中…' : '恢复卡住任务' }}
+        </button>
+      </div>
     </div>
 
     <div class="stat-row">
@@ -419,6 +459,25 @@ onUnmounted(stopPolling)
       <b>有效运行 {{ statusMeta.running_active ?? 0 }}</b>
       <b>卡住 {{ statusMeta.stuck ?? 0 }}</b>
       <b>久排 {{ statusMeta.stale_pending ?? 0 }}</b>
+    </div>
+
+    <div v-if="maintenanceMsg || maintenanceResult" class="maintenance-panel">
+      <div class="maintenance-head">
+        <strong>{{ maintenanceMsg || '队列维护结果' }}</strong>
+        <span v-if="maintenanceResult">
+          {{ maintenanceResult.applied ? '已执行' : '只读体检' }} · {{ fmtDate(maintenanceResult.checked_at) }}
+        </span>
+      </div>
+      <div v-if="maintenanceResult?.counts" class="maintenance-counts">
+        <span>通用重入队 <b>{{ maintenanceResult.counts.spine_requeued ?? 0 }}</b></span>
+        <span>采集超时收尾 <b>{{ maintenanceResult.counts.crawl_failed_timeout ?? 0 }}</b></span>
+        <span>按需重入队 <b>{{ maintenanceResult.counts.ondemand_requeued ?? 0 }}</b></span>
+        <span>久排待诊断 <b>{{ maintenanceResult.counts.crawl_stale_pending_observed ?? 0 }}</b></span>
+      </div>
+      <details v-if="maintenanceResult" class="maintenance-detail">
+        <summary>查看维护明细 JSON</summary>
+        <pre>{{ maintenanceJson }}</pre>
+      </details>
     </div>
 
     <div class="toolbar">
@@ -654,6 +713,8 @@ onUnmounted(stopPolling)
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .page-title {
@@ -674,6 +735,13 @@ onUnmounted(stopPolling)
   font-size: 13px;
   opacity: 0.8;
   cursor: pointer;
+}
+
+.head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .stat-row {
@@ -886,6 +954,12 @@ onUnmounted(stopPolling)
   color: inherit;
 }
 
+.btn.small.primary {
+  border-color: transparent;
+  color: #fff;
+  background: var(--ui-color-primary-500, #6366f1);
+}
+
 .btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -899,6 +973,52 @@ onUnmounted(stopPolling)
 .error {
   font-size: 13px;
   color: #ef4444;
+}
+
+.maintenance-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(34, 197, 94, 0.24);
+  border-radius: 8px;
+  background: rgba(34, 197, 94, 0.07);
+}
+
+.maintenance-head,
+.maintenance-counts {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.maintenance-head strong {
+  font-size: 13px;
+}
+
+.maintenance-head span,
+.maintenance-counts span {
+  font-size: 12px;
+  color: var(--ui-muted, #9ca3af);
+}
+
+.maintenance-counts b {
+  color: inherit;
+}
+
+.maintenance-detail summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ui-muted, #9ca3af);
+}
+
+.maintenance-detail pre {
+  max-height: 260px;
+  margin-top: 8px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .table-wrap {

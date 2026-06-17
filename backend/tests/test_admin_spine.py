@@ -565,6 +565,85 @@ def test_jobs_stats_aggregates_all_queue_tables():
     s.close()
 
 
+def test_jobs_maintenance_dry_run_and_apply(monkeypatch):
+    init_db()
+    from datetime import datetime, timedelta
+    from app.api import admin_spine
+    from app.db import SessionLocal
+    from app.models import (AdminAuditLog, CrawlFailure, CrawlJob, OnDemandJob,
+                            SpineJob)
+
+    enqueued = []
+    monkeypatch.setattr("app.ondemand.queue.enqueue",
+                        lambda job_id: enqueued.append(job_id))
+    s = SessionLocal()
+    try:
+        s.query(SpineJob).delete()
+        s.query(CrawlJob).delete()
+        s.query(OnDemandJob).delete()
+        s.commit()
+        old = datetime.utcnow() - timedelta(hours=2)
+        spine = SpineJob(url="https://example.com/stuck", dataset="maint",
+                         entity_type="generic", status="running",
+                         created_at=old, started_at=old,
+                         heartbeat_at=old, worker="spine-worker",
+                         retries=0, max_retries=3)
+        crawl = CrawlJob(site="maint_site", status="running",
+                         created_at=old, started_at=old,
+                         heartbeat_at=old, worker="crawl-worker")
+        stale_pending = CrawlJob(site="maint_pending", status="pending",
+                                 created_at=old)
+        ondemand = OnDemandJob(url="https://shop.example/p/1",
+                               platform="shopee", kind="listing",
+                               status="running", created_at=old)
+        s.add_all([spine, crawl, stale_pending, ondemand])
+        s.commit()
+        ids = {
+            "spine": spine.id,
+            "crawl": crawl.id,
+            "pending": stale_pending.id,
+            "ondemand": ondemand.id,
+        }
+
+        dry = admin_spine.jobs_maintenance(
+            {"apply": False}, user="admin", db=s, ip="127.0.0.1")
+        assert dry["dry_run"] is True
+        assert dry["total_actionable"] == 3
+        assert dry["counts"]["crawl_stale_pending_observed"] == 1
+        assert s.get(SpineJob, ids["spine"]).status == "running"
+        assert s.get(CrawlJob, ids["crawl"]).status == "running"
+        assert s.get(OnDemandJob, ids["ondemand"]).status == "running"
+
+        before_audit = s.query(AdminAuditLog).count()
+        applied = admin_spine.jobs_maintenance(
+            {"apply": True}, user="admin", db=s, ip="127.0.0.1")
+        assert applied["applied"] is True
+        assert applied["counts"]["spine_requeued"] == 1
+        assert applied["counts"]["crawl_failed_timeout"] == 1
+        assert applied["counts"]["ondemand_requeued"] == 1
+        assert enqueued == [ids["ondemand"]]
+        assert s.query(AdminAuditLog).count() == before_audit + 1
+
+        spine_row = s.get(SpineJob, ids["spine"])
+        crawl_row = s.get(CrawlJob, ids["crawl"])
+        pending_row = s.get(CrawlJob, ids["pending"])
+        ondemand_row = s.get(OnDemandJob, ids["ondemand"])
+        failure = (s.query(CrawlFailure)
+                   .filter(CrawlFailure.job_id == ids["crawl"])
+                   .order_by(CrawlFailure.id.desc())
+                   .first())
+        assert spine_row.status == "pending"
+        assert spine_row.worker is None
+        assert crawl_row.status == "failed"
+        assert crawl_row.failure_code == "job_timeout"
+        assert failure is not None
+        assert failure.code == "job_timeout"
+        assert pending_row.status == "pending"
+        assert ondemand_row.status == "queued"
+    finally:
+        s.close()
+
+
 def test_jobs_list_exposes_queue_detail_fields_and_fuzzy_filters():
     init_db()
     import uuid

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from .. import spine_queue
 from ..audit import record_audit
+from ..crawl_diagnostics import job_timeout_failure, record_failure
 from ..currency import currency_for_site
 from ..db import get_db
 from ..price_sources import enrich_products_from_site_config
@@ -864,6 +865,106 @@ def _queue_jobs_list(db: Session, *, status: str | None, dataset: str | None,
     return {"total": total, "items": rows[start:end]}
 
 
+def _queue_maintenance(db: Session, *, apply: bool = False,
+                       sample_limit: int = 20) -> dict:
+    """Inspect and optionally repair stale queue rows across queue backends."""
+    now = datetime.utcnow()
+    spine_cutoff = now - timedelta(seconds=_STUCK_SEC)
+    crawl_cutoff = now - timedelta(seconds=_CRAWL_STUCK_SEC)
+    ondemand_cutoff = now - timedelta(seconds=_ONDEMAND_STUCK_SEC)
+    sample_limit = max(1, min(100, int(sample_limit or 20)))
+
+    spine_stuck = (db.query(SpineJob)
+                   .filter(*_spine_stuck_filter(spine_cutoff))
+                   .order_by(SpineJob.id)
+                   .all())
+    crawl_stuck = (db.query(CrawlJob)
+                   .filter(*_crawl_stuck_filter(crawl_cutoff))
+                   .order_by(CrawlJob.id)
+                   .all())
+    crawl_stale_pending = (
+        db.query(CrawlJob)
+        .filter(CrawlJob.status == "pending",
+                CrawlJob.created_at.isnot(None),
+                CrawlJob.created_at < crawl_cutoff)
+        .order_by(CrawlJob.id)
+        .all()
+    )
+    ondemand_stuck = (db.query(OnDemandJob)
+                      .filter(*_ondemand_stuck_filter(ondemand_cutoff))
+                      .order_by(OnDemandJob.id)
+                      .all())
+
+    def sample(rows: list, source: str) -> list[dict]:
+        if source == "spine":
+            return [_spine_job_dict(row, now=now) for row in rows[:sample_limit]]
+        if source == "crawl":
+            return [_crawl_job_dict(row, now=now) for row in rows[:sample_limit]]
+        return [_ondemand_job_dict(row, now=now) for row in rows[:sample_limit]]
+
+    samples = {
+        "spine_stuck": sample(spine_stuck, "spine"),
+        "crawl_stuck": sample(crawl_stuck, "crawl"),
+        "crawl_stale_pending": sample(crawl_stale_pending, "crawl"),
+        "ondemand_stuck": sample(ondemand_stuck, "ondemand"),
+    }
+
+    enqueue_ondemand_ids: list[int] = []
+    if apply:
+        for job in spine_stuck:
+            job.status = "pending"
+            job.worker = None
+            job.next_attempt_at = now
+            job.heartbeat_at = None
+
+        for job in crawl_stuck:
+            detail = f"admin-canceled: stuck running >{_CRAWL_STUCK_SEC}s"
+            job.status = "failed"
+            job.finished_at = now
+            job.duration_sec = (
+                (job.finished_at - job.started_at).total_seconds()
+                if job.started_at else None
+            )
+            job.error = detail
+            record_failure(
+                db,
+                site=job.site,
+                job_id=job.id,
+                info=job_timeout_failure(job.site, _CRAWL_STUCK_SEC, detail),
+            )
+
+        for job in ondemand_stuck:
+            job.status = "queued"
+            job.finished_at = None
+            job.error = "admin requeued stale running job"
+            enqueue_ondemand_ids.append(job.id)
+
+    counts = {
+        "spine_requeued": len(spine_stuck),
+        "crawl_failed_timeout": len(crawl_stuck),
+        "ondemand_requeued": len(ondemand_stuck),
+        "crawl_stale_pending_observed": len(crawl_stale_pending),
+    }
+    return {
+        "dry_run": not apply,
+        "applied": bool(apply),
+        "checked_at": now.isoformat(),
+        "threshold_sec": {
+            "spine": _STUCK_SEC,
+            "crawl": _CRAWL_STUCK_SEC,
+            "ondemand": _ONDEMAND_STUCK_SEC,
+        },
+        "counts": counts,
+        "total_actionable": (
+            counts["spine_requeued"]
+            + counts["crawl_failed_timeout"]
+            + counts["ondemand_requeued"]
+        ),
+        "samples": samples,
+        "_ondemand_enqueue_ids": enqueue_ondemand_ids,
+    }
+
+
 def _quality_job_issue_filter(issue: str, stale_cutoff: datetime):
     if issue == "latest_job_failed":
         return CrawlJob.status.in_(("failed", "blocked"))
@@ -1562,6 +1663,37 @@ def jobs_list(status: str | None = None, dataset: str | None = None,
                             tenant=tenant, source=source,
                             page=page, size=size,
                             failure_code=failure_code)
+
+
+@router.post("/jobs/maintenance")
+def jobs_maintenance(payload: dict | None = None,
+                     user: str = Depends(require_user),
+                     db: Session = Depends(get_db),
+                     ip: str = Header(default="", alias="X-Forwarded-For")) -> dict:
+    actor = _require_super_admin(user, db)
+    payload = payload or {}
+    apply = bool(payload.get("apply") or payload.get("execute"))
+    sample_limit = int(payload.get("sample_limit") or 20)
+    out = _queue_maintenance(db, apply=apply, sample_limit=sample_limit)
+    enqueue_ids = out.pop("_ondemand_enqueue_ids", [])
+    if apply:
+        record_audit(
+            db,
+            actor_user_id=actor.id,
+            actor_name=actor.username,
+            action="job.maintenance",
+            target_type="queue",
+            target_id="all",
+            detail={"counts": out["counts"], "total_actionable": out["total_actionable"]},
+            ip=ip or None,
+        )
+        db.commit()
+        if enqueue_ids:
+            from ..ondemand.queue import enqueue as enqueue_ondemand
+
+            for job_id in enqueue_ids:
+                enqueue_ondemand(job_id)
+    return out
 
 
 @router.get("/jobs/{job_id}")
