@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random as _random
 import time
 from dataclasses import dataclass
 from typing import Protocol
@@ -108,6 +109,7 @@ class FetchResult:
     duration_ms: int = 0
     failure: FailureInfo | None = None
     attempt: int = 1
+    retry_after: float | None = None
 
     def json(self):
         """把 text 解析为 JSON；失败返回 None（不抛错）。"""
@@ -253,6 +255,9 @@ class CrawlerFetcher:
                 duration_ms=duration_ms,
                 failure=failure,
                 attempt=attempt,
+                retry_after=_parse_retry_after(
+                    getattr(resp, "headers", None) and resp.headers.get("Retry-After")
+                ),
             )
             _record_fetch(ctx, result, kind=kind, source=source)
             if failure and ctx.fail_fast_blocked and (
@@ -467,6 +472,29 @@ def _looks_like_anti_bot(text: str) -> bool:
     if len(text) >= 80_000:
         return False
     return not any(marker in sample for marker in _NORMAL_PRODUCT_MARKERS)
+
+
+BACKOFF_BASE = 2.0
+BACKOFF_MAX_SEC = 60.0
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """解析 Retry-After 头。仅支持秒数形式（HTTP-date 形式返回 None 退化为指数退避）。"""
+    if not value:
+        return None
+    try:
+        return float(value.strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+def _backoff_seconds(result: "FetchResult", attempt: int) -> float:
+    """429/503 退避秒数：Retry-After 优先（封顶 60s），无则指数退避 + 抖动。"""
+    ra = getattr(result, "retry_after", None)
+    if ra is not None and ra >= 0:
+        return min(ra, BACKOFF_MAX_SEC)
+    expo = BACKOFF_BASE * (2 ** (attempt - 1)) + _random.random()
+    return min(expo, BACKOFF_MAX_SEC)
 
 
 def _should_retry(ctx: FetchContext, result: FetchResult,
