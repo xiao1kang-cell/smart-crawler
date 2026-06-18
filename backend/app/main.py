@@ -174,6 +174,12 @@ def dashboard(path: str = ""):
     return _spa_or_legacy(FRONTEND_DIR / "index.html")
 
 
+@app.get("/login")
+def login():
+    """前端登录路由的直达入口，避免浏览器刷新 /login 时 404。"""
+    return _spa_or_legacy(FRONTEND_DIR / "index.html")
+
+
 @app.get("/favicon.svg")
 def favicon():
     return FileResponse(FRONTEND_DIR / "favicon.svg")

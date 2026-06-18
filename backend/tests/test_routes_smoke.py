@@ -55,6 +55,7 @@ def main() -> int:
     # === 公共路由（无需鉴权）===
     results.append(_has("/", "smart-crawler"))
     results.append(_has("/app", "smart-crawler"))
+    results.append(_has("/login", "smart-crawler"))
     results.append(_has("/report?site=songmics_us", "站点报表"))
     results.append(_ok("/health"))
     results.append(_ok("/favicon.svg"))

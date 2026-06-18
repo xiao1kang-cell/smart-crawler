@@ -313,6 +313,25 @@ button,input,select,textarea{font-family:inherit}
 .od-table .url-cell{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .od-table .actions-cell{white-space:nowrap}
 
+@media (max-width: 760px){
+  .topbar{padding:10px 12px;gap:8px;align-items:stretch}
+  .brand{flex:1 1 auto;min-width:150px;display:flex;align-items:center}
+  .usage-strip{order:2;flex:1 1 100%;text-align:center}
+  .acct{margin-left:auto;max-width:calc(100vw - 168px)}
+  .acct span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .icon-btn{flex:0 0 auto}
+  .tab-row{order:3;flex:0 0 100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;overflow:visible}
+  .tab{justify-content:center;min-width:0;padding:8px 6px;font-size:.76rem;white-space:nowrap}
+  .page{padding:16px 14px 36px}
+  .lead{font-size:1.38rem;line-height:1.2}
+  .sub{font-size:.8rem}
+  .form-grid{grid-template-columns:1fr}
+  .ask-shell,.inf-workbench{grid-template-columns:1fr}
+  .proxy-summary-grid{grid-template-columns:1fr}
+  .entry-card{align-items:flex-start;padding:13px 14px}
+  .entry-icon{width:38px;height:38px;font-size:1.35rem;flex-shrink:0}
+}
+
 .report-page{background:#f5f6f8;color:#1f2329;min-height:100vh;padding:18px}
 .report-container{max-width:1320px;margin:0 auto}
 .crumb{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;font-size:13px;color:#6b7280}
@@ -583,13 +602,11 @@ html[data-theme="dark"] #theme-toggle{box-shadow:0 8px 24px rgba(0,0,0,.4)}
 #theme-toggle .ico{font-size:1rem;line-height:1}
 
 @media(max-width:720px){
-  .topbar{gap:8px;padding:10px 12px}
-  .tab-row{order:5;flex-basis:100%;overflow-x:auto;flex-wrap:nowrap}
-  .tab{white-space:nowrap}
-  .page{padding:16px 14px 40px}
   .stats-hero,.cov-grid,.report-grid{grid-template-columns:1fr}
   .od-fetch-row{flex-direction:column;align-items:stretch}
   .od-fetch-form{flex-wrap:wrap}
   .od-url-input{max-width:none;width:100%}
   .od-batch-btn{align-self:flex-end}
+  #theme-toggle{left:auto;right:14px;bottom:14px;width:42px;height:42px;justify-content:center;padding:0;border-radius:50%}
+  #theme-toggle .txt{display:none}
 }

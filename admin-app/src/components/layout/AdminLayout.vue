@@ -213,5 +213,113 @@ onMounted(bootstrap)
 .admin-content {
   flex: 1;
   overflow: auto;
+  min-width: 0;
+}
+
+.admin-content :deep(.page) {
+  width: 100%;
+  min-width: 0;
+}
+
+.admin-content :deep(.table-wrap) {
+  max-width: 100%;
+}
+
+@media (max-width: 760px) {
+  .admin-shell {
+    flex-direction: column;
+  }
+
+  .admin-side {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    width: 100%;
+    gap: 8px;
+    padding: 10px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--ui-border, rgba(255, 255, 255, 0.08));
+  }
+
+  .admin-brand {
+    padding: 2px 4px;
+    font-size: 15px;
+  }
+
+  .admin-nav {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    overflow: visible;
+  }
+
+  .admin-nav-item {
+    min-width: 0;
+    justify-content: center;
+    padding: 8px 10px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .admin-main {
+    width: 100%;
+  }
+
+  .admin-top {
+    justify-content: space-between;
+    padding: 10px 14px;
+  }
+
+  .admin-user {
+    min-width: 0;
+  }
+
+  .admin-user span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .admin-content {
+    overflow-x: hidden;
+  }
+
+  .admin-content :deep(.page) {
+    padding: 16px 14px;
+  }
+
+  .admin-content :deep(.page-head),
+  .admin-content :deep(.head-left),
+  .admin-content :deep(.toolbar),
+  .admin-content :deep(.enqueue),
+  .admin-content :deep(.pager) {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .admin-content :deep(.page-head) {
+    align-items: flex-start;
+  }
+
+  .admin-content :deep(.page-title) {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    line-height: 1.25;
+  }
+
+  .admin-content :deep(.ctl),
+  .admin-content :deep(.btn) {
+    max-width: 100%;
+  }
+
+  .admin-content :deep(.filter-input),
+  .admin-content :deep(.grow) {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .admin-content :deep(.table-wrap) {
+    border-radius: 10px;
+  }
 }
 </style>
