@@ -27,9 +27,20 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [worker] %(message)s")
 logger = logging.getLogger("smart-crawler.worker")
 
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 WORKER_ID = os.environ.get("WORKER_ID") or f"{socket.gethostname()}-{os.getpid()}"
-POLL_INTERVAL = int(os.environ.get("WORKER_POLL", "10"))
-JOB_TIMEOUT = int(os.environ.get("WORKER_JOB_TIMEOUT", "1800"))  # 30 min 默认
+POLL_INTERVAL = _env_int("WORKER_POLL", 10)
+DEFAULT_JOB_TIMEOUT = _env_int("WORKER_JOB_TIMEOUT", 14400)  # 4h 默认
+JOB_TIMEOUT_MIN = _env_int("WORKER_JOB_TIMEOUT_MIN", 300)
+JOB_TIMEOUT_MAX = _env_int("WORKER_JOB_TIMEOUT_MAX", 86400)
+STALE_HEARTBEAT_TIMEOUT = _env_int("WORKER_STALE_HEARTBEAT_TIMEOUT", 1800)
 JOB_HEARTBEAT_INTERVAL = float(os.environ.get("WORKER_JOB_HEARTBEAT_INTERVAL", "30"))
 TRIGGER_ALLOWLIST = tuple(
     trigger.strip() for trigger in os.environ.get("TRIGGER_ALLOWLIST", "").split(",")
@@ -47,7 +58,7 @@ class JobTimeout(Exception):
 
 
 def _alarm_handler(signum, frame):
-    raise JobTimeout(f"job exceeded {JOB_TIMEOUT}s")
+    raise JobTimeout("job exceeded runtime budget")
 
 
 def _set_alarm(seconds: int) -> None:
@@ -58,13 +69,62 @@ def _set_alarm(seconds: int) -> None:
         pass
 
 
-def _mark_job_timeout(job_id: int) -> None:
+def _bounded_timeout(value: int | None) -> int:
+    try:
+        seconds = int(value or DEFAULT_JOB_TIMEOUT)
+    except (TypeError, ValueError):
+        seconds = DEFAULT_JOB_TIMEOUT
+    return max(JOB_TIMEOUT_MIN, min(JOB_TIMEOUT_MAX, seconds))
+
+
+def _trigger_timeout(trigger: str | None) -> int:
+    key = (trigger or "").strip().upper()
+    if key:
+        env = os.environ.get(f"WORKER_JOB_TIMEOUT_{key}")
+        if env:
+            return _bounded_timeout(env)
+    if trigger in {"manual", "admin_retry", "admin_quality_rerun", "tracking_add"}:
+        env = os.environ.get("WORKER_JOB_TIMEOUT_INTERACTIVE")
+        if env:
+            return _bounded_timeout(env)
+    if trigger in {"scheduled", "daily_refresh"}:
+        env = os.environ.get("WORKER_JOB_TIMEOUT_SCHEDULED")
+        if env:
+            return _bounded_timeout(env)
+    return _bounded_timeout(DEFAULT_JOB_TIMEOUT)
+
+
+def _job_runtime_budget(job_id: int) -> int:
+    """Return the max runtime for a job.
+
+    Large sites can set any of these in Site.crawler_config:
+    job_timeout_sec / worker_timeout_sec / max_runtime_sec.
+    """
+    try:
+        from .models import Site
+
+        with session_scope() as s:
+            job = s.get(CrawlJob, job_id)
+            if job is None:
+                return _bounded_timeout(DEFAULT_JOB_TIMEOUT)
+            site = s.query(Site).filter(Site.site == job.site).first()
+            cfg = site.crawler_config if site and isinstance(site.crawler_config, dict) else {}
+            for key in ("job_timeout_sec", "worker_timeout_sec", "max_runtime_sec"):
+                if cfg.get(key) is not None:
+                    return _bounded_timeout(int(cfg[key]))
+            return _trigger_timeout(job.trigger)
+    except Exception as exc:
+        logger.warning("读取 job runtime budget 失败 job=%s: %s", job_id, exc)
+        return _bounded_timeout(DEFAULT_JOB_TIMEOUT)
+
+
+def _mark_job_timeout(job_id: int, timeout_sec: int) -> None:
     """标 job 为 failed（worker 自我兜底，不依赖 clean_stale daemon）。"""
     try:
         with session_scope() as s:
             job = s.get(CrawlJob, job_id)
             if job and job.status == "running":
-                detail = f"worker timeout {JOB_TIMEOUT}s（死代理 hang 兜底）"
+                detail = f"worker runtime budget exceeded {timeout_sec}s"
                 job.status = "failed"
                 job.finished_at = datetime.utcnow()
                 if job.started_at:
@@ -75,7 +135,7 @@ def _mark_job_timeout(job_id: int) -> None:
                     s,
                     site=job.site,
                     job_id=job_id,
-                    info=job_timeout_failure(job.site, JOB_TIMEOUT, detail),
+                    info=job_timeout_failure(job.site, timeout_sec, detail),
                 )
     except Exception as exc:
         logger.error("mark_job_timeout 失败 job=%s: %s", job_id, exc)
@@ -119,8 +179,8 @@ def _start_crawl_job_heartbeat(job_id: int, interval: float | None = None):
     return stop, thread
 
 
-def _reclaim_stale_crawl_jobs(timeout_sec: int = JOB_TIMEOUT) -> int:
-    """Fail running crawl jobs that outlived the worker timeout.
+def _reclaim_stale_crawl_jobs(timeout_sec: int = STALE_HEARTBEAT_TIMEOUT) -> int:
+    """Fail running crawl jobs whose worker heartbeat stopped.
 
     This covers in-process worker threads where signal.alarm is unavailable and
     stale rows left behind by crashed worker containers.
@@ -136,7 +196,7 @@ def _reclaim_stale_crawl_jobs(timeout_sec: int = JOB_TIMEOUT) -> int:
                                 CrawlJob.heartbeat_at < cutoff))
                     .all())
             for job in rows:
-                detail = f"auto-canceled: stuck running >{timeout_sec}s"
+                detail = f"auto-canceled: worker heartbeat stale >{timeout_sec}s"
                 job.status = "failed"
                 job.finished_at = datetime.utcnow()
                 job.duration_sec = (
@@ -191,10 +251,12 @@ def run_loop(should_continue=None) -> None:
         # 非主线程（in-process mode）—— alarm 不可用，靠 clean_stale daemon 兜底
         pass
     trigger_scope = ",".join(TRIGGER_ALLOWLIST) if TRIGGER_ALLOWLIST else "all"
-    logger.info("worker %s 启动，轮询间隔 %ds，单 job 超时 %ds，trigger=%s",
-                WORKER_ID, POLL_INTERVAL, JOB_TIMEOUT, trigger_scope)
+    logger.info(
+        "worker %s 启动，轮询间隔 %ds，默认运行预算 %ds，心跳卡死阈值 %ds，trigger=%s",
+        WORKER_ID, POLL_INTERVAL, DEFAULT_JOB_TIMEOUT,
+        STALE_HEARTBEAT_TIMEOUT, trigger_scope)
     while should_continue():
-        reclaimed = _reclaim_stale_crawl_jobs(JOB_TIMEOUT)
+        reclaimed = _reclaim_stale_crawl_jobs(STALE_HEARTBEAT_TIMEOUT)
         if reclaimed:
             logger.warning("回收 %d 个超时 crawl job", reclaimed)
         # 内存安全闸:已用内存超阈值则暂停领新 job(不起新浏览器),
@@ -219,8 +281,9 @@ def run_loop(should_continue=None) -> None:
         if job_id is None:
             time.sleep(POLL_INTERVAL)
             continue
+        runtime_budget = _job_runtime_budget(job_id)
         try:
-            _set_alarm(JOB_TIMEOUT)
+            _set_alarm(runtime_budget)
             stop_heartbeat, heartbeat_thread = _start_crawl_job_heartbeat(job_id)
             try:
                 result = execute_job(job_id)
@@ -234,7 +297,7 @@ def run_loop(should_continue=None) -> None:
                         result["status"])
         except JobTimeout as exc:
             _set_alarm(0)
-            _mark_job_timeout(job_id)
+            _mark_job_timeout(job_id, runtime_budget)
             logger.warning("job %s 超时: %s", job_id, exc)
         except Exception as exc:
             _set_alarm(0)

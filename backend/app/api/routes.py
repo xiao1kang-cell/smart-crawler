@@ -3626,7 +3626,7 @@ def _data_quality_suggestion(*, status: str, issues: list[str],
                              price_source_configured: bool = False) -> str:
     code = (failure or {}).get("code")
     if "job_pending_stale" in issues:
-        return "任务已排队超过30分钟；检查 worker/队列容量/代理可用性，必要时取消旧任务后重排"
+        return "任务已排队超过久排阈值；检查 worker/队列容量/代理可用性，必要时取消旧任务后重排"
     if "job_in_progress" in issues:
         return "已有抓取任务处理中；打开队列明细查看进度，不要重复入队"
     if code in _NON_RERUN_FAILURE_CODES:

@@ -488,7 +488,7 @@ def test_jobs_stats_aggregates_all_queue_tables():
                    started_at=datetime.utcnow() - timedelta(hours=2),
                    heartbeat_at=datetime.utcnow()))
     s.add(CrawlJob(site="site_d", status="pending",
-                   created_at=datetime.utcnow() - timedelta(hours=2)))
+                   created_at=datetime.utcnow() - timedelta(hours=3)))
     s.add(OnDemandJob(url="https://x.test/1", platform="shop",
                       status="queued", created_at=datetime.utcnow()))
     s.add(OnDemandJob(url="https://x.test/2", platform="shop",
@@ -523,7 +523,8 @@ def test_jobs_stats_aggregates_all_queue_tables():
     assert stats["status_meta"]["running_active"] == 1
     assert stats["status_meta"]["stuck"] == 1
     assert stats["status_meta"]["stale_pending"] == 1
-    assert "运行中统计" in stats["status_count_note"]
+    assert "worker 心跳" in stats["status_count_note"]
+    assert "久排阈值" in stats["status_count_note"]
     assert stats["by_queue"]["crawl"]["total"] == 5
     assert stats["by_queue"]["crawl"]["stale_pending"] == 1
     assert stats["by_queue"]["crawl"]["status_meta"]["running_raw"] == 2
@@ -636,7 +637,7 @@ def test_jobs_maintenance_dry_run_and_apply(monkeypatch):
                          created_at=old, started_at=old,
                          heartbeat_at=old, worker="crawl-worker")
         stale_pending = CrawlJob(site="maint_pending", status="pending",
-                                 created_at=old)
+                                 created_at=datetime.utcnow() - timedelta(hours=3))
         ondemand = OnDemandJob(url="https://shop.example/p/1",
                                platform="shopee", kind="listing",
                                status="running", created_at=old)
@@ -931,7 +932,7 @@ def test_admin_crawl_enqueue_creates_or_reuses_site_jobs():
                    created_at=datetime.utcnow()))
     s.add(CrawlJob(site="admin_quality_pending", status="pending",
                    trigger="scheduled",
-                   created_at=datetime.utcnow() - timedelta(hours=2)))
+                   created_at=datetime.utcnow() - timedelta(hours=3)))
     s.commit()
     active = s.query(CrawlJob).filter(CrawlJob.site == "admin_quality_active").first()
     pending = s.query(CrawlJob).filter(CrawlJob.site == "admin_quality_pending").first()

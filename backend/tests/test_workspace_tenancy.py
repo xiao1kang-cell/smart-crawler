@@ -1335,7 +1335,7 @@ def test_admin_data_quality_is_global_and_super_admin_only():
                     finished_at=datetime(2026, 6, 1, 0, 1)))
     db.add(CrawlJob(site="site_a", status="pending",
                     requested_by_workspace_id=ws_a.id,
-                    created_at=datetime.utcnow() - timedelta(hours=2)))
+                    created_at=datetime.utcnow() - timedelta(hours=3)))
     db.add(CrawlJob(site="site_a", status="running",
                     requested_by_workspace_id=ws_a.id,
                     created_at=datetime.utcnow() - timedelta(hours=2),
@@ -1353,7 +1353,7 @@ def test_admin_data_quality_is_global_and_super_admin_only():
     assert site_a["crawl_queue"]["active_count"] == 2
     assert site_a["crawl_queue"]["stale_pending"] == 1
     assert "job_pending_stale" in site_a["issues"]
-    assert "排队超过30分钟" in site_a["suggested_action"]
+    assert "排队超过久排阈值" in site_a["suggested_action"]
     assert out["summary"]["pending_jobs"] == 1
     assert out["summary"]["stuck_jobs"] == 1
     assert out["summary"]["stale_pending_jobs"] == 1
@@ -1394,7 +1394,7 @@ def test_admin_queue_stats_list_and_detail_match_real_job_states():
     stale_pending = CrawlJob(site="site_a", status="pending",
                              requested_by_workspace_id=ws_a.id,
                              trigger="admin_quality_rerun",
-                             created_at=now - timedelta(hours=2))
+                             created_at=now - timedelta(hours=3))
     failed = CrawlJob(site="site_a", status="failed",
                       requested_by_workspace_id=ws_a.id,
                       failure_code="parse_none",
@@ -1684,7 +1684,7 @@ def test_admin_data_quality_products_exposes_job_issue_details():
 
     stale = CrawlJob(site="site_a", status="pending",
                      requested_by_workspace_id=ws_a.id,
-                     created_at=datetime.utcnow() - timedelta(hours=2))
+                     created_at=datetime.utcnow() - timedelta(hours=3))
     db.add(stale)
     db.commit()
     stale_detail = admin_data_quality_products(

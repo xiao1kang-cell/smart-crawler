@@ -65,6 +65,7 @@ router = APIRouter(prefix="/api/admin/spine", tags=["admin · spine"])
 
 _STUCK_SEC = 600
 _CRAWL_STUCK_SEC = 1800
+_CRAWL_PENDING_STALE_SEC = 7200
 _ONDEMAND_STUCK_SEC = 1800
 _INVENTORY_CACHE_TTL = 30
 _INVENTORY_CACHE: dict | None = None
@@ -473,6 +474,7 @@ def _queue_stats(db: Session) -> dict:
     now = datetime.utcnow()
     spine_cutoff = now - timedelta(seconds=_STUCK_SEC)
     crawl_cutoff = now - timedelta(seconds=_CRAWL_STUCK_SEC)
+    crawl_pending_cutoff = now - timedelta(seconds=_CRAWL_PENDING_STALE_SEC)
     ondemand_cutoff = now - timedelta(seconds=_ONDEMAND_STUCK_SEC)
     by_queue = {
         "spine": _empty_queue_counts(),
@@ -488,7 +490,7 @@ def _queue_stats(db: Session) -> dict:
         db.query(func.count(CrawlJob.id))
         .filter(CrawlJob.status == "pending",
                 CrawlJob.created_at.isnot(None),
-                CrawlJob.created_at < crawl_cutoff)
+                CrawlJob.created_at < crawl_pending_cutoff)
         .scalar() or 0
     )
     ondemand_stuck = (db.query(func.count(OnDemandJob.id))
@@ -556,14 +558,17 @@ def _queue_stats(db: Session) -> dict:
         "by_queue": status_meta,
     }
     total["status_count_note"] = (
-        "运行中统计只包含仍在阈值内活跃的任务；超过阈值的 running 会单独归为卡住，"
-        "久排是 pending 中排队超过阈值的子集。"
+        "运行中卡住按 worker 心跳判断；久排是 pending 中排队超过久排阈值的子集。"
     )
     total["updated_at"] = now.isoformat()
     total["stuck_threshold_sec"] = {
         "spine": _STUCK_SEC,
         "crawl": _CRAWL_STUCK_SEC,
+        "crawl_pending": _CRAWL_PENDING_STALE_SEC,
         "ondemand": _ONDEMAND_STUCK_SEC,
+    }
+    total["stale_pending_threshold_sec"] = {
+        "crawl": _CRAWL_PENDING_STALE_SEC,
     }
     total["breakdowns"] = {
         "crawl_failed_by_site": _group_rows(
@@ -591,7 +596,7 @@ def _queue_stats(db: Session) -> dict:
             db.query(CrawlJob.site, func.count(CrawlJob.id))
             .filter(CrawlJob.status == "pending",
                     CrawlJob.created_at.isnot(None),
-                    CrawlJob.created_at < crawl_cutoff)
+                    CrawlJob.created_at < crawl_pending_cutoff)
             .group_by(CrawlJob.site),
             limit=25,
         ),
@@ -693,7 +698,7 @@ def _spine_job_dict(j: SpineJob, *, now: datetime | None = None) -> dict:
 def _crawl_job_dict(j: CrawlJob, *, now: datetime | None = None) -> dict:
     now = now or datetime.utcnow()
     cutoff = now - timedelta(seconds=_CRAWL_STUCK_SEC)
-    pending_cutoff = now - timedelta(seconds=_CRAWL_STUCK_SEC)
+    pending_cutoff = now - timedelta(seconds=_CRAWL_PENDING_STALE_SEC)
     is_stuck = (j.status == "running" and j.started_at is not None
                 and j.started_at < cutoff
                 and (j.heartbeat_at is None or j.heartbeat_at < cutoff))
@@ -805,6 +810,7 @@ def _queue_jobs_list(db: Session, *, status: str | None, dataset: str | None,
     now = datetime.utcnow()
     spine_cutoff = now - timedelta(seconds=_STUCK_SEC)
     crawl_cutoff = now - timedelta(seconds=_CRAWL_STUCK_SEC)
+    crawl_pending_cutoff = now - timedelta(seconds=_CRAWL_PENDING_STALE_SEC)
     ondemand_cutoff = now - timedelta(seconds=_ONDEMAND_STUCK_SEC)
     rows: list[dict] = []
     total = 0
@@ -873,7 +879,7 @@ def _queue_jobs_list(db: Session, *, status: str | None, dataset: str | None,
         stale_pending = and_(
             CrawlJob.status == "pending",
             CrawlJob.created_at.isnot(None),
-            CrawlJob.created_at < crawl_cutoff,
+            CrawlJob.created_at < crawl_pending_cutoff,
         )
         filters = []
         if "stuck" in wanted:
@@ -930,6 +936,7 @@ def _queue_maintenance(db: Session, *, apply: bool = False,
     now = datetime.utcnow()
     spine_cutoff = now - timedelta(seconds=_STUCK_SEC)
     crawl_cutoff = now - timedelta(seconds=_CRAWL_STUCK_SEC)
+    crawl_pending_cutoff = now - timedelta(seconds=_CRAWL_PENDING_STALE_SEC)
     ondemand_cutoff = now - timedelta(seconds=_ONDEMAND_STUCK_SEC)
     sample_limit = max(1, min(100, int(sample_limit or 20)))
 
@@ -945,7 +952,7 @@ def _queue_maintenance(db: Session, *, apply: bool = False,
         db.query(CrawlJob)
         .filter(CrawlJob.status == "pending",
                 CrawlJob.created_at.isnot(None),
-                CrawlJob.created_at < crawl_cutoff)
+                CrawlJob.created_at < crawl_pending_cutoff)
         .order_by(CrawlJob.id)
         .all()
     )
@@ -1011,6 +1018,7 @@ def _queue_maintenance(db: Session, *, apply: bool = False,
         "threshold_sec": {
             "spine": _STUCK_SEC,
             "crawl": _CRAWL_STUCK_SEC,
+            "crawl_pending": _CRAWL_PENDING_STALE_SEC,
             "ondemand": _ONDEMAND_STUCK_SEC,
         },
         "counts": counts,
@@ -1165,7 +1173,7 @@ def admin_data_quality_products(
     if product_count > 0 and trend_count == 0:
         trend_issue_counts["traffic_missing"] = 1
         trend_issue_counts["conversion_missing"] = 1
-    stale_cutoff = datetime.utcnow() - timedelta(seconds=_CRAWL_STUCK_SEC)
+    stale_cutoff = datetime.utcnow() - timedelta(seconds=_CRAWL_PENDING_STALE_SEC)
     job_issue_counts = {
         key: int(db.query(func.count(CrawlJob.id))
                  .filter(CrawlJob.site == site,
@@ -1797,12 +1805,13 @@ def job_retry(job_id: int, source: str = "spine",
                                       "source": source})
         now = datetime.utcnow()
         crawl_cutoff = now - timedelta(seconds=_CRAWL_STUCK_SEC)
+        crawl_pending_cutoff = now - timedelta(seconds=_CRAWL_PENDING_STALE_SEC)
         is_stuck = (j.status == "running" and j.started_at is not None
                     and j.started_at < crawl_cutoff
                     and (j.heartbeat_at is None or j.heartbeat_at < crawl_cutoff))
         is_stale_pending = (
             j.status == "pending" and j.created_at is not None
-            and j.created_at < crawl_cutoff
+            and j.created_at < crawl_pending_cutoff
         )
         if j.status in ("pending", "running") and not (is_stuck or is_stale_pending):
             raise HTTPException(409, {"error": "job_not_retryable",

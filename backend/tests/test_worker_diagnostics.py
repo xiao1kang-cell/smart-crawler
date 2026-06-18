@@ -5,8 +5,10 @@ from datetime import datetime, timedelta
 import pytest
 
 from app.db import SessionLocal, init_db
-from app.models import CrawlFailure, CrawlJob
+from app.models import CrawlFailure, CrawlJob, Site
 from app.worker import (
+    DEFAULT_JOB_TIMEOUT,
+    _job_runtime_budget,
     _mark_job_timeout,
     _reclaim_stale_crawl_jobs,
     _repair_missing_failure_diagnostics,
@@ -27,7 +29,7 @@ def test_worker_timeout_writes_structured_failure():
     finally:
         s.close()
 
-    _mark_job_timeout(job_id)
+    _mark_job_timeout(job_id, 7200)
 
     s = SessionLocal()
     try:
@@ -42,6 +44,34 @@ def test_worker_timeout_writes_structured_failure():
         assert failure.code == "job_timeout"
     finally:
         s.close()
+
+
+def test_job_runtime_budget_uses_site_config_and_trigger_defaults():
+    init_db()
+    s = SessionLocal()
+    try:
+        configured = Site(
+            site="large_site_budget",
+            brand="Large",
+            country="US",
+            url="https://example.com",
+            platform="generic",
+            crawler_config={"job_timeout_sec": 21600},
+        )
+        s.merge(configured)
+        job = CrawlJob(site="large_site_budget", status="pending",
+                       trigger="scheduled")
+        fallback_job = CrawlJob(site="no_site_budget", status="pending",
+                                trigger="scheduled")
+        s.add_all([job, fallback_job])
+        s.commit()
+        job_id = job.id
+        fallback_id = fallback_job.id
+    finally:
+        s.close()
+
+    assert _job_runtime_budget(job_id) == 21600
+    assert _job_runtime_budget(fallback_id) == DEFAULT_JOB_TIMEOUT
 
 
 def test_reclaim_stale_crawl_jobs_writes_job_timeout():
