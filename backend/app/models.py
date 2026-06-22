@@ -411,6 +411,7 @@ class CrawlJob(Base):
     heartbeat_at = Column(DateTime, index=True)
     finished_at = Column(DateTime)
     products_count = Column(Integer, default=0)
+    total_product_count = Column(Integer)
     new_count = Column(Integer, default=0)
     promotion_count = Column(Integer, default=0)
     success_rate = Column(Float)

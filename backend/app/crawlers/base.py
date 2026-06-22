@@ -45,9 +45,12 @@ class BaseCrawler(ABC):
         self.counter = CrawlCounter()
 
     def _resolve_limit(self, default: int, explicit: int | None = None) -> int:
-        """limit 优先级：显式参数 > sites.yaml max_products > env 默认。"""
+        """limit 优先级：显式参数 > DB crawler_config > sites.yaml > env 默认。"""
         if explicit is not None:
             return explicit
+        config = self.site.crawler_config or {}
+        if isinstance(config, dict) and config.get("max_products") not in (None, ""):
+            return int(config["max_products"])
         hints = next((c for c in get_sites() if c["site"] == self.site.site), {})
         return int(hints.get("max_products", default))
 

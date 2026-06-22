@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta
 import csv
 import ipaddress
 import io
+import os
 import socket
 import time
 from types import SimpleNamespace
@@ -63,8 +64,19 @@ from .routes import (
 
 router = APIRouter(prefix="/api/admin/spine", tags=["admin · spine"])
 
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 _STUCK_SEC = 600
-_CRAWL_STUCK_SEC = 1800
+_CRAWL_STUCK_SEC = _env_int(
+    "ADMIN_CRAWL_STUCK_SEC",
+    _env_int("CRAWL_JOB_STUCK_SEC", 14400),
+)
 _CRAWL_PENDING_STALE_SEC = 7200
 _ONDEMAND_STUCK_SEC = 1800
 _INVENTORY_CACHE_TTL = 30
@@ -706,6 +718,18 @@ def _crawl_job_dict(j: CrawlJob, *, now: datetime | None = None) -> dict:
         j.status == "pending" and j.created_at is not None
         and j.created_at < pending_cutoff
     )
+    fetched_count = int(j.products_count or 0)
+    stored_total_product_count = int(getattr(j, "total_product_count", None) or 0)
+    success_rate = float(j.success_rate or 0)
+    if stored_total_product_count > 0:
+        total_product_count = stored_total_product_count
+        total_product_count_source = "crawl_stats_total"
+    elif fetched_count > 0 and success_rate > 0:
+        total_product_count = max(fetched_count, round(fetched_count * 100 / success_rate))
+        total_product_count_source = "crawl_success_rate"
+    else:
+        total_product_count = None
+        total_product_count_source = None
     return {
         "id": j.id,
         "source": "crawl",
@@ -730,7 +754,9 @@ def _crawl_job_dict(j: CrawlJob, *, now: datetime | None = None) -> dict:
         "started_at": _iso(j.started_at),
         "finished_at": _iso(j.finished_at),
         "heartbeat_at": _iso(j.heartbeat_at),
-        "products_count": j.products_count or 0,
+        "products_count": fetched_count,
+        "total_product_count": total_product_count,
+        "total_product_count_source": total_product_count_source,
         "new_count": j.new_count or 0,
         "promotion_count": j.promotion_count or 0,
         "duration_sec": j.duration_sec,
@@ -927,7 +953,8 @@ def _queue_jobs_list(db: Session, *, status: str | None, dataset: str | None,
     rows.sort(key=lambda row: row.get("created_at") or "", reverse=True)
     start = max(0, (page - 1) * size)
     end = start + size
-    return {"total": total, "items": rows[start:end]}
+    page_rows = rows[start:end]
+    return {"total": total, "items": page_rows}
 
 
 def _queue_maintenance(db: Session, *, apply: bool = False,
@@ -1416,7 +1443,11 @@ def admin_crawl_enqueue(
     actor = _require_super_admin(user, db)
     sites = _payload_sites(payload, db)
 
-    from ..runner import HIGH_PRIORITY_TRIGGERS, enqueue as enqueue_crawl
+    from ..runner import (
+        HIGH_PRIORITY_TRIGGERS,
+        crawl_preflight_issue,
+        enqueue as enqueue_crawl,
+    )
 
     jobs: list[int] = []
     created: list[int] = []
@@ -1424,6 +1455,8 @@ def admin_crawl_enqueue(
     promoted: list[int] = []
     by_site: dict[str, dict] = {}
     for site in sites:
+        site_row = db.query(Site).filter(Site.site == site).first()
+        preflight = crawl_preflight_issue(site_row)
         running = (db.query(CrawlJob)
                    .filter(CrawlJob.site == site, CrawlJob.status == "running")
                    .order_by(CrawlJob.id.desc())
@@ -1438,6 +1471,19 @@ def admin_crawl_enqueue(
                    .order_by(CrawlJob.id.desc())
                    .first())
         if pending:
+            if preflight is not None:
+                pending.status = "skipped"
+                pending.finished_at = datetime.utcnow()
+                pending.error = preflight.detail
+                record_failure(db, site=site, job_id=pending.id, info=preflight)
+                jobs.append(pending.id)
+                by_site[site] = {
+                    "job_id": pending.id,
+                    "status": "skipped_precondition",
+                    "failure_code": pending.failure_code,
+                    "suggested_action": pending.suggested_action,
+                }
+                continue
             jobs.append(pending.id)
             if pending.trigger in HIGH_PRIORITY_TRIGGERS:
                 reused.append(pending.id)
@@ -1819,11 +1865,21 @@ def job_retry(job_id: int, source: str = "spine",
         new_id = enqueue_crawl(j.site, trigger="admin_retry",
                                requested_by_workspace_id=j.requested_by_workspace_id,
                                requested_by_user_id=actor.id)
+        new_job = db.get(CrawlJob, new_id)
         record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
                      action="job.retry", target_type="crawl_job",
                      target_id=str(job_id), detail={"new_job_id": new_id},
                      ip=ip or None)
         db.commit()
+        if new_job and new_job.status == "skipped":
+            return {
+                "job_id": new_id,
+                "source": "crawl",
+                "status": "skipped_precondition",
+                "retried_from": job_id,
+                "failure_code": new_job.failure_code,
+                "suggested_action": new_job.suggested_action,
+            }
         return {"job_id": new_id, "source": "crawl", "status": "pending",
                 "retried_from": job_id}
     if source == "ondemand":

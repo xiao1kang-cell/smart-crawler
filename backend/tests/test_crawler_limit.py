@@ -79,3 +79,70 @@ def test_generic_still_reads_max_products(monkeypatch):
     c = GenericCrawler(Site(site="x", url="https://x.com", country="US",
                             platform="generic", proxy_tier="dc"))
     assert c.limit == 8
+
+
+def test_generic_block_detection_ignores_cloudflare_marketing_copy():
+    from app.crawlers.generic import GenericCrawler
+    from selectolax.parser import HTMLParser
+
+    html = """
+    <html><head><title>smart-crawler</title></head>
+    <body>Supports Cloudflare-aware crawling workflows.</body></html>
+    """
+
+    assert GenericCrawler._looks_blocked_page(HTMLParser(html), html) is False
+
+
+def test_generic_block_detection_keeps_cloudflare_challenge_marker():
+    from app.crawlers.generic import GenericCrawler
+    from selectolax.parser import HTMLParser
+
+    html = """
+    <html><head><title>Just a moment...</title></head>
+    <body><script src="/cdn-cgi/challenge-platform/h/b/scripts/jsd/main.js"></script></body></html>
+    """
+
+    assert GenericCrawler._looks_blocked_page(HTMLParser(html), html) is True
+
+
+def test_fetching_block_detection_ignores_cloudflare_vendor_copy():
+    from app.fetching import _looks_like_anti_bot
+
+    html = """
+    <html><head><title>smart-crawler</title></head>
+    <body>Supports Cloudflare-aware crawling workflows.</body></html>
+    """
+
+    assert _looks_like_anti_bot(html) is False
+
+
+def test_fetching_block_detection_keeps_active_cloudflare_challenge():
+    from app.fetching import _looks_like_anti_bot
+
+    html = """
+    <html><head><title>Just a moment...</title></head>
+    <body><script>window._cf_chl_opt = {}; cf-chl-bypass</script></body></html>
+    """
+
+    assert _looks_like_anti_bot(html) is True
+
+
+def test_fetching_block_detection_ignores_datadome_vendor_copy():
+    from app.fetching import _looks_like_anti_bot
+
+    html = """
+    <html><head><title>smart-crawler</title></head>
+    <body>Handles Cloudflare, Akamai, PerimeterX, DataDome with ease.</body></html>
+    """
+
+    assert _looks_like_anti_bot(html) is False
+
+
+def test_fetching_block_detection_keeps_datadome_challenge():
+    from app.fetching import _looks_like_anti_bot
+
+    html = """
+    <html><body><script src="https://geo.captcha-delivery.com/captcha.js"></script></body></html>
+    """
+
+    assert _looks_like_anti_bot(html) is True

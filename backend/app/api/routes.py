@@ -37,7 +37,33 @@ from ..runner import enqueue
 # 不要用 Product.is_new 列——它在 pipeline 首次插入时置 True 后从不复位，
 # 各站近期全量首采会让 96%+ 商品被误标为新品（2026-06 线上实测）。
 NEW_PRODUCT_DAYS = 30
-CRAWL_JOB_STUCK_SEC = 1800
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+CRAWL_JOB_STUCK_SEC = _env_int("CRAWL_JOB_STUCK_SEC", 14400)
+CRAWL_JOB_PENDING_STALE_SEC = 7200
+CRAWL_JOB_RETRY_STATUSES = {"failed", "blocked", "partial", "skipped"}
+
+
+def _is_crawl_job_retryable(job: CrawlJob, *, now: datetime | None = None) -> bool:
+    status = (job.status or "").lower()
+    if status in CRAWL_JOB_RETRY_STATUSES:
+        return True
+    now = now or datetime.utcnow()
+    if status == "running" and job.started_at is not None:
+        cutoff = now - timedelta(seconds=CRAWL_JOB_STUCK_SEC)
+        return job.started_at < cutoff and (
+            job.heartbeat_at is None or job.heartbeat_at < cutoff
+        )
+    if status == "pending" and job.created_at is not None:
+        return job.created_at < now - timedelta(seconds=CRAWL_JOB_PENDING_STALE_SEC)
+    return False
 
 
 # ---------- 鉴权依赖：接受 Bearer Token 或 X-API-Key ----------
@@ -1991,25 +2017,65 @@ def list_jobs(limit: int = 30, page: int = 1, status: str | None = None,
             .offset((page - 1) * limit)
             .limit(limit)
             .all())
-    items = [{
-        "id": j.id, "site": j.site, "status": j.status,
-        "products_count": j.products_count, "new_count": j.new_count,
-        "promotion_count": j.promotion_count, "success_rate": j.success_rate,
-        "duration_sec": round(j.duration_sec, 1) if j.duration_sec else None,
-        "requested_by_workspace_id": j.requested_by_workspace_id,
-        "requested_by_user_id": j.requested_by_user_id,
-        "created_at": j.created_at.isoformat() if j.created_at else None,
-        "started_at": j.started_at.isoformat() if j.started_at else None,
-        "finished_at": j.finished_at.isoformat() if j.finished_at else None,
-        "error": j.error,
-        "failure_code": j.failure_code,
-        "failure_stage": j.failure_stage,
-        "failure_detail": j.failure_detail,
-        "retryable": j.retryable,
-        "suggested_action": j.suggested_action,
-    } for j in rows]
+    now = datetime.utcnow()
+    def total_product_count(j: CrawlJob) -> tuple[int | None, str | None]:
+        total = int(getattr(j, "total_product_count", None) or 0)
+        if total > 0:
+            return total, "crawl_stats_total"
+        fetched = int(j.products_count or 0)
+        success_rate = float(j.success_rate or 0)
+        if fetched > 0 and success_rate > 0:
+            return max(fetched, round(fetched * 100 / success_rate)), "crawl_success_rate"
+        return None, None
+
+    items = []
+    for j in rows:
+        total_count, total_source = total_product_count(j)
+        items.append({
+            "id": j.id, "site": j.site, "status": j.status,
+            "products_count": j.products_count, "new_count": j.new_count,
+            "total_product_count": total_count,
+            "total_product_count_source": total_source,
+            "promotion_count": j.promotion_count, "success_rate": j.success_rate,
+            "duration_sec": round(j.duration_sec, 1) if j.duration_sec else None,
+            "requested_by_workspace_id": j.requested_by_workspace_id,
+            "requested_by_user_id": j.requested_by_user_id,
+            "created_at": j.created_at.isoformat() if j.created_at else None,
+            "started_at": j.started_at.isoformat() if j.started_at else None,
+            "finished_at": j.finished_at.isoformat() if j.finished_at else None,
+            "error": j.error,
+            "failure_code": j.failure_code,
+            "failure_stage": j.failure_stage,
+            "failure_detail": j.failure_detail,
+            "retryable": _is_crawl_job_retryable(j, now=now),
+            "suggested_action": j.suggested_action,
+        })
     return {"total": total, "page": page, "page_size": limit,
             "items": items, "jobs": items, "summary": summary}
+
+
+@router.post("/jobs/{job_id}/retry")
+def retry_crawl_job(job_id: int, user: str = Depends(require_user),
+                    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
+                    db: Session = Depends(get_db)):
+    ws = _current_workspace(user, db, x_workspace_id)
+    allowed_sites = set(_workspace_site_names(db, ws.id))
+    job = db.get(CrawlJob, job_id)
+    if not job or job.site not in allowed_sites:
+        raise HTTPException(404, "任务不存在或不在当前工作区")
+    if not _is_crawl_job_retryable(job):
+        raise HTTPException(409, "当前任务仍在处理中或不需要重试")
+    requester = _current_user(user, db)
+    new_id = enqueue(job.site, trigger="admin_retry",
+                     requested_by_workspace_id=ws.id,
+                     requested_by_user_id=requester.id if requester else None)
+    return {
+        "status": "queued",
+        "job_id": new_id,
+        "retried_from": job_id,
+        "site": job.site,
+        "queued_at": datetime.utcnow().isoformat(),
+    }
 
 
 @router.get("/crawl/diagnostics")
@@ -3400,6 +3466,20 @@ def data_coverage(
         for row in db.query(Product.site, func.count(Product.id))
                      .group_by(Product.site).all()
     }
+    listing_counts = {
+        row[0]: int(row[1] or 0)
+        for row in db.query(
+            Product.site,
+            func.count(func.distinct(func.coalesce(Product.spu, Product.sku))),
+        ).group_by(Product.site).all()
+    }
+    discovered_product_counts = {
+        row[0]: int(row[1] or 0)
+        for row in db.query(CrawlUrl.site, func.count(func.distinct(CrawlUrl.url)))
+                     .filter(CrawlUrl.kind == "product")
+                     .filter(CrawlUrl.url.isnot(None))
+                     .group_by(CrawlUrl.site).all()
+    }
     rows = []
     for s in db.query(SiteModel).filter(SiteModel.site.in_(allowed_sites)).all():
         if s.site in hidden or s.site not in allowed_sites:
@@ -3441,10 +3521,29 @@ def data_coverage(
             status = "warning"
         else:
             status = "healthy"
+        sitemap_product_count = int(sitemap_totals.get(s.site) or 0)
+        discovered_product_count = int(discovered_product_counts.get(s.site) or 0)
+        listing_product_count = int(listing_counts.get(s.site) or 0)
+        actual_candidates = [
+            ("sitemap", sitemap_product_count),
+            ("discovered_url", discovered_product_count),
+            ("product_listing", listing_product_count),
+            ("sku_rows", int(sku_count or 0)),
+        ]
+        actual_source, actual_product_count = next(
+            ((source, count) for source, count in actual_candidates if count > 0),
+            ("none", 0),
+        )
         rows.append({
             "site": s.site, "brand": s.brand, "country": s.country,
             "url": s.url, "platform": s.platform,
             "current": cur, "current_raw": cur_raw, "estimated_full": est,
+            "actual_product_count": actual_product_count,
+            "actual_product_count_source": actual_source,
+            "sitemap_product_count": sitemap_product_count,
+            "discovered_product_url_count": discovered_product_count,
+            "product_listing_count": listing_product_count,
+            "product_detail_count": int(sku_count or 0),
             "target_sku_count": target_sku,
             "target_sku_source": target_source,
             "sku_deviation_abs": sku_deviation_abs,

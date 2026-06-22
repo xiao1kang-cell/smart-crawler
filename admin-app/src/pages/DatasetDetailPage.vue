@@ -25,12 +25,40 @@ const error = ref('')
 const qualityFilter = ref('')
 const page = ref(1)
 const size = ref(20)
+const ALL_QUALITY = '__all_quality__'
 
 const detail = ref<any>(null)
 const detailLoading = ref(false)
 const detailError = ref('')
 
 const busyId = ref<number | null>(null)
+const recordColumns = [
+  { accessorKey: 'id', header: 'ID' },
+  { accessorKey: 'source_url', header: '来源 URL' },
+  { accessorKey: 'entity_type', header: '实体类型' },
+  { accessorKey: 'quality_status', header: '质量' },
+  { accessorKey: 'confidence', header: '置信度' },
+  { accessorKey: 'fetched_at', header: '抓取时间' },
+  { id: 'actions', header: '' }
+]
+
+const qualityFilterItems = [
+  { label: '全部质量', value: ALL_QUALITY },
+  { label: 'main', value: 'main' },
+  { label: 'staging', value: 'staging' },
+  { label: 'quarantine', value: 'quarantine' }
+]
+const qualitySelect = computed({
+  get: () => qualityFilter.value || ALL_QUALITY,
+  set: (value: string) => {
+    qualityFilter.value = value === ALL_QUALITY ? '' : value
+  }
+})
+const pageSizeItems = [
+  { label: '20 / 页', value: 20 },
+  { label: '50 / 页', value: 50 },
+  { label: '100 / 页', value: 100 }
+]
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / size.value)))
 
@@ -77,6 +105,11 @@ watch([qualityFilter, size], () => {
 function changePage(delta: number) {
   const next = page.value + delta
   if (next < 1 || next > totalPages.value) return
+  page.value = next
+  load()
+}
+
+function setPage(next: number) {
   page.value = next
   load()
 }
@@ -156,67 +189,50 @@ onMounted(() => {
     </div>
 
     <div class="toolbar">
-      <select v-model="qualityFilter" class="ctl">
-        <option value="">全部质量</option>
-        <option value="main">main</option>
-        <option value="staging">staging</option>
-        <option value="quarantine">quarantine</option>
-      </select>
+      <USelect v-model="qualitySelect" class="select-ctl" :items="qualityFilterItems" value-key="value" />
     </div>
 
     <div v-if="error" class="error">{{ error }}</div>
 
     <div class="table-wrap">
-      <table class="tbl">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>来源 URL</th>
-            <th>实体类型</th>
-            <th>质量</th>
-            <th>置信度</th>
-            <th>抓取时间</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in items" :key="row.id">
-            <td>{{ row.id }}</td>
-            <td :title="row.source_url">{{ truncate(row.source_url) }}</td>
-            <td>{{ row.entity_type || '-' }}</td>
-            <td><StatusBadge :status="row.quality_status" /></td>
-            <td>{{ row.confidence ?? '-' }}</td>
-            <td>{{ fmtDate(row.fetched_at) }}</td>
-            <td class="actions">
-              <button class="btn small" @click="openDetail(row.id)">详情</button>
-              <button
-                class="btn small"
-                :disabled="busyId === row.id || row.quality_status === 'main'"
-                @click="doPromote(row.id)"
-              >
-                提升
-              </button>
-              <button class="btn small danger" :disabled="busyId === row.id" @click="doDelete(row.id)">
-                删除
-              </button>
-            </td>
-          </tr>
-          <tr v-if="!items.length">
-            <td colspan="7" class="empty">{{ loading ? '加载中…' : '暂无记录' }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <UTable class="tbl ui-table" :data="items" :columns="recordColumns" :loading="loading" sticky="header" empty="暂无记录">
+        <template #source_url-cell="{ row }">
+          <span :title="row.original.source_url">{{ truncate(row.original.source_url) }}</span>
+        </template>
+        <template #entity_type-cell="{ row }">{{ row.original.entity_type || '-' }}</template>
+        <template #quality_status-cell="{ row }"><StatusBadge :status="row.original.quality_status" /></template>
+        <template #confidence-cell="{ row }">{{ row.original.confidence ?? '-' }}</template>
+        <template #fetched_at-cell="{ row }">{{ fmtDate(row.original.fetched_at) }}</template>
+        <template #actions-cell="{ row }">
+          <div class="actions">
+            <button class="btn small" @click="openDetail(row.original.id)">详情</button>
+            <button
+              class="btn small"
+              :disabled="busyId === row.original.id || row.original.quality_status === 'main'"
+              @click="doPromote(row.original.id)"
+            >
+              提升
+            </button>
+            <button class="btn small danger" :disabled="busyId === row.original.id" @click="doDelete(row.original.id)">
+              删除
+            </button>
+          </div>
+        </template>
+      </UTable>
     </div>
 
     <div class="pager">
-      <button class="btn small" :disabled="page <= 1" @click="changePage(-1)">上一页</button>
+      <UPagination
+        :page="page"
+        :total="total"
+        :items-per-page="size"
+        :disabled="loading || totalPages <= 1"
+        size="sm"
+        show-edges
+        @update:page="setPage"
+      />
       <span>第 {{ page }} / {{ totalPages }} 页 · 共 {{ total }} 条</span>
-      <button class="btn small" :disabled="page >= totalPages" @click="changePage(1)">下一页</button>
-      <select v-model.number="size" class="ctl">
-        <option :value="20">20 / 页</option>
-        <option :value="50">50 / 页</option>
-        <option :value="100">100 / 页</option>
-      </select>
+      <USelect v-model="size" class="size-select" :items="pageSizeItems" value-key="value" />
     </div>
 
     <div v-if="detail || detailLoading || detailError" class="drawer-mask" @click.self="closeDetail">
@@ -393,18 +409,21 @@ onMounted(() => {
 .drawer-mask {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--admin-overlay, rgba(15, 23, 42, 0.42));
+  backdrop-filter: blur(4px);
   display: flex;
   justify-content: flex-end;
-  z-index: 50;
+  z-index: 120;
 }
 
 .drawer {
   width: min(560px, 92vw);
   height: 100%;
   overflow-y: auto;
-  background: var(--ui-bg-elevated, #1a1a1f);
-  border-left: 1px solid var(--ui-border, rgba(255, 255, 255, 0.1));
+  background: var(--ui-panel, #fff);
+  color: var(--ui-text, #0f172a);
+  border-left: 1px solid var(--ui-border, rgba(148, 163, 184, 0.32));
+  box-shadow: -20px 0 60px rgba(15, 23, 42, 0.22);
   padding: 20px;
   display: flex;
   flex-direction: column;
@@ -444,8 +463,8 @@ onMounted(() => {
   margin: 0;
   padding: 12px;
   border-radius: 8px;
-  background: var(--ui-bg, rgba(0, 0, 0, 0.25));
-  border: 1px solid var(--ui-border, rgba(255, 255, 255, 0.08));
+  background: var(--admin-panel-soft, #f8fafc);
+  border: 1px solid var(--ui-border, rgba(148, 163, 184, 0.32));
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;

@@ -48,7 +48,7 @@ router.beforeEach(async (to) => {
       return '/login'
     }
   }
-  if (auth.user?.global_role !== 'super_admin') return '/login'
+  if (!auth.canAccessAdmin) return '/login'
 })
 
 export default router

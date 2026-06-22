@@ -43,6 +43,21 @@ def test_parse_retry_after_http_date_returns_none():
     assert _parse_retry_after(None) is None
 
 
+def test_large_product_page_with_bot_beacon_is_not_antibot():
+    from app.fetching import _looks_like_anti_bot
+
+    html = (
+        "<html><head>"
+        '<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>'
+        + " " * 210_000
+        + '<script type="application/ld+json">'
+        + '{"@context":"https://schema.org","@type":"Product","name":"Shelf"}'
+        + "</script></head><body></body></html>"
+    )
+
+    assert _looks_like_anti_bot(html) is False
+
+
 def test_retry_loop_uses_backoff_not_fixed_sleep(monkeypatch):
     """重试循环按 _backoff_seconds 退避,而非固定 min(2*attempt,5)。"""
     import app.fetching as fetching

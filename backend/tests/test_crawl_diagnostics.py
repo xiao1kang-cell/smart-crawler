@@ -76,6 +76,13 @@ def test_classifies_blocked_circuit_breaker_as_anti_bot():
     assert info.retryable is True
 
 
+def test_classifies_kasada_warmup_failure_as_anti_bot():
+    info = classify_exception(RuntimeError("熔断：otto Kasada profile warmup failed"))
+
+    assert info.code == ANTI_BOT_CHALLENGE
+    assert info.retryable is True
+
+
 def test_classifies_unknown_platform_as_configuration_issue():
     info = classify_exception(ValueError("未知平台: sephora"))
 

@@ -228,6 +228,72 @@ def test_magento_counter_accumulates_across_sitemap_and_products(monkeypatch):
     )
 
 
+def test_magento_prioritizes_costway_product_urls():
+    from app.crawlers.magento import _candidate_priority
+
+    urls = [
+        "https://www.costway.de/garten.html",
+        "https://www.costway.de/garten/gartenmobel.html",
+        "https://www.costway.de/costway-kunstpflanze-22-x-88-cm-grun.html",
+    ]
+
+    ordered = sorted(urls, key=_candidate_priority)
+
+    assert ordered[0].endswith("costway-kunstpflanze-22-x-88-cm-grun.html")
+
+
+def test_magento_costway_sitemap_only_rows(monkeypatch):
+    from app.crawlers.magento import MagentoCrawler
+
+    site = _site()
+    site.site = "costway_de"
+    site.url = "https://www.costway.de"
+    site.country = "DE"
+    site.brand = "Costway"
+    crawler = MagentoCrawler.__new__(MagentoCrawler)
+    from app.crawlers.base import BaseCrawler
+    BaseCrawler.__init__(crawler, site)
+    crawler.base = site.url.rstrip("/")
+    crawler.sitemap_hint = _SITEMAP_URL
+    crawler.product_match = ""
+    crawler.limit = 1
+    crawler.scan_cap = 100
+    crawler._sitemap_meta = {}
+
+    product_url = "https://www.costway.de/costway-klappstuhl-rot.html"
+    sitemap_xml = f"""
+    <urlset xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+      <url>
+        <loc>{product_url}</loc>
+        <lastmod>2026-06-17T13:23:52+00:00</lastmod>
+        <image:image>
+          <image:loc>https://www.costway.de/media/chair.jpg</image:loc>
+          <image:title>Klappstuhl Rot</image:title>
+        </image:image>
+      </url>
+    </urlset>
+    """
+
+    url_map = {
+        _SITEMAP_URL: FetchResult(
+            ok=True, url=_SITEMAP_URL, status=200,
+            text=sitemap_xml, content=sitemap_xml.encode(),
+            final_url=_SITEMAP_URL, fetcher="curl_cffi",
+        ),
+    }
+    monkeypatch.setattr(crawler, "make_fetcher",
+                        lambda **kw: _make_fake_fetcher(crawler, url_map))
+
+    result = crawler.crawl()
+
+    assert len(result.products) == 1
+    row = result.products[0]
+    assert row["sku"] == "costway-klappstuhl-rot"
+    assert row["title"] == "Klappstuhl Rot"
+    assert row["image_urls"] == ["https://www.costway.de/media/chair.jpg"]
+    assert row["currency"] == "EUR"
+
+
 def test_magento_robots_txt_discovery(monkeypatch):
     """Without sitemap_hint, crawler discovers sitemap from robots.txt."""
     from app.crawlers.magento import MagentoCrawler

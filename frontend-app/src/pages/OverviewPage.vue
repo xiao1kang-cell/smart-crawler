@@ -7,7 +7,9 @@ import { proxyStatus } from '../api/settings'
 import { asList, fmtNumber, proxyAvailable } from '../api/client'
 import PageLoading from '../components/common/PageLoading.vue'
 import { useJobTrigger } from '../composables/useJobTrigger'
+import { useAuthStore } from '../stores/auth'
 
+const auth = useAuthStore()
 const loading = ref(false)
 const error = ref('')
 const sites = ref<Record<string, any>[]>([])
@@ -81,6 +83,16 @@ function siteKey(row: Record<string, any>) {
   return String(row.site || row.name || '')
 }
 
+function hasReportData(row: Record<string, any>) {
+  return currentCount(row) > 0
+}
+
+function reportHref(row: Record<string, any>) {
+  const params = new URLSearchParams({ site: siteKey(row) })
+  if (auth.workspaceId) params.set('workspace_id', auth.workspaceId)
+  return `/report?${params.toString()}`
+}
+
 onMounted(load)
 </script>
 
@@ -120,7 +132,8 @@ onMounted(load)
           <div class="num">{{ fmtNumber(currentCount(row)) }}</div>
           <div class="pct">{{ coverageLabel(row) }} · 满 {{ fmtNumber(row.estimated_full || 0) }}</div>
           <div class="bar"><div :style="{ width: width(row) }" /></div>
-          <button :class="jobTrigger.classFor(siteKey(row))" :disabled="jobTrigger.isBusy(siteKey(row))" @click="trigger(siteKey(row))">{{ jobTrigger.labelFor(siteKey(row), '触发抓取') }}</button>
+          <a v-if="hasReportData(row)" class="cov-action cov-report-link" :href="reportHref(row)" target="_blank" rel="noopener">查看报告</a>
+          <button v-else class="cov-action" :class="jobTrigger.classFor(siteKey(row))" :disabled="jobTrigger.isBusy(siteKey(row))" @click="trigger(siteKey(row))">{{ jobTrigger.labelFor(siteKey(row), '触发抓取') }}</button>
           <div v-if="jobTrigger.detailFor(siteKey(row))" class="trigger-note" :class="jobTrigger.classFor(siteKey(row))">{{ jobTrigger.detailFor(siteKey(row)) }}</div>
         </div>
       </div>

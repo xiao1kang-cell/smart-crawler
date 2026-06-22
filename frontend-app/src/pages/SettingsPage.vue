@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { asList, proxyAvailable } from '../api/client'
 import { listSites } from '../api/products'
 import {
@@ -24,7 +24,7 @@ import JobsPanel from '../components/settings/JobsPanel.vue'
 const auth = useAuthStore()
 const workspace = useWorkspaceStore()
 
-const section = ref('workspace')
+const section = ref('jobs')
 const currentWorkspaceId = ref('')
 const workspaceForm = ref({ name: '', slug: '' })
 const siteForm = ref({ site: '' })
@@ -38,21 +38,51 @@ const proxy = ref<Record<string, any> | null>(null)
 const busy = ref('')
 const error = ref('')
 const message = ref('')
+const showCreateUser = ref(false)
 const createdUserPassword = ref('')
 const newInviteCode = ref('')
 
 const menu = [
+  { key: 'users', label: '用户管理', desc: '内部账号与角色' },
+  { key: 'jobs', label: '采集任务', desc: '队列与进程状态' },
   { key: 'workspace', label: '工作区', desc: '当前租户与切换' },
   { key: 'workspace_sites', label: '工作区站点', desc: '可见站点清单' },
-  { key: 'jobs', label: '采集任务', desc: '队列与进程状态' },
-  { key: 'users', label: '用户管理', desc: '内部账号与角色' },
   { key: 'invites', label: '邀请注册', desc: '新租户或成员邀请' },
   { key: 'proxy', label: '代理池', desc: '本地代理健康' },
   { key: 'docs', label: '文档工具', desc: '报告与接口文档' }
 ]
+const workspaceItems = computed(() => workspace.workspaces.map((w) => ({
+  label: formatWorkspaceName(w),
+  value: String(w.id),
+})))
+const roleItems = [
+  { label: '普通用户', value: 'user' },
+  { label: '只读用户', value: 'viewer' },
+  { label: '管理员', value: 'admin' },
+]
+const inviteTargetItems = [
+  { label: '创建注册用户自己的新租户', value: 'new_workspace' },
+  { label: '加入已有租户 / 工作区', value: 'workspace' },
+]
+const inviteRoleItems = [
+  { label: '普通用户 · 可使用功能', value: 'user' },
+  { label: '只读用户 · 只读查看', value: 'viewer' },
+]
 
 const canAdmin = computed(() => auth.user?.role === 'admin' || auth.user?.global_role === 'super_admin')
 const canManageWorkspaces = computed(() => auth.user?.global_role === 'super_admin' || (auth.user?.username === 'admin' && auth.user?.role === 'admin') || ['admin', 'owner'].includes(auth.user?.workspace_role || ''))
+const canManageInvites = computed(() => auth.user?.global_role === 'super_admin')
+const showWorkspaceMenu = computed(() => canManageWorkspaces.value || workspace.workspaces.length > 1)
+const showWorkspaceSettingsFeature = false
+const showWorkspaceSitesFeature = false
+const visibleMenu = computed(() => menu.filter((item) => {
+  if (item.key === 'workspace') return showWorkspaceSettingsFeature && showWorkspaceMenu.value
+  if (item.key === 'workspace_sites') return showWorkspaceSitesFeature && canManageWorkspaces.value
+  if (item.key === 'users') return canAdmin.value
+  if (item.key === 'invites') return canManageInvites.value
+  return true
+}))
+const menuSummary = computed(() => visibleMenu.value.map((item) => item.label).join(' · ') || '设置')
 const proxyTotal = computed(() => Number(proxy.value?.total || proxy.value?.proxies?.length || proxy.value?.details?.length || 0))
 const proxyOk = computed(() => proxyAvailable(proxy.value))
 const proxyHealth = computed(() => proxy.value?.health || {})
@@ -63,6 +93,12 @@ const proxyProblemCount = computed(() => {
   return Number(counts.down || 0) + Number(counts.blocked || 0) + Number(counts.degraded || 0)
 })
 const initialLoading = computed(() => busy.value === 'load' && !workspace.workspaces.length && !sites.value.length && !users.value.length && !invites.value.length)
+
+watch(visibleMenu, (items) => {
+  if (!items.some((item) => item.key === section.value)) {
+    section.value = items[0]?.key || 'jobs'
+  }
+}, { immediate: true })
 
 function formatWorkspaceName(row?: Record<string, any> | null) {
   if (!row) return '—'
@@ -83,6 +119,12 @@ function formatProxyStatus(status?: string) {
 
 function proxyTone(status?: string) {
   return ['healthy'].includes(status || '') ? 'ok' : ['degraded', 'unknown'].includes(status || '') ? 'warn' : 'bad'
+}
+
+function openCreateUser() {
+  userForm.value = { username: '', email: '', display_name: '', role: 'user', password: '' }
+  createdUserPassword.value = ''
+  showCreateUser.value = true
 }
 
 async function guarded(label: string, fn: () => Promise<void>) {
@@ -106,7 +148,7 @@ async function load() {
     const workspaceId = currentWorkspaceId.value
     const [usersData, invitesData, siteData, workspaceSiteData, proxyData] = await Promise.all([
       listUsers().catch(() => ({ users: [] })),
-      listInvites().catch(() => ({ invites: [] })),
+      canManageInvites.value ? listInvites().catch(() => ({ invites: [] })) : Promise.resolve({ invites: [] }),
       listSites().catch(() => ({ sites: [] })),
       workspaceId ? listWorkspaceSites(workspaceId).catch(() => ({ sites: [] })) : Promise.resolve({ sites: [] }),
       proxyStatus().catch(() => null)
@@ -171,6 +213,7 @@ async function saveUser() {
     const data = await createUser({ ...userForm.value, workspace_id: currentWorkspaceId.value ? Number(currentWorkspaceId.value) : undefined })
     createdUserPassword.value = data?.temporary_password || ''
     userForm.value.password = ''
+    showCreateUser.value = false
     await load()
     message.value = '用户已创建'
   })
@@ -181,6 +224,10 @@ async function patchUser(user: Record<string, any>, patch: Record<string, any>) 
     await updateUser(user.id, patch)
     await load()
   })
+}
+
+async function patchUserRole(user: Record<string, any>, value: string | number) {
+  await patchUser(user, { role: String(value) })
 }
 
 async function resetPassword(user: Record<string, any>) {
@@ -226,9 +273,9 @@ onMounted(load)
 </script>
 
 <template>
-  <section>
+  <section class="settings-page">
     <div class="lead">设置</div>
-    <div class="sub">工作区 · 采集任务 · 用户管理 · 邀请码 · 代理池 · 文档</div>
+    <div class="sub">{{ menuSummary }}</div>
     <UAlert v-if="error" color="error" variant="soft" :title="error" class="mb-4" />
     <UAlert v-if="message" color="success" variant="soft" :title="message" class="mb-4" />
 
@@ -236,19 +283,17 @@ onMounted(load)
 
     <div v-else class="subnav-layout">
       <nav class="subnav" aria-label="设置二级菜单">
-        <button v-for="item in menu" :key="item.key" class="subnav-item" :class="{ active: section === item.key }" @click="section = item.key">
+        <button v-for="item in visibleMenu" :key="item.key" class="subnav-item" :class="{ active: section === item.key }" @click="section = item.key">
           <span>{{ item.label }}</span>
           <small>{{ item.desc }}</small>
         </button>
       </nav>
 
       <div class="subnav-content">
-        <div v-if="section === 'workspace'" class="set-block">
+        <div v-if="showWorkspaceSettingsFeature && section === 'workspace' && showWorkspaceMenu" class="set-block">
           <h3>🏢 工作区</h3>
           <div class="form-grid one">
-            <select class="set-sel" v-model="currentWorkspaceId" @change="switchWorkspace">
-              <option v-for="w in workspace.workspaces" :key="w.id" :value="String(w.id)">{{ formatWorkspaceName(w) }}</option>
-            </select>
+            <USelect v-model="currentWorkspaceId" class="set-select" :items="workspaceItems" value-key="value" @update:model-value="switchWorkspace" />
           </div>
           <div class="key-row">
             <div class="info">
@@ -265,7 +310,7 @@ onMounted(load)
           </template>
         </div>
 
-        <div v-if="section === 'workspace_sites' && canManageWorkspaces" class="set-block">
+        <div v-if="showWorkspaceSitesFeature && section === 'workspace_sites' && canManageWorkspaces" class="set-block">
           <h3>🌐 工作区站点</h3>
           <div class="form-grid">
             <input class="set-inp" v-model="siteForm.site" placeholder="全局站点编码，例如 songmics_us" />
@@ -301,19 +346,10 @@ onMounted(load)
         </div>
 
         <div v-if="section === 'users' && canAdmin" class="set-block">
-          <h3>👥 用户管理</h3>
-          <div class="form-grid">
-            <input class="set-inp" v-model="userForm.username" placeholder="用户名" />
-            <input class="set-inp" v-model="userForm.email" placeholder="邮箱" />
-            <input class="set-inp" v-model="userForm.display_name" placeholder="显示名" />
-            <select class="set-sel" v-model="userForm.role">
-              <option value="user">普通用户</option>
-              <option value="viewer">只读用户</option>
-              <option value="admin">管理员</option>
-            </select>
-            <input class="set-inp" type="password" v-model="userForm.password" placeholder="密码，留空自动生成" />
-            <button class="mini-btn wide" :disabled="busy === 'user'" @click="saveUser">创建用户</button>
-          </div>
+          <h3>
+            <span>👥 用户管理</span>
+            <button type="button" class="mini-btn" @click="openCreateUser">创建用户</button>
+          </h3>
           <div v-if="createdUserPassword" class="secret-box">{{ createdUserPassword }}</div>
           <div class="settings-scroll-list">
             <div v-for="u in users" :key="u.id" class="key-row">
@@ -323,11 +359,7 @@ onMounted(load)
                 <span class="meta">角色={{ formatRole(u.role) }} · 状态={{ formatAccountStatus(u.status) }}</span>
               </div>
               <div style="display:flex;gap:6px">
-                <select class="set-sel" style="width:92px" :value="u.role" @change="patchUser(u, { role: ($event.target as HTMLSelectElement).value })">
-                  <option value="admin">管理员</option>
-                  <option value="user">普通用户</option>
-                  <option value="viewer">只读用户</option>
-                </select>
+                <USelect :model-value="u.role" class="set-select role-select" :items="roleItems" value-key="value" @update:model-value="patchUserRole(u, $event)" />
                 <button class="mini-btn" @click="resetPassword(u)">重置密码</button>
                 <button class="mini-btn bad" @click="patchUser(u, { status: u.status === 'active' ? 'disabled' : 'active' })">{{ u.status === 'active' ? '禁用' : '启用' }}</button>
               </div>
@@ -339,7 +371,7 @@ onMounted(load)
           </div>
         </div>
 
-        <div v-if="section === 'invites' && canAdmin" class="set-block">
+        <div v-if="section === 'invites' && canManageInvites" class="set-block">
           <h3>🎟 邀请注册</h3>
           <div class="hint-box">
             <b>用途：</b>生成一个注册通行证，发给外部用户。
@@ -350,17 +382,12 @@ onMounted(load)
           <div class="form-grid">
             <div class="form-field wide">
               <label>邀请类型</label>
-              <select class="set-sel" v-model="inviteForm.target_type">
-                <option value="new_workspace">创建注册用户自己的新租户</option>
-                <option value="workspace">加入已有租户 / 工作区</option>
-              </select>
+              <USelect v-model="inviteForm.target_type" class="set-select" :items="inviteTargetItems" value-key="value" />
               <small>外部新客户用“自己的新租户”；邀请同事进现有租户时才选“已有租户”。</small>
             </div>
             <div v-if="canManageWorkspaces && inviteForm.target_type === 'workspace'" class="form-field wide">
               <label>加入哪个租户 / 工作区</label>
-              <select class="set-sel" v-model="inviteForm.workspace_id">
-                <option v-for="w in workspace.workspaces" :key="w.id" :value="String(w.id)">{{ formatWorkspaceName(w) }}</option>
-              </select>
+              <USelect v-model="inviteForm.workspace_id" class="set-select" :items="workspaceItems" value-key="value" />
               <small>只有内部协作或给同一客户加成员时使用这个模式。</small>
             </div>
             <div class="form-field">
@@ -375,10 +402,7 @@ onMounted(load)
             </div>
             <div class="form-field">
               <label>注册后角色</label>
-              <select class="set-sel" v-model="inviteForm.default_role">
-                <option value="user">普通用户 · 可使用功能</option>
-                <option value="viewer">只读用户 · 只读查看</option>
-              </select>
+              <USelect v-model="inviteForm.default_role" class="set-select" :items="inviteRoleItems" value-key="value" />
               <small>邀请码不能创建管理员，管理员需内部创建。</small>
             </div>
             <button class="mini-btn wide" :disabled="busy === 'invite'" @click="saveInvite">生成注册邀请码</button>
@@ -462,6 +486,44 @@ onMounted(load)
         </div>
       </div>
     </div>
+
+    <UModal
+      v-model:open="showCreateUser"
+      title="创建用户"
+      :ui="{
+        content: 'settings-dialog',
+        header: 'settings-dialog-head',
+        body: 'settings-dialog-body',
+        footer: 'settings-dialog-foot',
+        title: 'settings-dialog-title'
+      }"
+    >
+      <template #body>
+        <div class="settings-dialog-grid">
+          <UFormField label="用户名" class="settings-dialog-field">
+            <input v-model="userForm.username" class="set-inp" placeholder="请输入用户名" />
+          </UFormField>
+          <UFormField label="邮箱" class="settings-dialog-field">
+            <input v-model="userForm.email" class="set-inp" placeholder="请输入邮箱" />
+          </UFormField>
+          <UFormField label="显示名" class="settings-dialog-field">
+            <input v-model="userForm.display_name" class="set-inp" placeholder="请输入显示名" />
+          </UFormField>
+          <UFormField label="角色" class="settings-dialog-field">
+            <USelect v-model="userForm.role" class="set-select" :items="roleItems" value-key="value" />
+          </UFormField>
+          <UFormField label="密码" class="settings-dialog-field wide">
+            <input v-model="userForm.password" class="set-inp" type="password" placeholder="留空自动生成" />
+          </UFormField>
+        </div>
+      </template>
+      <template #footer>
+        <button type="button" class="settings-dialog-btn ghost" :disabled="busy === 'user'" @click="showCreateUser = false">取消</button>
+        <button type="button" class="settings-dialog-btn primary" :disabled="busy === 'user'" @click="saveUser">
+          {{ busy === 'user' ? '创建中' : '创建用户' }}
+        </button>
+      </template>
+    </UModal>
   </section>
 </template>
 
@@ -480,5 +542,131 @@ onMounted(load)
   min-height: 30px;
   padding: 4px 8px;
   font-size: .78rem;
+}
+
+.settings-dialog-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-dialog-field {
+  min-width: 0;
+}
+
+.settings-dialog-field.wide {
+  grid-column: 1 / -1;
+}
+
+.settings-dialog-field :deep(label) {
+  color: var(--ui-heading);
+  font-size: .78rem;
+  font-weight: 800;
+}
+
+.settings-dialog-field :deep(.set-inp),
+.settings-dialog-field :deep(.set-select) {
+  min-height: 38px;
+  margin-top: 6px;
+}
+
+:global(.settings-dialog) {
+  width: 560px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--ui-card);
+  color: var(--ui-text);
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  box-shadow: 0 24px 70px rgba(37, 29, 61, .22);
+}
+
+:global(.settings-dialog-head) {
+  flex: 0 0 auto;
+  padding: 18px 20px 12px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+:global(.settings-dialog-title) {
+  color: var(--ui-heading);
+  font-size: 1rem;
+  font-weight: 900;
+}
+
+:global(.settings-dialog-body) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 20px;
+}
+
+:global(.settings-dialog-foot) {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 20px 18px;
+  border-top: 1px solid var(--ui-border);
+}
+
+.settings-dialog-btn {
+  min-width: 92px;
+  min-height: 36px;
+  border-radius: 8px;
+  border: 1px solid var(--ui-border);
+  padding: 8px 14px;
+  font-size: .78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.settings-dialog-btn:disabled {
+  opacity: .62;
+  cursor: wait;
+}
+
+.settings-dialog-btn.ghost {
+  background: var(--ui-card-soft);
+  color: var(--ui-muted);
+}
+
+.settings-dialog-btn.primary {
+  border-color: rgba(167, 139, 250, .42);
+  background: rgba(167, 139, 250, .18);
+  color: var(--ui-purple);
+}
+
+:global(html[data-theme="dark"] .settings-dialog) {
+  background: #15101f;
+  border-color: #3d2d5a;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .52);
+}
+
+:global(html[data-theme="dark"] .settings-dialog-btn.ghost) {
+  background: rgba(255, 255, 255, .035);
+  color: #b5bfd2;
+}
+
+:global(html[data-theme="dark"] .settings-dialog-btn.primary) {
+  border-color: rgba(185, 148, 255, .44);
+  background: rgba(185, 148, 255, .20);
+  color: #dccfff;
+}
+
+@media (max-width: 640px) {
+  .settings-dialog-grid {
+    grid-template-columns: 1fr;
+  }
+
+  :global(.settings-dialog-foot) {
+    flex-direction: column-reverse;
+  }
+
+  .settings-dialog-btn {
+    width: 100%;
+  }
 }
 </style>

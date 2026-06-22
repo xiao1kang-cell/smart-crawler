@@ -116,7 +116,7 @@ def test_proxy_health_cools_down_degraded_network_failure(session):
     assert proxy_hash(proxy) not in unhealthy_proxy_hashes(session)
 
 
-def test_unhealthy_proxy_hashes_keeps_down_proxy_out_after_cooldown(session):
+def test_unhealthy_proxy_hashes_keeps_down_until_health_probe_recovers(session):
     from datetime import datetime, timedelta
 
     down_proxy = "http://user:pass@127.0.0.2:3128"
@@ -139,4 +139,4 @@ def test_unhealthy_proxy_hashes_keeps_down_proxy_out_after_cooldown(session):
 
     unhealthy = unhealthy_proxy_hashes(session)
     assert proxy_hash(down_proxy) in unhealthy
-    assert proxy_hash(degraded_proxy) in unhealthy
+    assert proxy_hash(degraded_proxy) not in unhealthy

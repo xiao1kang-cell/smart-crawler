@@ -20,6 +20,9 @@ from .crawl_diagnostics import (
     FailureInfo,
     PROXY_UNAVAILABLE,
     STAGE_FETCH,
+    STAGE_JOB,
+    TRACKING_PAUSED,
+    WORKSPACE_HIDDEN,
     classify_exception,
     record_failure,
     zero_products_failure,
@@ -74,6 +77,17 @@ _PROMO_END_KEYS = (
 
 HIGH_PRIORITY_TRIGGERS = ("manual", "admin_quality_rerun", "admin_retry")
 AUTO_DEDUP_TRIGGERS = ("scheduled", "daily_refresh", "daily_delta")
+NON_FATAL_PARTIAL_FAILURE_CODES = {
+    "anti_bot_challenge",
+    "network_timeout",
+    "http_429",
+    "parse_no_jsonld",
+}
+NON_FATAL_PARTIAL_MIN_PRODUCTS = 50
+NON_FATAL_PARTIAL_SITE_MIN_PRODUCTS = {
+    "cdiscount_fr": 40,
+}
+NON_FATAL_PARTIAL_MIN_SUCCESS_RATE = 95.0
 
 
 def enqueue(site_name: str, trigger: str = "manual",
@@ -99,13 +113,23 @@ def enqueue(site_name: str, trigger: str = "manual",
                        requested_by_user_id=requested_by_user_id)
         s.add(job)
         s.flush()
-        preflight = proxy_preflight_issue(site)
+        preflight = crawl_preflight_issue(site, trigger=trigger, session=s)
         if preflight is not None:
-            job.status = "skipped"
-            job.finished_at = datetime.utcnow()
-            job.error = preflight.detail
-            record_failure(s, site=site_name, job_id=job.id, info=preflight)
+            _skip_job(s, job, preflight)
         return job.id
+
+
+def tracking_paused_issue(site: Site | None) -> FailureInfo | None:
+    """Return a failure when a site is intentionally paused in benchmark tracking."""
+    if site is None or site.track_status != "paused":
+        return None
+    return FailureInfo(
+        TRACKING_PAUSED,
+        STAGE_JOB,
+        f"{site.site} 已在标杆维护中暂停追踪，任务已跳过",
+        False,
+        "如需重新采集，请先在标杆维护中恢复追踪",
+    )
 
 
 def proxy_preflight_issue(site: Site | None) -> FailureInfo | None:
@@ -126,6 +150,45 @@ def proxy_preflight_issue(site: Site | None) -> FailureInfo | None:
         True,
         "先在代理池补充/修复可用代理，再重跑该站点",
     )
+
+
+def workspace_hidden_issue(site: Site | None, *, trigger: str | None = None,
+                           session=None) -> FailureInfo | None:
+    """Skip auto crawls for sites hidden from every enabled workspace."""
+    if site is None or trigger not in AUTO_DEDUP_TRIGGERS or session is None:
+        return None
+    from .models import WorkspaceSite
+
+    links = (session.query(WorkspaceSite)
+             .filter(WorkspaceSite.site == site.site,
+                     WorkspaceSite.enabled == True)  # noqa: E712
+             .all())
+    if not links or any(not bool(link.hidden) for link in links):
+        return None
+    return FailureInfo(
+        WORKSPACE_HIDDEN,
+        STAGE_JOB,
+        f"{site.site} 已在所有启用工作区隐藏，自动调度任务已跳过",
+        False,
+        "如需恢复自动采集，请先在后台将该站点设为可见，或使用后台手动重跑",
+    )
+
+
+def crawl_preflight_issue(site: Site | None, *, trigger: str | None = None,
+                          session=None) -> FailureInfo | None:
+    """Return the first site-level reason a crawl should not run."""
+    return (
+        tracking_paused_issue(site)
+        or workspace_hidden_issue(site, trigger=trigger, session=session)
+        or proxy_preflight_issue(site)
+    )
+
+
+def _skip_job(s, job: CrawlJob, info: FailureInfo) -> None:
+    job.status = "skipped"
+    job.finished_at = datetime.utcnow()
+    job.error = info.detail
+    record_failure(s, site=job.site, job_id=job.id, info=info)
 
 
 def claim_job(worker_id: str,
@@ -151,12 +214,9 @@ def claim_job(worker_id: str,
             if job is None:
                 return None
             site = s.query(Site).filter(Site.site == job.site).first()
-            preflight = proxy_preflight_issue(site)
+            preflight = crawl_preflight_issue(site, trigger=job.trigger, session=s)
             if preflight is not None:
-                job.status = "skipped"
-                job.finished_at = datetime.utcnow()
-                job.error = preflight.detail
-                record_failure(s, site=job.site, job_id=job.id, info=preflight)
+                _skip_job(s, job, preflight)
                 s.flush()
                 skipped += 1
                 if skipped >= 50:
@@ -206,6 +266,13 @@ def execute_job(job_id: int) -> dict:
         if job.status != "running":              # CLI 直跑路径：补置 running
             job.status = "running"
             job.started_at = datetime.utcnow()
+        preflight = crawl_preflight_issue(site, trigger=job.trigger, session=s)
+        if preflight is not None:
+            _skip_job(s, job, preflight)
+            return {"job_id": job_id, "site": site_name, "status": "skipped",
+                    "failure_code": preflight.code,
+                    "error": preflight.detail,
+                    "suggested_action": preflight.suggested_action}
         crawler = get_crawler(site)
         crawler.job_id = job_id
 
@@ -273,6 +340,7 @@ def execute_job(job_id: int) -> dict:
         job.finished_at = datetime.utcnow()
         job.duration_sec = (datetime.utcnow() - started).total_seconds()
         job.products_count = stats["inserted"] + stats["updated"]
+        job.total_product_count = stats["total"]
         job.new_count = stats["new"]
         job.promotion_count = promo_count
         total = stats["total"] or 1
@@ -299,7 +367,17 @@ def execute_job(job_id: int) -> dict:
             )
             record_failure(s, site=site_name, job_id=job_id, info=info)
         if produced > 0 and job.failure_code:
-            job.status = "partial"
+            if _is_non_fatal_partial(job, produced):
+                result.notes.append(
+                    f"忽略非致命采集噪音: {job.failure_code}"
+                )
+                job.failure_code = None
+                job.failure_stage = None
+                job.failure_detail = None
+                job.retryable = None
+                job.suggested_action = None
+            else:
+                job.status = "partial"
         ws_id = job.requested_by_workspace_id
 
     counter = getattr(crawler, "counter", None)
@@ -326,6 +404,23 @@ def execute_job(job_id: int) -> dict:
         payload["retryable"] = job.retryable
         payload["suggested_action"] = job.suggested_action
     return payload
+
+
+def _is_non_fatal_partial(job: CrawlJob, produced: int) -> bool:
+    min_products = NON_FATAL_PARTIAL_SITE_MIN_PRODUCTS.get(
+        job.site,
+        NON_FATAL_PARTIAL_MIN_PRODUCTS,
+    )
+    if produced < min_products:
+        return False
+    code = (job.failure_code or "").strip()
+    if code not in NON_FATAL_PARTIAL_FAILURE_CODES:
+        return False
+    try:
+        success_rate = float(job.success_rate or 0)
+    except (TypeError, ValueError):
+        success_rate = 0
+    return success_rate >= NON_FATAL_PARTIAL_MIN_SUCCESS_RATE
 
 
 def run_site(site_name: str) -> dict:

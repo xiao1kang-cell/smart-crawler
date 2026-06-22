@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from .crawl_diagnostics import FailureInfo, hash_url, record_url_state
 from .models import CrawlUrl
+from .url_filters import is_obvious_non_product_url
 
 TERMINAL_STATUSES = {"parsed", "blocked"}
 RETRYABLE_STATUSES = {"pending", "failed", "fetched"}
@@ -30,7 +31,7 @@ def register_urls(
 ) -> int:
     count = 0
     for url in urls:
-        if not url:
+        if not url or (kind == "product" and is_obvious_non_product_url(url)):
             continue
         record_url_state(
             session,

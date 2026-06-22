@@ -130,6 +130,13 @@ class WayfairCrawler(BaseCrawler):
         targets = urls[: self.limit]
         result.notes.append(
             f"sitemap 累计 {len(urls)} PDP URL，本次抓取 {len(targets)}")
+        if os.environ.get("WAYFAIR_FETCH_PDP", "0") != "1":
+            rows = [self._row_from_sitemap(url) for url in targets]
+            result.products.extend(row for row in rows if row)
+            result.notes.append(
+                f"Wayfair sitemap-only 产出 {len(result.products)} 个商品"
+                "（价格字段后续由 PDP/增量任务补齐）")
+            return result
 
         import time as _t
 
@@ -269,6 +276,28 @@ class WayfairCrawler(BaseCrawler):
             f"成功 {ok}/{len(targets)} · 失败 {fail} · 已下架(404) {missing} · "
             f"反爬命中 {blocked} · stealth fallback {stealth_used}")
         return result
+
+    def _row_from_sitemap(self, url: str) -> dict | None:
+        sku = None
+        match = _SKU_URL_RE.search(url)
+        if match:
+            sku = match.group(1).upper()
+        if not sku:
+            return None
+        title = _title_from_url(url)
+        if not title:
+            return None
+        return {
+            "sku": sku,
+            "spu": sku,
+            "title": title,
+            "category_path": _category_from_url(url),
+            "currency": "USD",
+            "status": "on_sale",
+            "product_url": url,
+            "site": self.site.site,
+            "brand": self.site.brand,
+        }
 
     # ---------- sitemap ----------
     def _collect_pdp_urls(self, fetcher, result: CrawlResult) -> list[str]:
@@ -520,3 +549,22 @@ class WayfairCrawler(BaseCrawler):
                     names.append(n)
             return "/".join(names[:4]) or None
         return None
+
+
+def _title_from_url(url: str) -> str | None:
+    slug = url.rstrip("/").rsplit("/", 1)[-1].split("?", 1)[0]
+    if slug.endswith(".html"):
+        slug = slug[:-5]
+    slug = re.sub(r"-[a-z]\d{5,}$", "", slug, flags=re.I)
+    text = re.sub(r"[-_]+", " ", slug).strip()
+    if not text:
+        return None
+    return " ".join(part.capitalize() for part in text.split())
+
+
+def _category_from_url(url: str) -> str | None:
+    path = re.sub(r"https?://[^/]+", "", url).strip("/")
+    parts = [p for p in path.split("/")[:-2] if p and p != "pdp"]
+    if not parts:
+        return None
+    return " / ".join(re.sub(r"[-_]+", " ", p).strip().title() for p in parts)

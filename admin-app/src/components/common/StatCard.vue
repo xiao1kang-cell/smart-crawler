@@ -16,28 +16,39 @@ defineProps<{
 
 <style scoped>
 .stat-card {
-  padding: 18px 20px;
-  border-radius: 12px;
+  height: 100%;
+  min-height: 94px;
+  padding: 14px 16px;
+  border-radius: var(--admin-radius, 8px);
   border: 1px solid var(--ui-border, rgba(255, 255, 255, 0.08));
-  background: var(--ui-bg-elevated, rgba(255, 255, 255, 0.03));
+  background: var(--admin-panel, var(--ui-bg-elevated, rgba(255, 255, 255, 0.03)));
+  box-shadow: var(--admin-shadow, none);
   min-width: 0;
 }
 
 .stat-label {
-  font-size: 13px;
-  opacity: 0.65;
+  color: var(--ui-muted, #64748b);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  opacity: 1;
 }
 
 .stat-value {
-  margin-top: 8px;
-  font-size: 28px;
-  font-weight: 600;
+  margin-top: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 25px;
+  font-weight: 700;
   line-height: 1.1;
+  letter-spacing: 0;
 }
 
 .stat-note {
-  margin-top: 6px;
+  margin-top: 7px;
+  color: var(--ui-muted, #64748b);
   font-size: 12px;
-  opacity: 0.55;
+  line-height: 1.35;
+  opacity: 1;
 }
 </style>

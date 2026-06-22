@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app.apikey import hash_key
 from app.auth import hash_password, hash_secret, make_token
 from app.db import Base
-from app.models import (ApiKey, CrawlFailure, CrawlJob, InviteCode, OnDemandJob,
+from app.models import (ApiKey, CrawlFailure, CrawlJob, CrawlUrl, InviteCode, OnDemandJob,
                         PriceHistory, Product, Promotion, Review, Site,
                         SpineJob, User, Workspace, WorkspaceMember,
                         WorkspaceSite, Trend)
@@ -751,12 +751,40 @@ def test_workspace_site_target_sku_drives_coverage_and_quality_deviation():
     assert updated["target_sku_count"] == 10
     assert row["target_sku_count"] == 10
     assert row["estimated_full"] == 10
+    assert row["actual_product_count"] == 1
+    assert row["actual_product_count_source"] == "product_listing"
     assert row["sku_deviation_pct"] == -90
     assert coverage["summary"]["high_deviation_count"] == 1
     assert quality_row["target_sku_count"] == 10
     assert quality_row["sku_deviation_pct"] == -90
     assert "sku_deviation_high" in quality_row["issues"]
     assert quality["summary"]["high_deviation"] == 1
+
+
+def test_coverage_actual_product_count_can_use_discovered_urls_without_details():
+    from app.api.routes import data_coverage
+
+    db = _session()
+    ws_a, _ws_b, _alice, _bob, admin = _seed_two_workspaces(db)
+    _site(db, "site_c", "C")
+    _workspace_site(db, ws_a, "site_c", target_sku_count=99)
+    db.add(CrawlUrl(site="site_c", url="https://site-c.example.com/p/1",
+                    url_hash="c1", kind="product", source="sitemap",
+                    status="pending"))
+    db.add(CrawlUrl(site="site_c", url="https://site-c.example.com/p/2",
+                    url_hash="c2", kind="product", source="sitemap",
+                    status="pending"))
+    db.commit()
+
+    coverage = data_coverage(user=admin.username,
+                             x_workspace_id=str(ws_a.id), db=db)
+    row = next(item for item in coverage["sites"] if item["site"] == "site_c")
+
+    assert row["target_sku_count"] == 99
+    assert row["estimated_full"] == 99
+    assert row["actual_product_count"] == 2
+    assert row["actual_product_count_source"] == "discovered_url"
+    assert row["product_detail_count"] == 0
 
 
 def test_acceptance_target_sku_is_default_coverage_baseline():
@@ -1586,6 +1614,64 @@ def test_admin_queue_stats_list_and_detail_match_real_job_states():
     with pytest.raises(HTTPException) as exc:
         jobs_list(status="failed", source="crawl", user=alice.username, db=db)
     assert exc.value.status_code == 403
+
+
+def test_workspace_jobs_list_marks_retryable_and_retry_enqueues_visible_site():
+    from app.api.routes import list_jobs, retry_crawl_job
+
+    db = _session()
+    ws_a, ws_b, alice, bob, _admin = _seed_two_workspaces(db)
+    failed = CrawlJob(site="site_a", status="failed",
+                      requested_by_workspace_id=ws_a.id,
+                      failure_code="zero_products",
+                      created_at=datetime.utcnow() - timedelta(minutes=5),
+                      finished_at=datetime.utcnow() - timedelta(minutes=4))
+    active = CrawlJob(site="site_a", status="running",
+                      requested_by_workspace_id=ws_a.id,
+                      created_at=datetime.utcnow(),
+                      started_at=datetime.utcnow(),
+                      heartbeat_at=datetime.utcnow())
+    other = CrawlJob(site="site_b", status="failed",
+                     requested_by_workspace_id=ws_b.id,
+                     failure_code="http_403",
+                     created_at=datetime.utcnow() - timedelta(minutes=5),
+                     finished_at=datetime.utcnow() - timedelta(minutes=4))
+    db.add_all([failed, active, other])
+    db.commit()
+
+    out = list_jobs(limit=20, user=alice.username,
+                    x_workspace_id=str(ws_a.id), db=db)
+    by_id = {row["id"]: row for row in out["items"]}
+    assert by_id[failed.id]["retryable"] is True
+    assert by_id[active.id]["retryable"] is False
+    assert other.id not in by_id
+
+    with patch("app.api.routes.enqueue", return_value=999) as mocked_enqueue:
+        res = retry_crawl_job(failed.id, user=alice.username,
+                              x_workspace_id=str(ws_a.id), db=db)
+
+    assert res["job_id"] == 999
+    assert res["retried_from"] == failed.id
+    mocked_enqueue.assert_called_once_with(
+        "site_a",
+        trigger="admin_retry",
+        requested_by_workspace_id=ws_a.id,
+        requested_by_user_id=alice.id,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        retry_crawl_job(other.id, user=alice.username,
+                        x_workspace_id=str(ws_a.id), db=db)
+    assert exc.value.status_code == 404
+
+    with pytest.raises(HTTPException) as exc:
+        retry_crawl_job(active.id, user=alice.username,
+                        x_workspace_id=str(ws_a.id), db=db)
+    assert exc.value.status_code == 409
+
+    bob_out = list_jobs(limit=20, user=bob.username,
+                        x_workspace_id=str(ws_b.id), db=db)
+    assert [row["id"] for row in bob_out["items"]] == [other.id]
 
 
 def test_admin_data_quality_product_samples_are_filterable():

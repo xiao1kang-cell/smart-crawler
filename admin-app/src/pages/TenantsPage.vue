@@ -8,6 +8,21 @@ const items = ref<any[]>([])
 const total = ref(0)
 const loading = ref(false)
 const error = ref('')
+const tenantColumns = [
+  { accessorKey: 'id', header: 'ID' },
+  { accessorKey: 'name', header: '租户' },
+  { accessorKey: 'slug', header: 'slug' },
+  { accessorKey: 'status', header: '状态' },
+  { accessorKey: 'member_count', header: '成员' },
+  { accessorKey: 'site_count', header: '站点' },
+  { accessorKey: 'product_count', header: '商品' },
+  { accessorKey: 'review_count', header: '评论' },
+  { accessorKey: 'api_key_count', header: 'API Key' },
+  { accessorKey: 'usage_credits', header: '用量积分' },
+  { accessorKey: 'spine_job_count', header: 'spine 任务' },
+  { accessorKey: 'ondemand_job_count', header: '按需任务' },
+  { accessorKey: 'created_at', header: '创建时间' }
+]
 
 async function load() {
   loading.value = true
@@ -36,45 +51,20 @@ onMounted(load)
     <div v-if="error" class="error">{{ error }}</div>
 
     <div class="table-wrap">
-      <table class="tbl">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>租户</th>
-            <th>slug</th>
-            <th>状态</th>
-            <th>成员</th>
-            <th>站点</th>
-            <th>商品</th>
-            <th>评论</th>
-            <th>API Key</th>
-            <th>用量积分</th>
-            <th>spine 任务</th>
-            <th>按需任务</th>
-            <th>创建时间</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in items" :key="row.id">
-            <td>{{ row.id }}</td>
-            <td>{{ row.name || '-' }}</td>
-            <td>{{ row.slug || '-' }}</td>
-            <td><StatusBadge :status="row.status" /></td>
-            <td>{{ fmtNumber(row.member_count) }}</td>
-            <td>{{ fmtNumber(row.site_count) }}</td>
-            <td>{{ fmtNumber(row.product_count) }}</td>
-            <td>{{ fmtNumber(row.review_count) }}</td>
-            <td>{{ fmtNumber(row.api_key_count) }}</td>
-            <td>{{ fmtNumber(row.usage_credits) }}</td>
-            <td>{{ fmtNumber(row.spine_job_count) }}</td>
-            <td>{{ fmtNumber(row.ondemand_job_count) }}</td>
-            <td>{{ fmtDate(row.created_at) }}</td>
-          </tr>
-          <tr v-if="!items.length">
-            <td colspan="13" class="empty">{{ loading ? '加载中…' : '暂无租户' }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <UTable class="tbl ui-table" :data="items" :columns="tenantColumns" :loading="loading" sticky="header" empty="暂无租户">
+        <template #name-cell="{ row }">{{ row.original.name || '-' }}</template>
+        <template #slug-cell="{ row }">{{ row.original.slug || '-' }}</template>
+        <template #status-cell="{ row }"><StatusBadge :status="row.original.status" /></template>
+        <template #member_count-cell="{ row }">{{ fmtNumber(row.original.member_count) }}</template>
+        <template #site_count-cell="{ row }">{{ fmtNumber(row.original.site_count) }}</template>
+        <template #product_count-cell="{ row }">{{ fmtNumber(row.original.product_count) }}</template>
+        <template #review_count-cell="{ row }">{{ fmtNumber(row.original.review_count) }}</template>
+        <template #api_key_count-cell="{ row }">{{ fmtNumber(row.original.api_key_count) }}</template>
+        <template #usage_credits-cell="{ row }">{{ fmtNumber(row.original.usage_credits) }}</template>
+        <template #spine_job_count-cell="{ row }">{{ fmtNumber(row.original.spine_job_count) }}</template>
+        <template #ondemand_job_count-cell="{ row }">{{ fmtNumber(row.original.ondemand_job_count) }}</template>
+        <template #created_at-cell="{ row }">{{ fmtDate(row.original.created_at) }}</template>
+      </UTable>
     </div>
 
     <p class="count">共 {{ total }} 个租户</p>

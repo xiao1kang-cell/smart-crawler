@@ -18,5 +18,8 @@ declare module 'vue' {
     StatusBadge: typeof import('./src/components/common/StatusBadge.vue')['default']
     UAlert: typeof import('./node_modules/.pnpm/@nuxt+ui@3.3.7_@babel+parser@7.29.7_embla-carousel@8.6.0_typescript@5.9.3_vite@6.4.3_ji_938d26f93602d08cf160aaf0f3f6cc13/node_modules/@nuxt/ui/dist/runtime/components/Alert.vue')['default']
     UApp: typeof import('./node_modules/.pnpm/@nuxt+ui@3.3.7_@babel+parser@7.29.7_embla-carousel@8.6.0_typescript@5.9.3_vite@6.4.3_ji_938d26f93602d08cf160aaf0f3f6cc13/node_modules/@nuxt/ui/dist/runtime/components/App.vue')['default']
+    UPagination: typeof import('./node_modules/.pnpm/@nuxt+ui@3.3.7_@babel+parser@7.29.7_embla-carousel@8.6.0_typescript@5.9.3_vite@6.4.3_ji_938d26f93602d08cf160aaf0f3f6cc13/node_modules/@nuxt/ui/dist/runtime/components/Pagination.vue')['default']
+    USelect: typeof import('./node_modules/.pnpm/@nuxt+ui@3.3.7_@babel+parser@7.29.7_embla-carousel@8.6.0_typescript@5.9.3_vite@6.4.3_ji_938d26f93602d08cf160aaf0f3f6cc13/node_modules/@nuxt/ui/dist/runtime/components/Select.vue')['default']
+    UTable: typeof import('./node_modules/.pnpm/@nuxt+ui@3.3.7_@babel+parser@7.29.7_embla-carousel@8.6.0_typescript@5.9.3_vite@6.4.3_ji_938d26f93602d08cf160aaf0f3f6cc13/node_modules/@nuxt/ui/dist/runtime/components/Table.vue')['default']
   }
 }

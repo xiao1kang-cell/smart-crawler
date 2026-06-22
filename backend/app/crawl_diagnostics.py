@@ -25,6 +25,8 @@ HTTP_429 = "http_429"
 HTTP_5XX = "http_5xx"
 ANTI_BOT_CHALLENGE = "anti_bot_challenge"
 MARKET_PAUSED = "market_paused"
+TRACKING_PAUSED = "tracking_paused"
+WORKSPACE_HIDDEN = "workspace_hidden"
 EMPTY_SITEMAP = "empty_sitemap"
 NO_PRODUCT_URLS = "no_product_urls"
 PARSE_NO_JSONLD = "parse_no_jsonld"
@@ -163,6 +165,8 @@ def classify_exception(exc: Exception, *, stage: str = STAGE_JOB) -> FailureInfo
         "anti_bot_challenge" in low
         or "verify you are human" in low
         or "challenge" in low
+        or "kasada" in low
+        or "kpsdk" in low
         or "captcha" in low
         or "access denied" in low
         or "连续被拦截" in text

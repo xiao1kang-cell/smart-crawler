@@ -23,6 +23,8 @@ PDP 解析（首选 Next.js __NEXT_DATA__，JSON-LD 兜底）：
 """
 from __future__ import annotations
 
+import gzip
+import html as html_lib
 import json
 import os
 import re
@@ -35,6 +37,7 @@ DEFAULT_LIMIT = int(os.environ.get("WALMART_LIMIT", "1000"))
 DELAY = float(os.environ.get("WALMART_DELAY", "6.0"))
 USE_SITEMAP = os.environ.get("WALMART_USE_SITEMAP", "0") == "1"
 MAX_PAGES_PER_KW = int(os.environ.get("WALMART_MAX_PAGES_PER_KW", "8"))
+SITEMAP_INDEX = "https://www.walmart.com/sitemap_hi_ip.xml"
 
 # 家居谱关键词 × cat_id=4044 (Home)
 _HOME_KEYWORDS = [
@@ -92,6 +95,28 @@ class WalmartCrawler(BaseCrawler):
         }
 
     def crawl(self) -> CrawlResult:
+        if os.environ.get("WALMART_FETCH_PDP", "0") != "1":
+            return self._crawl_sitemap_only()
+        return self._crawl_pdp()
+
+    def _crawl_sitemap_only(self) -> CrawlResult:
+        result = CrawlResult()
+        fetcher = self.make_fetcher(
+            kind="product",
+            source="walmart_sitemap",
+            retries=1,
+            timeout=35,
+        )
+        urls = self._collect_sitemap_urls(fetcher, result)
+        targets = urls[: self.limit]
+        rows = [self._row_from_sitemap(url) for url in targets]
+        result.products.extend(row for row in rows if row)
+        result.notes.append(
+            f"Walmart sitemap-only 产出 {len(result.products)} 个商品"
+            "（价格/库存字段后续由 PDP 增量补齐）")
+        return result
+
+    def _crawl_pdp(self) -> CrawlResult:
         result = CrawlResult()
         fetcher = self.make_fetcher(
             kind="product",
@@ -174,6 +199,76 @@ class WalmartCrawler(BaseCrawler):
 
         result.notes.append(f"成功 {ok} · 反爬 {denied} · 总扫描 {len(urls)}")
         return result
+
+    def _collect_sitemap_urls(self, fetcher, result: CrawlResult) -> list[str]:
+        shards = self._sitemap_locs(fetcher, SITEMAP_INDEX)
+        result.notes.append(f"Walmart sitemap index 发现 {len(shards)} 个子图")
+        urls: list[str] = []
+        seen: set[str] = set()
+        sample_limit = max(self.limit * 10, 200)
+        for shard in shards:
+            for url in self._sitemap_locs(fetcher, shard):
+                if "/ip/" not in url or url in seen:
+                    continue
+                seen.add(url)
+                urls.append(url)
+                if len(urls) >= sample_limit:
+                    return self._prioritize_home(urls)
+        return self._prioritize_home(urls)
+
+    def _sitemap_locs(self, fetcher, url: str) -> list[str]:
+        res = fetcher.get(url, headers=self._headers(), timeout=35)
+        raw = res.content or (res.text or "").encode()
+        if url.endswith(".gz"):
+            try:
+                text = gzip.decompress(raw).decode("utf-8", "ignore")
+            except Exception:
+                text = raw.decode("utf-8", "ignore")
+        else:
+            text = raw.decode("utf-8", "ignore")
+        return [
+            html_lib.unescape(x.strip())
+            for x in re.findall(r"<loc>\s*(.*?)\s*</loc>", text, re.S)
+            if x.strip()
+        ]
+
+    def _row_from_sitemap(self, url: str) -> dict | None:
+        match = re.search(r"/ip/(?:[^/]+/)?(\d{6,})/?$", url)
+        if not match:
+            return None
+        sku = match.group(1)
+        title = _title_from_walmart_url(url)
+        return {
+            "sku": sku,
+            "spu": sku,
+            "title": title,
+            "description": None,
+            "image_urls": [],
+            "category_path": None,
+            "sale_price": None,
+            "original_price": None,
+            "currency": "USD",
+            "ratings": None,
+            "review_count": None,
+            "status": "on_sale",
+            "brand": self.site.brand,
+            "product_url": url,
+            "site": self.site.site,
+            "attributes": {"source": "sitemap"},
+        }
+
+    @staticmethod
+    def _prioritize_home(urls: list[str]) -> list[str]:
+        terms = (
+            "rug", "pillow", "lamp", "table", "chair", "sofa", "couch",
+            "cabinet", "shelf", "storage", "curtain", "bedding", "comforter",
+            "mattress", "decor", "kitchen", "bath", "patio", "outdoor",
+            "furniture", "dining", "desk", "mirror", "blanket",
+        )
+        return sorted(
+            urls,
+            key=lambda u: (not any(t in u.lower() for t in terms), u),
+        )
 
     @staticmethod
     def _blocked(html: str) -> bool:
@@ -260,3 +355,12 @@ def _int(v):
         return int(float(v))
     except (TypeError, ValueError):
         return None
+
+
+def _title_from_walmart_url(url: str) -> str:
+    match = re.search(r"/ip/([^/]+)/\d{6,}/?$", url)
+    if match:
+        slug = match.group(1)
+    else:
+        slug = url.rstrip("/").split("/")[-1]
+    return html_lib.unescape(slug.replace("-", " ").strip()).title()

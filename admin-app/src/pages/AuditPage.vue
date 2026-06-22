@@ -12,6 +12,21 @@ const filters = ref({ actor: '', action: '', start: '', end: '' })
 const page = ref(1)
 const size = ref(20)
 
+const pageSizeItems = [
+  { label: '20 / 页', value: 20 },
+  { label: '50 / 页', value: 50 },
+  { label: '100 / 页', value: 100 }
+]
+const auditColumns = [
+  { accessorKey: 'id', header: 'ID' },
+  { accessorKey: 'created_at', header: '时间' },
+  { accessorKey: 'actor_name', header: '操作者' },
+  { accessorKey: 'action', header: '动作' },
+  { accessorKey: 'target_type', header: '对象' },
+  { accessorKey: 'ip', header: 'IP' },
+  { accessorKey: 'detail', header: '详情' }
+]
+
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / size.value)))
 
 async function load() {
@@ -35,6 +50,11 @@ async function load() {
 function changePage(delta: number) {
   const next = page.value + delta
   if (next < 1 || next > totalPages.value) return
+  page.value = next
+  load()
+}
+
+function setPage(next: number) {
   page.value = next
   load()
 }
@@ -74,44 +94,30 @@ onMounted(load)
     <div v-if="error" class="error">{{ error }}</div>
 
     <div class="table-wrap">
-      <table class="tbl">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>时间</th>
-            <th>操作者</th>
-            <th>动作</th>
-            <th>对象</th>
-            <th>IP</th>
-            <th>详情</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in items" :key="row.id">
-            <td>{{ row.id }}</td>
-            <td>{{ fmtDate(row.created_at) }}</td>
-            <td>{{ row.actor_name || '-' }}</td>
-            <td>{{ row.action || '-' }}</td>
-            <td>{{ row.target_type || '-' }} #{{ row.target_id || '-' }}</td>
-            <td>{{ row.ip || '-' }}</td>
-            <td class="detail" :title="detailText(row.detail)">{{ detailText(row.detail) }}</td>
-          </tr>
-          <tr v-if="!items.length">
-            <td colspan="7" class="empty">{{ loading ? '加载中…' : '暂无审计记录' }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <UTable class="tbl ui-table" :data="items" :columns="auditColumns" :loading="loading" sticky="header" empty="暂无审计记录">
+        <template #created_at-cell="{ row }">{{ fmtDate(row.original.created_at) }}</template>
+        <template #actor_name-cell="{ row }">{{ row.original.actor_name || '-' }}</template>
+        <template #action-cell="{ row }">{{ row.original.action || '-' }}</template>
+        <template #target_type-cell="{ row }">{{ row.original.target_type || '-' }} #{{ row.original.target_id || '-' }}</template>
+        <template #ip-cell="{ row }">{{ row.original.ip || '-' }}</template>
+        <template #detail-cell="{ row }">
+          <span class="detail" :title="detailText(row.original.detail)">{{ detailText(row.original.detail) }}</span>
+        </template>
+      </UTable>
     </div>
 
     <div class="pager">
-      <button class="btn small" :disabled="page <= 1" @click="changePage(-1)">上一页</button>
+      <UPagination
+        :page="page"
+        :total="total"
+        :items-per-page="size"
+        :disabled="loading || totalPages <= 1"
+        size="sm"
+        show-edges
+        @update:page="setPage"
+      />
       <span>第 {{ page }} / {{ totalPages }} 页 · 共 {{ total }} 条</span>
-      <button class="btn small" :disabled="page >= totalPages" @click="changePage(1)">下一页</button>
-      <select v-model.number="size" class="ctl">
-        <option :value="20">20 / 页</option>
-        <option :value="50">50 / 页</option>
-        <option :value="100">100 / 页</option>
-      </select>
+      <USelect v-model="size" class="size-select" :items="pageSizeItems" value-key="value" />
     </div>
   </div>
 </template>

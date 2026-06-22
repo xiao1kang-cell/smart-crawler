@@ -963,6 +963,43 @@ def test_admin_crawl_enqueue_creates_or_reuses_site_jobs():
     s.close()
 
 
+def test_admin_crawl_enqueue_skips_paused_pending_site():
+    init_db()
+    from datetime import datetime, timedelta
+    from app.api import admin_spine
+    from app.db import SessionLocal
+    from app.models import CrawlJob, Site
+
+    s = SessionLocal()
+    for code in ("admin_quality_paused",):
+        s.query(CrawlJob).filter(CrawlJob.site == code).delete()
+        s.query(Site).filter(Site.site == code).delete()
+    s.add(Site(site="admin_quality_paused", brand="QA", country="US",
+               url="https://qa-paused.example.com", platform="generic",
+               track_status="paused"))
+    s.flush()
+    pending = CrawlJob(site="admin_quality_paused", status="pending",
+                       trigger="scheduled",
+                       created_at=datetime.utcnow() - timedelta(hours=3))
+    s.add(pending)
+    s.commit()
+    pending_id = pending.id
+
+    out = admin_spine.admin_crawl_enqueue(
+        {"site": "admin_quality_paused"},
+        user="admin", db=s, ip="1.1.1.1",
+    )
+
+    s.refresh(pending)
+    assert out["status"] == "skipped_precondition"
+    assert out["by_site"]["admin_quality_paused"]["job_id"] == pending_id
+    assert out["by_site"]["admin_quality_paused"]["failure_code"] == "tracking_paused"
+    assert out["promoted_jobs"] == []
+    assert pending.status == "skipped"
+    assert pending.failure_code == "tracking_paused"
+    s.close()
+
+
 def test_promotions_rebuild_uses_existing_product_signals():
     init_db()
     from app.api import admin_spine

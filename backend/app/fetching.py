@@ -34,6 +34,7 @@ from .crawl_diagnostics import (
 from .db import SessionLocal
 from .models import Site
 from .proxy_health import is_proxy_health_failure, record_proxy_result
+from .url_filters import is_system_or_challenge_url
 
 _ANTI_BOT_STRONG_MARKERS = (
     "cf-chl",
@@ -47,12 +48,12 @@ _ANTI_BOT_STRONG_MARKERS = (
     "please enable cookies",
     "px-captcha",
     "sec-if-cpt",
-    "datadome",
+    "datadome=",
+    "geo.captcha-delivery.com",
+    "ct.captcha-delivery.com",
 )
 _ANTI_BOT_WEAK_MARKERS = (
     "captcha",
-    "cloudflare",
-    "akamai",
     "unusual traffic",
 )
 _NORMAL_PRODUCT_MARKERS = (
@@ -199,6 +200,17 @@ class CrawlerFetcher:
         last: FetchResult | None = None
         record_kind = kwargs.get("kind", self.context.kind)
         record_source = kwargs.get("source", self.context.source)
+        if record_kind == "product" and is_system_or_challenge_url(url):
+            result = FetchResult(
+                ok=False,
+                url=url,
+                status=0,
+                fetcher="url_filter",
+                failure=None,
+            )
+            _record_fetch(self.context, result, kind=record_kind,
+                          source=record_source, apply_to_job=False)
+            return result
         for attempt in range(1, attempts + 1):
             request_kwargs = dict(kwargs)
             acquire_rate(self.context.site.site,
@@ -482,7 +494,8 @@ def _record_fetch(ctx: FetchContext, result: FetchResult,
         content_hash = (hashlib.sha256(result.content).hexdigest()
                         if result.content else None)
         status = "fetched" if result.ok else (
-            "blocked" if result.status in (401, 403, 429) else "failed")
+            "skipped" if result.fetcher == "url_filter" else (
+                "blocked" if result.status in (401, 403, 429) else "failed"))
         record_url_state(
             db,
             site=ctx.site.site,
@@ -539,6 +552,13 @@ def _apply_fetch_failure_to_job(ctx: FetchContext, result: FetchResult) -> None:
 def _looks_like_anti_bot(text: str) -> bool:
     if not text:
         return True
+    # Some legitimate SSR product pages embed bot-management beacons early in
+    # <head> (for example IKEA's Cloudflare jsd script) while the real product
+    # JSON-LD appears much later.  Check a wider window for product signals
+    # before treating strong anti-bot marker substrings as authoritative.
+    product_sample = text[:350000].lower() if len(text) >= 80_000 else text[:20000].lower()
+    if any(marker in product_sample for marker in _NORMAL_PRODUCT_MARKERS):
+        return False
     sample = text[:20000].lower()
     if any(marker in sample for marker in _ANTI_BOT_STRONG_MARKERS):
         return True

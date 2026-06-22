@@ -99,17 +99,21 @@ onMounted(bootstrap)
   display: flex;
   min-height: 100vh;
   width: 100%;
+  background: var(--admin-shell-bg, var(--ui-bg));
 }
 
 .admin-side {
-  width: 220px;
+  position: sticky;
+  top: 0;
+  width: 232px;
+  height: 100vh;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px 12px;
+  gap: 14px;
+  padding: 18px 12px;
   border-right: 1px solid var(--ui-border, rgba(255, 255, 255, 0.08));
-  background: var(--ui-bg-muted, rgba(255, 255, 255, 0.02));
+  background: var(--ui-panel, rgba(255, 255, 255, 0.02));
 }
 
 .admin-brand {
@@ -117,7 +121,9 @@ onMounted(bootstrap)
   flex-direction: column;
   font-weight: 700;
   font-size: 16px;
-  padding: 8px 10px;
+  line-height: 1.25;
+  padding: 6px 10px 12px;
+  border-bottom: 1px solid var(--ui-border, rgba(255, 255, 255, 0.08));
 }
 
 .admin-brand-sub {
@@ -130,31 +136,34 @@ onMounted(bootstrap)
 .admin-nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 
 .admin-nav-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px;
+  min-height: 38px;
+  padding: 0 12px;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 600;
   color: inherit;
   text-decoration: none;
-  opacity: 0.78;
-  transition: background 0.15s, opacity 0.15s;
+  opacity: 0.72;
+  transition: background 0.15s, color 0.15s, opacity 0.15s;
 }
 
 .admin-nav-item:hover {
   opacity: 1;
-  background: var(--ui-bg-elevated, rgba(255, 255, 255, 0.05));
+  background: var(--admin-control-hover, rgba(255, 255, 255, 0.05));
 }
 
 .admin-nav-item.active {
   opacity: 1;
-  background: var(--ui-color-primary-500, #6366f1);
-  color: #fff;
+  background: rgba(99, 102, 241, 0.14);
+  color: var(--ui-color-primary-500, #6366f1);
+  box-shadow: inset 3px 0 0 var(--ui-color-primary-500, #6366f1);
 }
 
 .admin-main {
@@ -165,12 +174,18 @@ onMounted(bootstrap)
 }
 
 .admin-top {
+  position: sticky;
+  top: 0;
+  z-index: 30;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 16px;
-  padding: 12px 20px;
+  min-height: 56px;
+  padding: 10px 24px;
   border-bottom: 1px solid var(--ui-border, rgba(255, 255, 255, 0.08));
+  background: color-mix(in srgb, var(--ui-panel) 92%, transparent);
+  backdrop-filter: blur(12px);
 }
 
 .admin-user {
@@ -197,17 +212,19 @@ onMounted(bootstrap)
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  min-height: 34px;
+  padding: 0 12px;
   border-radius: 8px;
   font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
   border: 1px solid var(--ui-border, rgba(255, 255, 255, 0.12));
-  background: transparent;
+  background: var(--admin-control-bg, transparent);
   color: inherit;
 }
 
 .admin-logout:hover {
-  background: var(--ui-bg-elevated, rgba(255, 255, 255, 0.05));
+  background: var(--admin-control-hover, rgba(255, 255, 255, 0.05));
 }
 
 .admin-content {
@@ -235,6 +252,7 @@ onMounted(bootstrap)
     top: 0;
     z-index: 40;
     width: 100%;
+    height: auto;
     gap: 8px;
     padding: 10px 12px;
     border-right: 0;
@@ -247,18 +265,30 @@ onMounted(bootstrap)
   }
 
   .admin-nav {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    display: flex;
+    flex-direction: row;
     gap: 6px;
-    overflow: visible;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+
+  .admin-nav::-webkit-scrollbar {
+    display: none;
   }
 
   .admin-nav-item {
-    min-width: 0;
+    flex: 0 0 auto;
+    min-width: max-content;
     justify-content: center;
-    padding: 8px 10px;
+    min-height: 34px;
+    padding: 0 10px;
     font-size: 12px;
     white-space: nowrap;
+  }
+
+  .admin-nav-item.active {
+    box-shadow: inset 0 -2px 0 var(--ui-color-primary-500, #6366f1);
   }
 
   .admin-main {
@@ -268,6 +298,7 @@ onMounted(bootstrap)
   .admin-top {
     justify-content: space-between;
     padding: 10px 14px;
+    min-height: 52px;
   }
 
   .admin-user {

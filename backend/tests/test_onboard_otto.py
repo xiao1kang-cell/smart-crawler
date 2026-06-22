@@ -309,3 +309,34 @@ def test_otto_parse_product_not_degraded():
     assert row["site"] == "otto"
     # breadcrumb: "Startseite" is filtered, "Mode" and "Damen" kept
     assert "Mode" in (row["category_path"] or "")
+
+
+def test_otto_limit_uses_site_crawler_config():
+    """后台站点配置可把 Otto 这种重型 crawler 限成小批量。"""
+    from app.crawlers.otto import OttoCrawler
+
+    site = _site()
+    site.crawler_config = {"max_products": 25}
+
+    crawler = OttoCrawler(site)
+
+    assert crawler.limit == 25
+
+
+def test_otto_runtime_caps_use_site_crawler_config():
+    """后台配置可限制 Otto PDP 尝试数，避免挑战页拖垮 worker。"""
+    from app.crawlers.otto import OttoCrawler
+
+    site = _site()
+    site.crawler_config = {
+        "max_products": 25,
+        "scan_cap": 500,
+        "max_pdp_attempts": 12,
+        "stealth_timeout_ms": 30000,
+    }
+
+    crawler = OttoCrawler(site)
+
+    assert crawler.scan_cap == 500
+    assert crawler.max_pdp_attempts == 12
+    assert crawler.stealth_timeout_ms == 30000

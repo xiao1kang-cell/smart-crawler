@@ -135,6 +135,15 @@ class SephoraCrawler(BaseCrawler):
         fetcher = self.make_fetcher(kind="product", source="sephora_us")
         urls = self._sitemap_product_urls(fetcher)
         result.notes.append(f"Sephora US sitemap 发现 {len(urls)} 个商品 URL")
+        if os.environ.get("SEPHORA_FETCH_PDP", "0") != "1":
+            targets = urls[: self.limit]
+            rows = [self._row_from_sitemap(url) for url in targets]
+            result.products.extend(row for row in rows if row)
+            result.notes.append(
+                f"Sephora US sitemap-only 产出 {len(result.products)} 个商品"
+                "（价格/评分字段后续由 PDP 增量补齐）")
+            return result
+
         blocked = 0
         for url in urls[: self.limit]:
             try:
@@ -207,6 +216,35 @@ class SephoraCrawler(BaseCrawler):
             "site": self.site.site,
         }
 
+    def _row_from_sitemap(self, url: str) -> dict | None:
+        parsed = urlparse(url)
+        if "/product/" not in parsed.path and "/p/" not in parsed.path:
+            return None
+        slug = self._slug(url)
+        if not slug:
+            return None
+        sku = self._sku_from_url(url) or slug
+        title = self._title_from_slug(slug)
+        brand = self._brand_from_slug(slug) or self.site.brand
+        return {
+            "sku": sku,
+            "spu": sku,
+            "title": title,
+            "description": None,
+            "image_urls": [],
+            "category_path": "Sephora",
+            "sale_price": None,
+            "original_price": None,
+            "currency": "USD",
+            "ratings": None,
+            "review_count": None,
+            "status": "on_sale",
+            "brand": brand,
+            "product_url": url,
+            "site": self.site.site,
+            "attributes": {"source": "sitemap"},
+        }
+
     def _original_price(self, node):
         texts = [self._text(x) for x in node.css("p")]
         for i, text in enumerate(texts):
@@ -264,6 +302,38 @@ class SephoraCrawler(BaseCrawler):
     @staticmethod
     def _slug(url: str) -> str:
         return url.rstrip("/").split("/")[-1].split("?")[0][:80]
+
+    @staticmethod
+    def _sku_from_url(url: str) -> str | None:
+        match = re.search(r"-(P\d+)(?:[/?#]|$)", url, re.I)
+        return match.group(1).upper() if match else None
+
+    @classmethod
+    def _title_from_slug(cls, slug: str) -> str:
+        text = re.sub(r"-P\d+$", "", slug, flags=re.I)
+        text = text.replace("-", " ").strip()
+        return text.title() if text else slug
+
+    @classmethod
+    def _brand_from_slug(cls, slug: str) -> str | None:
+        text = re.sub(r"-P\d+$", "", slug, flags=re.I)
+        parts = [p for p in text.split("-") if p]
+        if not parts:
+            return None
+        stop = {
+            "mini", "full", "large", "small", "the", "a", "an", "new",
+            "set", "collection", "cream", "serum", "mask", "cleanser",
+            "lip", "eye", "eau", "de", "parfum", "conditioner", "shampoo",
+        }
+        brand_parts: list[str] = []
+        for part in parts[:5]:
+            if brand_parts and part.lower() in stop:
+                break
+            brand_parts.append(part)
+            if len(brand_parts) >= 3:
+                break
+        brand = " ".join(brand_parts).strip()
+        return brand.title() if brand else None
 
     @staticmethod
     def _blocked(text: str | None) -> bool:

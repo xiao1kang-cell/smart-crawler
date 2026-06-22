@@ -95,5 +95,8 @@ def get_crawler(site: Site) -> BaseCrawler:
     if platform == "sephora":
         from .sephora import SephoraCrawler
         return SephoraCrawler(site)
+    if platform == "lazada":
+        from .lazada import LazadaCrawler
+        return LazadaCrawler(site)
     from .generic import GenericCrawler
     return GenericCrawler(site)

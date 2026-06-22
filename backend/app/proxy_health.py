@@ -153,8 +153,15 @@ def unhealthy_proxy_hashes(session: Session) -> set[str]:
     rows = (session.query(ProxyHealth.proxy_hash)
             .filter(
                 or_(
-                    ProxyHealth.status.in_(("blocked", "down")),
-                    ProxyHealth.status == "degraded",
+                    ProxyHealth.status == "blocked",
+                    ProxyHealth.status == "down",
+                    and_(
+                        ProxyHealth.status == "degraded",
+                        or_(
+                            ProxyHealth.blocked_until.is_(None),
+                            ProxyHealth.blocked_until > now,
+                        ),
+                    ),
                 )
             )
             .all())

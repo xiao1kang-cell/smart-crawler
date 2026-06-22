@@ -76,6 +76,7 @@ def stealth_kwargs(
         "EC": ("es-EC", "America/Guayaquil"),
         "VE": ("es-VE", "America/Caracas"),
         "JP": ("ja-JP", "Asia/Tokyo"),
+        "ID": ("id-ID", "Asia/Jakarta"),
     }
     if country and country.upper() in locale_map:
         loc, tz = locale_map[country.upper()]

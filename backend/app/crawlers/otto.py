@@ -78,8 +78,11 @@ class OttoCrawler(BaseCrawler):
     def __init__(self, site):
         super().__init__(site)
         self.base = site.url.rstrip("/")
+        self._crawler_config = site.crawler_config or {}
         self.limit = self._resolve_limit(DEFAULT_LIMIT)
-        self.scan_cap = SCAN_CAP
+        self.scan_cap = self._int_config("scan_cap", SCAN_CAP)
+        self.max_pdp_attempts = self._resolve_max_pdp_attempts()
+        self.stealth_timeout_ms = self._int_config("stealth_timeout_ms", 60000)
 
     # ------------------------------------------------------------------
     # headers  (replaces old _session — proxy handled by CrawlerFetcher)
@@ -109,7 +112,7 @@ class OttoCrawler(BaseCrawler):
             f"discovery 命中 {len(urls)} 个去重商品 URL（种子 {len(_SEED_PATHS)} 类目）")
 
         # ---- Phase 2: PDP via StealthyFetcher ----
-        targets = urls[: self.scan_cap]
+        targets = urls[: min(self.scan_cap, self.max_pdp_attempts)]
         ok = 0
         challenge_hits = 0
         seen_skus: set[str] = set()
@@ -118,6 +121,8 @@ class OttoCrawler(BaseCrawler):
         # Kasada 关键：profile 首次走 PDP 必 429，先 warm 首页让它写 cookie/storage
         warmed = self._warm_profile(stealth_handle)
         result.notes.append("profile warmup " + ("OK" if warmed else "失败 —— PDP 阶段大概率全 429"))
+        if not warmed:
+            raise BlockedError("otto Kasada profile warmup failed")
 
         idx = 0
         for idx, url in enumerate(targets, 1):
@@ -153,6 +158,10 @@ class OttoCrawler(BaseCrawler):
 
         result.notes.append(
             f"采集 {ok} 个去重 SKU，扫 PDP {idx}, Kasada 挑战 {challenge_hits} 次")
+        if ok == 0 and challenge_hits:
+            raise BlockedError(
+                f"otto Kasada PDP challenge: {challenge_hits}/{idx}"
+            )
         return result
 
     # ------------------------------------------------------------------
@@ -203,7 +212,7 @@ class OttoCrawler(BaseCrawler):
             proxy=self.proxy,
             country=self.site.country or "DE",
             persist_profile_key=f"otto_{self.site.site}",
-            timeout_ms=60000,
+            timeout_ms=self.stealth_timeout_ms,
             solve_cloudflare=False,    # Kasada 不是 Cloudflare
             real_chrome=False,
         )
@@ -367,6 +376,21 @@ class OttoCrawler(BaseCrawler):
     def _url_sku(url: str) -> str | None:
         m = _URL_SKU_RE.search(url.rstrip("/"))
         return m.group(1) if m else None
+
+    def _int_config(self, key: str, default: int) -> int:
+        try:
+            value = self._crawler_config.get(key)
+            if value in (None, ""):
+                return int(default)
+            return int(value)
+        except (TypeError, ValueError):
+            return int(default)
+
+    def _resolve_max_pdp_attempts(self) -> int:
+        configured = self._int_config("max_pdp_attempts", 0)
+        if configured > 0:
+            return configured
+        return min(self.scan_cap, max(self.limit * 3, self.limit + 10))
 
 
 # ----------------------------------------------------------------------

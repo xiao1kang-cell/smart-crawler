@@ -52,7 +52,8 @@ _BLOCKED_TITLE_RE = re.compile(
     re.I,
 )
 _BLOCKED_BODY_RE = re.compile(
-    r"(cf-chl-|cloudflare|perimeterx|akamai|px-captcha|g-recaptcha|"
+    r"(cf-chl-|/cdn-cgi/challenge-platform/|challenge-platform|"
+    r"perimeterx|px-captcha|g-recaptcha|"
     r"please\s+enable\s+cookies|unusual\s+traffic)",
     re.I,
 )

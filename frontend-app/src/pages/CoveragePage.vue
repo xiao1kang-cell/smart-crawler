@@ -148,7 +148,7 @@ function issueLabel(issue: string) {
     conversion_missing: '转化缺失',
     promotions_missing: '促销缺失',
     latest_job_failed: '任务失败',
-    job_in_progress: '运行中',
+    job_in_progress: '采取中',
     never_crawled: '未采集',
   } as Record<string, string>)[issue] || issue
 }

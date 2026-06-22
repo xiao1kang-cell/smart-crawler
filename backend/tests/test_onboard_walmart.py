@@ -118,7 +118,9 @@ def test_walmart_routes_through_make_fetcher_and_counts(monkeypatch):
     """After migration, all HTTP GETs go through make_fetcher → counter increments."""
     from app.crawlers.walmart import WalmartCrawler
 
+    monkeypatch.setenv("WALMART_FETCH_PDP", "1")
     crawler = WalmartCrawler(_site(), limit=1)
+    monkeypatch.setattr(crawler, "sleep", lambda: None)
 
     calls: list[tuple[str, dict]] = []
 
@@ -177,7 +179,9 @@ def test_walmart_impersonate_chrome131_transparently_passed(monkeypatch):
     """
     from app.crawlers.walmart import WalmartCrawler
 
+    monkeypatch.setenv("WALMART_FETCH_PDP", "1")
     crawler = WalmartCrawler(_site(), limit=1)
+    monkeypatch.setattr(crawler, "sleep", lambda: None)
 
     impersonate_values: list[str | None] = []
 
@@ -215,7 +219,9 @@ def test_walmart_warmup_counted_as_api_call(monkeypatch):
     """Warmup request to / must be counted in counter.api_calls via fetcher.get."""
     from app.crawlers.walmart import WalmartCrawler
 
+    monkeypatch.setenv("WALMART_FETCH_PDP", "1")
     crawler = WalmartCrawler(_site(), limit=1)
+    monkeypatch.setattr(crawler, "sleep", lambda: None)
     warmup_seen = []
 
     def fake_get(url: str, **kw) -> FetchResult:
@@ -264,3 +270,46 @@ def test_walmart_parse_next_not_degraded():
     assert row["status"] == "on_sale"
     assert row["brand"] == "Acme"
     assert row["category_path"] == "Home/Furniture/Sofas & Couches"
+
+
+def test_walmart_default_crawl_uses_sitemap_only(monkeypatch):
+    from app.crawlers.walmart import SITEMAP_INDEX, WalmartCrawler
+
+    crawler = WalmartCrawler(_site(), limit=1)
+    shard = "https://www.walmart.com/sitemap_hi_ip_1.xml"
+    url = (
+        "https://www.walmart.com/ip/"
+        "Hommoo-Sectional-Sofa-Couch-Free-Combination-Sectional-Couch"
+        "/2741487708"
+    )
+    index = f"<sitemapindex><sitemap><loc>{shard}</loc></sitemap></sitemapindex>"
+    sitemap = f"<urlset><url><loc>{url}</loc></url></urlset>"
+    calls: list[str] = []
+
+    class _FakeFetcher:
+        def get(self, u: str, **kw) -> FetchResult:
+            calls.append(u)
+            crawler.counter.api_calls += 1
+            text = index if u == SITEMAP_INDEX else sitemap
+            return FetchResult(
+                ok=True,
+                url=u,
+                status=200,
+                text=text,
+                content=text.encode(),
+                final_url=u,
+                fetcher="curl_cffi",
+            )
+
+    monkeypatch.delenv("WALMART_FETCH_PDP", raising=False)
+    monkeypatch.setattr(crawler, "make_fetcher", lambda **kw: _FakeFetcher())
+
+    result = crawler.crawl()
+
+    assert calls == [SITEMAP_INDEX, shard]
+    assert len(result.products) == 1
+    row = result.products[0]
+    assert row["sku"] == "2741487708"
+    assert "Sectional Sofa Couch" in row["title"]
+    assert row["currency"] == "USD"
+    assert row["attributes"]["source"] == "sitemap"

@@ -4,22 +4,30 @@ defineProps<{ status?: string | null }>()
 function tone(status?: string | null) {
   const s = String(status || '').toLowerCase()
   if (['success', 'completed', 'done', 'ok', 'active', 'healthy', 'online'].includes(s)) return 'ok'
-  if (['failed', 'error', 'dead', 'critical'].includes(s)) return 'bad'
+  if (['failed', 'error', 'dead', 'critical', 'blocked'].includes(s)) return 'bad'
   if (['running', 'processing'].includes(s)) return 'run'
-  if (['stuck', 'warning', 'warn', 'reclaim'].includes(s)) return 'warn'
+  if (['stuck', 'warning', 'warn', 'reclaim', 'partial', 'skipped', 'stale_pending'].includes(s)) return 'warn'
   return 'idle'
 }
 
 function label(status?: string | null) {
-  const s = String(status || '')
+  const s = String(status || '').toLowerCase()
   return (
     ({
       pending: '待处理',
-      running: '运行中',
+      running: '采取中',
+      processing: '采取中',
+      stale_pending: '久排',
       success: '成功',
       completed: '完成',
+      done: '完成',
+      partial: '部分成功',
       failed: '失败',
+      blocked: '阻断',
+      skipped: '跳过',
       stuck: '卡住',
+      warning: '警告',
+      warn: '警告',
       idle: '空闲',
       online: '在线',
       offline: '离线',

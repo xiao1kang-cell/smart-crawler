@@ -8,6 +8,10 @@ export function triggerJob(params: Record<string, unknown> = {}) {
   return apiJson(`/api/jobs/trigger${qs(params)}`, { method: 'POST' })
 }
 
+export function retryJob(id: string | number) {
+  return apiJson(`/api/jobs/${id}/retry`, { method: 'POST' })
+}
+
 export function crawlDiagnostics(params: Record<string, unknown> = {}) {
   return apiJson(`/api/crawl/diagnostics${qs(params)}`)
 }

@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { enqueueJob, jobDetail, jobStats, listJobs, queueMaintenance, retryJob } from '../api/queue'
-import { fmtDate } from '../api/client'
+import { fmtDate, fmtNumber } from '../api/client'
 import StatCard from '../components/common/StatCard.vue'
 import StatusBadge from '../components/common/StatusBadge.vue'
 
@@ -34,6 +34,53 @@ let timer: ReturnType<typeof setInterval> | null = null
 const enqForm = ref({ url: '', dataset: '' })
 const enqBusy = ref(false)
 const enqMsg = ref('')
+const ALL_STATUS = '__all_status__'
+
+const sourceFilterItems = [
+  { label: '全部来源', value: 'all' },
+  { label: '站点采集', value: 'crawl' },
+  { label: '通用抓取', value: 'spine' },
+  { label: '按需抓取', value: 'ondemand' }
+]
+const statusFilterItems = [
+  { label: '全部状态', value: ALL_STATUS },
+  { label: '待处理', value: 'pending' },
+  { label: '久排', value: 'stale_pending' },
+  { label: '采取中', value: 'running' },
+  { label: '卡住', value: 'stuck' },
+  { label: '成功', value: 'success' },
+  { label: '部分成功', value: 'partial' },
+  { label: '失败', value: 'failed' },
+  { label: '阻断', value: 'blocked' },
+  { label: '跳过', value: 'skipped' }
+]
+const statusSelect = computed({
+  get: () => statusFilter.value || ALL_STATUS,
+  set: (value: string) => {
+    statusFilter.value = value === ALL_STATUS ? '' : value
+  }
+})
+const pageSizeItems = [
+  { label: '20 / 页', value: 20 },
+  { label: '50 / 页', value: 50 },
+  { label: '100 / 页', value: 100 }
+]
+const queueColumns = [
+  { accessorKey: 'id', header: 'ID' },
+  { accessorKey: 'source', header: '来源' },
+  { accessorKey: 'status', header: '状态' },
+  { accessorKey: 'target', header: '目标' },
+  { accessorKey: 'url', header: 'URL / 批次' },
+  { accessorKey: 'products_count', header: '已抓取/总量' },
+  { accessorKey: 'failure_code', header: '失败码 / 阶段' },
+  { accessorKey: 'retryable', header: '可重试' },
+  { accessorKey: 'attempts', header: '执行次数' },
+  { accessorKey: 'error', header: '错误' },
+  { accessorKey: 'duration', header: '耗时 / 活跃' },
+  { accessorKey: 'finished_at', header: '完成时间' },
+  { accessorKey: 'created_at', header: '创建时间' },
+  { id: 'actions', header: '' }
+]
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / size.value)))
 const detailJson = computed(() => {
@@ -48,7 +95,7 @@ const detailJson = computed(() => {
 const statCards = computed(() => [
   { key: 'pending', label: '待处理', value: stats.value.pending ?? 0 },
   { key: 'stale_pending', label: '久排', value: stats.value.stale_pending ?? 0 },
-  { key: 'running', label: '运行中', value: stats.value.running ?? 0 },
+  { key: 'running', label: '采取中', value: stats.value.running ?? 0 },
   { key: 'stuck', label: '卡住', value: stats.value.stuck ?? 0 },
   { key: 'success', label: '成功', value: stats.value.success ?? 0 },
   { key: 'partial', label: '部分成功', value: stats.value.partial ?? 0 },
@@ -89,7 +136,7 @@ const breakdownCards = computed(() => [
   },
   {
     key: 'crawl_running_by_site',
-    title: '运行中站点',
+    title: '采取中站点',
     status: 'running',
     source: 'crawl',
     rows: breakdowns.value.crawl_running_by_site || []
@@ -139,7 +186,7 @@ const breakdownCards = computed(() => [
   },
   {
     key: 'spine_running_by_dataset',
-    title: '通用运行中',
+    title: '通用采取中',
     status: 'running',
     source: 'spine',
     rows: breakdowns.value.spine_running_by_dataset || []
@@ -153,7 +200,7 @@ const breakdownCards = computed(() => [
   },
   {
     key: 'ondemand_running_by_platform',
-    title: '按需运行中',
+    title: '按需采取中',
     status: 'running',
     source: 'ondemand',
     rows: breakdowns.value.ondemand_running_by_platform || []
@@ -281,6 +328,11 @@ function changePage(delta: number) {
   load()
 }
 
+function setPage(next: number) {
+  page.value = next
+  load()
+}
+
 function applyBreakdown(card: Record<string, any>, row: Record<string, any>) {
   sourceFilter.value = card.source || 'all'
   statusFilter.value = card.status || ''
@@ -335,6 +387,12 @@ function retryableText(row: Record<string, any>) {
 
 function attemptText(row: Record<string, any>) {
   return row.attempts ?? row.retries ?? '-'
+}
+
+function productProgressText(row: Record<string, any>) {
+  const fetched = Number(row.products_count ?? row.product_count ?? row.listing_count ?? 0)
+  const total = Number(row.total_product_count ?? row.crawl_total_product_count ?? row.attempted_product_count ?? 0)
+  return `${fmtNumber(fetched)}/${total > 0 ? fmtNumber(total) : '-'}`
 }
 
 function durationText(row: Record<string, any>) {
@@ -481,24 +539,8 @@ onUnmounted(stopPolling)
     </div>
 
     <div class="toolbar">
-      <select v-model="sourceFilter" class="ctl">
-        <option value="all">全部来源</option>
-        <option value="crawl">站点采集</option>
-        <option value="spine">通用抓取</option>
-        <option value="ondemand">按需抓取</option>
-      </select>
-      <select v-model="statusFilter" class="ctl">
-        <option value="">全部状态</option>
-        <option value="pending">待处理</option>
-        <option value="stale_pending">久排</option>
-        <option value="running">运行中</option>
-        <option value="stuck">卡住</option>
-        <option value="success">成功</option>
-        <option value="partial">部分成功</option>
-        <option value="failed">失败</option>
-        <option value="blocked">阻断</option>
-        <option value="skipped">跳过</option>
-      </select>
+      <USelect v-model="sourceFilter" class="select-ctl" :items="sourceFilterItems" value-key="value" />
+      <USelect v-model="statusSelect" class="select-ctl" :items="statusFilterItems" value-key="value" />
       <input v-model.trim="targetFilter" class="ctl filter-input" placeholder="站点 / 平台 / 批次 / URL" />
       <input v-model.trim="failureCodeFilter" class="ctl filter-input code-input" placeholder="失败码" />
       <button class="ctl btn" :disabled="loading" @click="load">刷新</button>
@@ -538,61 +580,52 @@ onUnmounted(stopPolling)
     <div v-if="error" class="error">{{ error }}</div>
 
     <div class="table-wrap">
-      <table class="tbl">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>来源</th>
-            <th>状态</th>
-            <th>目标</th>
-            <th>URL / 批次</th>
-            <th>失败码 / 阶段</th>
-            <th>可重试</th>
-            <th>执行次数</th>
-            <th>错误</th>
-            <th>耗时 / 活跃</th>
-            <th>完成时间</th>
-            <th>创建时间</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in items" :key="`${row.source || 'spine'}-${row.id}`">
-            <td>{{ row.id }}</td>
-            <td>{{ row.source_label || row.source || '-' }}</td>
-            <td><StatusBadge :status="row.normalized_status || row.status" /></td>
-            <td>{{ targetText(row) }}</td>
-            <td :title="row.url || row.dataset || ''">{{ truncate(row.url || row.dataset) || '-' }}</td>
-            <td :title="metaText(row)">{{ truncate(metaText(row), 32) }}</td>
-            <td>{{ retryableText(row) }}</td>
-            <td>{{ attemptText(row) }}</td>
-            <td class="err-cell" :title="row.error || ''">{{ truncate(row.error, 36) || '-' }}</td>
-            <td :title="row.stuck_reason || ''">{{ durationText(row) }}</td>
-            <td>{{ fmtDate(row.finished_at) }}</td>
-            <td>{{ fmtDate(row.created_at) }}</td>
-            <td>
-              <div class="row-actions">
-                <button class="btn small" @click="openDetail(row)">详情</button>
-                <button class="btn small" :disabled="!canRetry(row)" @click="doRetry(row)">重试</button>
-              </div>
-            </td>
-          </tr>
-          <tr v-if="!items.length">
-            <td colspan="13" class="empty">{{ loading ? '加载中…' : '暂无任务' }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <UTable class="tbl ui-table" :data="items" :columns="queueColumns" :loading="loading" sticky="header" empty="暂无任务">
+        <template #source-cell="{ row }">{{ row.original.source_label || row.original.source || '-' }}</template>
+        <template #status-cell="{ row }"><StatusBadge :status="row.original.normalized_status || row.original.status" /></template>
+        <template #target-cell="{ row }">{{ targetText(row.original) }}</template>
+        <template #url-cell="{ row }">
+          <span :title="row.original.url || row.original.dataset || ''">{{ truncate(row.original.url || row.original.dataset) || '-' }}</span>
+        </template>
+        <template #products_count-cell="{ row }">
+          <span :title="row.original.total_product_count_source ? `本次总量来源：${row.original.total_product_count_source}` : '暂无本次总量数据'">
+            {{ productProgressText(row.original) }}
+          </span>
+        </template>
+        <template #failure_code-cell="{ row }">
+          <span :title="metaText(row.original)">{{ truncate(metaText(row.original), 32) }}</span>
+        </template>
+        <template #retryable-cell="{ row }">{{ retryableText(row.original) }}</template>
+        <template #attempts-cell="{ row }">{{ attemptText(row.original) }}</template>
+        <template #error-cell="{ row }">
+          <span class="err-cell" :title="row.original.error || ''">{{ truncate(row.original.error, 36) || '-' }}</span>
+        </template>
+        <template #duration-cell="{ row }">
+          <span :title="row.original.stuck_reason || ''">{{ durationText(row.original) }}</span>
+        </template>
+        <template #finished_at-cell="{ row }">{{ fmtDate(row.original.finished_at) }}</template>
+        <template #created_at-cell="{ row }">{{ fmtDate(row.original.created_at) }}</template>
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <button class="btn small" @click="openDetail(row.original)">详情</button>
+            <button class="btn small" :disabled="!canRetry(row.original)" @click="doRetry(row.original)">重试</button>
+          </div>
+        </template>
+      </UTable>
     </div>
 
     <div class="pager">
-      <button class="btn small" :disabled="page <= 1" @click="changePage(-1)">上一页</button>
+      <UPagination
+        :page="page"
+        :total="total"
+        :items-per-page="size"
+        :disabled="loading || totalPages <= 1"
+        size="sm"
+        show-edges
+        @update:page="setPage"
+      />
       <span>第 {{ page }} / {{ totalPages }} 页 · 共 {{ total }} 条</span>
-      <button class="btn small" :disabled="page >= totalPages" @click="changePage(1)">下一页</button>
-      <select v-model.number="size" class="ctl">
-        <option :value="20">20 / 页</option>
-        <option :value="50">50 / 页</option>
-        <option :value="100">100 / 页</option>
-      </select>
+      <USelect v-model="size" class="size-select" :items="pageSizeItems" value-key="value" />
     </div>
 
     <div v-if="detailRow" class="detail-mask" @click.self="closeDetail">
@@ -1022,9 +1055,12 @@ onUnmounted(stopPolling)
 }
 
 .table-wrap {
+  position: relative;
+  z-index: 0;
   overflow-x: auto;
   border: 1px solid var(--ui-border, rgba(255, 255, 255, 0.08));
   border-radius: 12px;
+  background: var(--admin-panel, #fff);
 }
 
 .tbl {
@@ -1073,10 +1109,11 @@ onUnmounted(stopPolling)
 .detail-mask {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: 120;
   display: flex;
   justify-content: flex-end;
-  background: rgba(0, 0, 0, 0.48);
+  background: var(--admin-overlay, rgba(15, 23, 42, 0.42));
+  backdrop-filter: blur(4px);
 }
 
 .detail-panel {
@@ -1084,9 +1121,10 @@ onUnmounted(stopPolling)
   height: 100%;
   padding: 22px;
   overflow: auto;
-  border-left: 1px solid var(--ui-border, rgba(255, 255, 255, 0.12));
-  background: #0b0812;
-  box-shadow: -20px 0 60px rgba(0, 0, 0, 0.35);
+  border-left: 1px solid var(--ui-border, rgba(148, 163, 184, 0.32));
+  background: var(--ui-panel, #fff);
+  color: var(--ui-text, #0f172a);
+  box-shadow: -20px 0 60px rgba(15, 23, 42, 0.22);
 }
 
 .detail-head {
@@ -1119,13 +1157,13 @@ onUnmounted(stopPolling)
 .detail-loading {
   border: 1px solid rgba(139, 92, 246, 0.28);
   background: rgba(139, 92, 246, 0.12);
-  color: #c4b5fd;
+  color: var(--ui-color-primary-600, #6d28d9);
 }
 
 .detail-error {
   border: 1px solid rgba(239, 68, 68, 0.28);
   background: rgba(239, 68, 68, 0.1);
-  color: #fca5a5;
+  color: var(--admin-danger-text, #b91c1c);
 }
 
 .detail-grid {
@@ -1138,9 +1176,9 @@ onUnmounted(stopPolling)
 .detail-grid div,
 .detail-block {
   padding: 10px;
-  border: 1px solid var(--ui-border, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--ui-border, rgba(148, 163, 184, 0.32));
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.025);
+  background: var(--admin-panel-soft, #f8fafc);
 }
 
 .detail-grid dt,

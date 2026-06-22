@@ -10,6 +10,15 @@ const items = ref<any[]>([])
 const total = ref(0)
 const loading = ref(false)
 const error = ref('')
+const datasetColumns = [
+  { accessorKey: 'id', header: 'ID' },
+  { accessorKey: 'name', header: '名称' },
+  { accessorKey: 'slug', header: 'slug' },
+  { accessorKey: 'entity_type', header: '实体类型' },
+  { accessorKey: 'record_count', header: '记录数' },
+  { accessorKey: 'workspace_id', header: '租户' },
+  { id: 'actions', header: '' }
+]
 
 async function load() {
   loading.value = true
@@ -45,35 +54,16 @@ onMounted(load)
     <div v-if="error" class="error">{{ error }}</div>
 
     <div class="table-wrap">
-      <table class="tbl">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>名称</th>
-            <th>slug</th>
-            <th>实体类型</th>
-            <th>记录数</th>
-            <th>租户</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in items" :key="row.id">
-            <td>{{ row.id }}</td>
-            <td>{{ row.name || '-' }}</td>
-            <td>{{ row.slug || '-' }}</td>
-            <td>{{ row.entity_type || '-' }}</td>
-            <td>{{ fmtNumber(row.record_count) }}</td>
-            <td>{{ row.workspace_id ?? '-' }}</td>
-            <td>
-              <button class="btn small" @click="view(row.id)">查看</button>
-            </td>
-          </tr>
-          <tr v-if="!items.length">
-            <td colspan="7" class="empty">{{ loading ? '加载中…' : '暂无数据集' }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <UTable class="tbl ui-table" :data="items" :columns="datasetColumns" :loading="loading" sticky="header" empty="暂无数据集">
+        <template #name-cell="{ row }">{{ row.original.name || '-' }}</template>
+        <template #slug-cell="{ row }">{{ row.original.slug || '-' }}</template>
+        <template #entity_type-cell="{ row }">{{ row.original.entity_type || '-' }}</template>
+        <template #record_count-cell="{ row }">{{ fmtNumber(row.original.record_count) }}</template>
+        <template #workspace_id-cell="{ row }">{{ row.original.workspace_id ?? '-' }}</template>
+        <template #actions-cell="{ row }">
+          <button class="btn small" @click="view(row.original.id)">查看</button>
+        </template>
+      </UTable>
     </div>
 
     <p class="count">共 {{ total }} 个数据集</p>

@@ -11,6 +11,24 @@ const loading = ref(false)
 const error = ref('')
 
 const filters = ref({ endpoint: '', start: '', end: '' })
+const usageKeyColumns = [
+  { accessorKey: 'api_key_id', header: 'API Key ID' },
+  { accessorKey: 'credits', header: '积分' },
+  { accessorKey: 'records', header: '记录数' },
+  { accessorKey: 'calls', header: '调用次数' },
+  { accessorKey: 'api_calls', header: 'API调用' },
+  { accessorKey: 'browser_opens', header: '浏览器' },
+  { accessorKey: 'pages_fetched', header: '页面数' }
+]
+const usageTenantColumns = [
+  { accessorKey: 'workspace_id', header: '租户 (workspace_id)' },
+  { accessorKey: 'credits', header: '积分' },
+  { accessorKey: 'records', header: '记录数' },
+  { accessorKey: 'calls', header: '调用次数' },
+  { accessorKey: 'api_calls', header: 'API调用' },
+  { accessorKey: 'browser_opens', header: '浏览器' },
+  { accessorKey: 'pages_fetched', header: '页面数' }
+]
 
 async function load() {
   loading.value = true
@@ -67,66 +85,28 @@ onMounted(load)
     <section class="block">
       <h2 class="block-title">按 API Key</h2>
       <div class="table-wrap">
-        <table class="tbl">
-          <thead>
-            <tr>
-              <th>API Key ID</th>
-              <th>积分</th>
-              <th>记录数</th>
-              <th>调用次数</th>
-              <th>API调用</th>
-              <th>浏览器</th>
-              <th>页面数</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in byKey" :key="row.api_key_id">
-              <td>{{ row.api_key_id }}</td>
-              <td>{{ fmtNumber(row.credits) }}</td>
-              <td>{{ fmtNumber(row.records) }}</td>
-              <td>{{ fmtNumber(row.calls) }}</td>
-              <td>{{ fmtNumber(row.api_calls || 0) }}</td>
-              <td>{{ fmtNumber(row.browser_opens || 0) }}</td>
-              <td>{{ fmtNumber(row.pages_fetched || 0) }}</td>
-            </tr>
-            <tr v-if="!byKey.length">
-              <td colspan="7" class="empty">{{ loading ? '加载中…' : '暂无数据' }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <UTable class="tbl ui-table" :data="byKey" :columns="usageKeyColumns" :loading="loading" sticky="header" empty="暂无数据">
+          <template #credits-cell="{ row }">{{ fmtNumber(row.original.credits) }}</template>
+          <template #records-cell="{ row }">{{ fmtNumber(row.original.records) }}</template>
+          <template #calls-cell="{ row }">{{ fmtNumber(row.original.calls) }}</template>
+          <template #api_calls-cell="{ row }">{{ fmtNumber(row.original.api_calls || 0) }}</template>
+          <template #browser_opens-cell="{ row }">{{ fmtNumber(row.original.browser_opens || 0) }}</template>
+          <template #pages_fetched-cell="{ row }">{{ fmtNumber(row.original.pages_fetched || 0) }}</template>
+        </UTable>
       </div>
     </section>
 
     <section class="block">
       <h2 class="block-title">按租户</h2>
       <div class="table-wrap">
-        <table class="tbl">
-          <thead>
-            <tr>
-              <th>租户 (workspace_id)</th>
-              <th>积分</th>
-              <th>记录数</th>
-              <th>调用次数</th>
-              <th>API调用</th>
-              <th>浏览器</th>
-              <th>页面数</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in byTenant" :key="row.workspace_id">
-              <td>{{ row.workspace_id }}</td>
-              <td>{{ fmtNumber(row.credits) }}</td>
-              <td>{{ fmtNumber(row.records) }}</td>
-              <td>{{ fmtNumber(row.calls) }}</td>
-              <td>{{ fmtNumber(row.api_calls || 0) }}</td>
-              <td>{{ fmtNumber(row.browser_opens || 0) }}</td>
-              <td>{{ fmtNumber(row.pages_fetched || 0) }}</td>
-            </tr>
-            <tr v-if="!byTenant.length">
-              <td colspan="7" class="empty">{{ loading ? '加载中…' : '暂无数据' }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <UTable class="tbl ui-table" :data="byTenant" :columns="usageTenantColumns" :loading="loading" sticky="header" empty="暂无数据">
+          <template #credits-cell="{ row }">{{ fmtNumber(row.original.credits) }}</template>
+          <template #records-cell="{ row }">{{ fmtNumber(row.original.records) }}</template>
+          <template #calls-cell="{ row }">{{ fmtNumber(row.original.calls) }}</template>
+          <template #api_calls-cell="{ row }">{{ fmtNumber(row.original.api_calls || 0) }}</template>
+          <template #browser_opens-cell="{ row }">{{ fmtNumber(row.original.browser_opens || 0) }}</template>
+          <template #pages_fetched-cell="{ row }">{{ fmtNumber(row.original.pages_fetched || 0) }}</template>
+        </UTable>
       </div>
     </section>
   </div>

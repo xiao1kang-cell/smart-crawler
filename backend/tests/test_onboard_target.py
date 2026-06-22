@@ -121,7 +121,9 @@ def test_target_routes_through_make_fetcher_and_counts(monkeypatch):
     """After migration, all HTTP GETs go through make_fetcher → counter increments."""
     from app.crawlers.target import TargetCrawler, _HOME_KW
 
+    monkeypatch.setenv("TARGET_USE_REDSKY", "1")
     crawler = TargetCrawler(_site(), limit=1)
+    monkeypatch.setattr(crawler, "sleep", lambda: None)
 
     calls: list[str] = []
     srp_hits: dict[str, int] = {}
@@ -180,7 +182,9 @@ def test_target_srp_pagination_terminates(monkeypatch):
     """SRP pagination loop terminates when plp_search_v2 returns empty products."""
     from app.crawlers.target import TargetCrawler, _HOME_KW
 
+    monkeypatch.setenv("TARGET_USE_REDSKY", "1")
     crawler = TargetCrawler(_site(), limit=1)
+    monkeypatch.setattr(crawler, "sleep", lambda: None)
 
     srp_calls: list[str] = []
 
@@ -246,3 +250,51 @@ def test_target_map_pdp_not_degraded():
     assert "https://target.scene7.com/is/image/Target/desk.jpg" in row["image_urls"]
     assert row["product_url"] == url
     assert row["site"] == "target"
+
+
+def test_target_default_crawl_uses_sitemap_only(monkeypatch):
+    from app.crawlers.target import SITEMAP_INDEX, TargetCrawler
+
+    crawler = TargetCrawler(_site(), limit=1)
+    shard = "https://www.target.com/pdp/sitemap_00-0001.xml.gz"
+    url = (
+        "https://www.target.com/p/"
+        "creative-products-trick-or-treat-cat-16x16-indoor-outdoor-pillow"
+        "/-/A-1000008858"
+    )
+    index = f"<sitemapindex><sitemap><loc>{shard}</loc></sitemap></sitemapindex>"
+    sitemap = (
+        "<urlset><url>"
+        f"<loc>{url}</loc>"
+        "<image:image><image:loc>https://target.scene7.com/is/image/Target/x</image:loc></image:image>"
+        "</url></urlset>"
+    )
+    calls: list[str] = []
+
+    class _FakeFetcher:
+        def get(self, u: str, **kw) -> FetchResult:
+            calls.append(u)
+            crawler.counter.api_calls += 1
+            text = index if u == SITEMAP_INDEX else sitemap
+            return FetchResult(
+                ok=True,
+                url=u,
+                status=200,
+                text=text,
+                content=text.encode(),
+                final_url=u,
+                fetcher="curl_cffi",
+            )
+
+    monkeypatch.delenv("TARGET_USE_REDSKY", raising=False)
+    monkeypatch.setattr(crawler, "make_fetcher", lambda **kw: _FakeFetcher())
+
+    result = crawler.crawl()
+
+    assert calls == [SITEMAP_INDEX, shard]
+    assert len(result.products) == 1
+    row = result.products[0]
+    assert row["sku"] == "1000008858"
+    assert "Indoor Outdoor Pillow" in row["title"]
+    assert row["image_urls"] == ["https://target.scene7.com/is/image/Target/x"]
+    assert row["attributes"]["source"] == "sitemap"

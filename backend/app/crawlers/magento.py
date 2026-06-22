@@ -16,9 +16,10 @@ sites.yaml 可选字段：
 from __future__ import annotations
 
 import gzip
+import html
 import os
-import random
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from selectolax.parser import HTMLParser
@@ -30,6 +31,7 @@ from .generic import GenericCrawler
 
 DEFAULT_LIMIT = int(os.environ.get("MAGENTO_LIMIT", "200"))
 DEFAULT_SCAN_CAP = int(os.environ.get("MAGENTO_SCAN_CAP", "2800"))
+MAX_ELAPSED_SEC = float(os.environ.get("MAGENTO_MAX_ELAPSED_SEC", "600"))
 WORKERS = int(os.environ.get("MAGENTO_WORKERS", "8"))
 _CURRENCY = {"US": "USD", "UK": "GBP", "CA": "CAD", "IE": "EUR", "DE": "EUR",
              "IT": "EUR", "ES": "EUR", "FR": "EUR", "RO": "RON", "PT": "EUR",
@@ -37,6 +39,10 @@ _CURRENCY = {"US": "USD", "UK": "GBP", "CA": "CAD", "IE": "EUR", "DE": "EUR",
 _SKIP_RE = re.compile(
     r"(blog|/article|/news|/help|/about|/contact|/customer|/checkout|"
     r"/catalogsearch|/privacy|/terms|\.(jpg|png|webp|pdf|css|js)(\?|$))", re.I)
+_URL_BLOCK_RE = re.compile(r"<url>(.*?)</url>", re.S)
+_IMG_LOC_RE = re.compile(r"<image:loc>\s*(.*?)\s*</image:loc>", re.S)
+_IMG_TITLE_RE = re.compile(r"<image:title>\s*(.*?)\s*</image:title>", re.S)
+_LASTMOD_RE = re.compile(r"<lastmod>\s*(.*?)\s*</lastmod>", re.S)
 
 
 class MagentoCrawler(BaseCrawler):
@@ -50,6 +56,7 @@ class MagentoCrawler(BaseCrawler):
         self.product_match = hints.get("product_match", "")
         self.limit = self._resolve_limit(DEFAULT_LIMIT)
         self.scan_cap = int(hints.get("scan_cap", DEFAULT_SCAN_CAP))
+        self._sitemap_meta: dict[str, dict] = {}
 
     def _headers(self) -> dict:
         """构造定制请求头（每请求透传给 CrawlerFetcher.get）。"""
@@ -106,10 +113,12 @@ class MagentoCrawler(BaseCrawler):
             for s in sub[:12]:
                 out.extend(self._sitemap_locs(fetcher, s, depth + 1))
             return out
+        self._remember_sitemap_meta(text)
         return locs
 
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
+        started = time.monotonic()
         fetcher = self.make_fetcher(
             kind="product",
             source="magento",
@@ -128,18 +137,28 @@ class MagentoCrawler(BaseCrawler):
                  if not u.endswith((".xml", ".xml.gz"))
                  and not _SKIP_RE.search(u)
                  and (not self.product_match or self.product_match in u)]
-        # 去重；打散 —— Magento sitemap 把分类、商品分在不同子图，顺序扫会
-        # 先撞上整段分类页。随机打散后命中率≈商品占比，分批扫即可提前停。
+        # 去重；再按商品 URL 特征排序。Costway 欧洲站的 sitemap-1-1
+        # 以分类页开头，sitemap-1-2 起多为 `costway-*.html` 商品页；
+        # 旧的随机打散在大 sitemap 上命中不稳定，且容易把 worker 拖很久。
         seen_u: set[str] = set()
         cands = [u for u in cands if not (u in seen_u or seen_u.add(u))]
         total = len(cands)
-        random.shuffle(cands)
+        cands.sort(key=_candidate_priority)
         cands = cands[: self.scan_cap]
         result.notes.append(
-            f"sitemap 候选页 {total} 个，打散后扫描上限 {len(cands)}，"
+            f"sitemap 候选页 {total} 个，排序后扫描上限 {len(cands)}，"
             f"目标商品 {self.limit}")
         if not cands:
             result.notes.append("⚠ 候选页为空")
+            return result
+
+        if self._prefer_sitemap_only():
+            rows = [row for row in (self._row_from_sitemap(u) for u in cands[: self.limit])
+                    if row]
+            result.products.extend(rows)
+            result.notes.append(
+                f"Costway Magento sitemap-only 产出 {len(rows)} 个商品"
+                "（价格字段后续由 PDP/增量任务补齐）")
             return result
 
         # 并发抓取 + 判别 —— 分批，凑够 limit 即停，不空跑剩余批次
@@ -150,6 +169,11 @@ class MagentoCrawler(BaseCrawler):
         self._fetcher = fetcher
         with ThreadPoolExecutor(max_workers=WORKERS) as pool:
             for i in range(0, len(cands), batch):
+                if time.monotonic() - started >= MAX_ELAPSED_SEC:
+                    result.notes.append(
+                        f"达到 MAGENTO_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
+                        f"提前返回（已扫描 {scanned}，命中 {hit}）")
+                    break
                 for row in pool.map(self._fetch_one, cands[i:i + batch]):
                     scanned += 1
                     if row:
@@ -226,3 +250,76 @@ class MagentoCrawler(BaseCrawler):
                 if p:
                     return p
         return None
+
+    def _remember_sitemap_meta(self, text: str) -> None:
+        if not hasattr(self, "_sitemap_meta"):
+            self._sitemap_meta = {}
+        for block in _URL_BLOCK_RE.findall(text or ""):
+            loc_match = re.search(r"<loc>\s*(.*?)\s*</loc>", block, re.S)
+            if not loc_match:
+                continue
+            url = html.unescape(loc_match.group(1).strip())
+            images = [html.unescape(x.strip()) for x in _IMG_LOC_RE.findall(block)]
+            titles = [html.unescape(x.strip()) for x in _IMG_TITLE_RE.findall(block)]
+            lastmod = _LASTMOD_RE.search(block)
+            self._sitemap_meta[url] = {
+                "images": images,
+                "title": titles[0] if titles else None,
+                "lastmod": html.unescape(lastmod.group(1).strip()) if lastmod else None,
+            }
+
+    def _prefer_sitemap_only(self) -> bool:
+        return (self.site.site or "").startswith("costway_")
+
+    def _row_from_sitemap(self, url: str) -> dict | None:
+        meta = self._sitemap_meta.get(url) or {}
+        title = meta.get("title") or _title_from_url(url)
+        if not title:
+            return None
+        slug = url.rstrip("/").rsplit("/", 1)[-1].split("?", 1)[0]
+        if slug.endswith(".html"):
+            slug = slug[:-5]
+        if not slug:
+            return None
+        return {
+            "sku": slug[:180],
+            "spu": slug[:180],
+            "title": title,
+            "image_urls": meta.get("images") or [],
+            "category_path": _category_from_url(url),
+            "currency": _CURRENCY.get(self.site.country, "USD"),
+            "status": "on_sale",
+            "brand": self.site.brand,
+            "product_url": url,
+            "site": self.site.site,
+            "published_at": meta.get("lastmod"),
+        }
+
+
+def _candidate_priority(url: str) -> tuple[int, int, str]:
+    path = re.sub(r"https?://[^/]+", "", url).lower()
+    basename = path.rstrip("/").rsplit("/", 1)[-1]
+    depth = path.count("/")
+    if basename.startswith("costway-") and basename.endswith(".html"):
+        return (0, -depth, url)
+    if basename.endswith(".html") and depth >= 3:
+        return (1, -depth, url)
+    if basename.endswith(".html"):
+        return (2, -depth, url)
+    return (3, -depth, url)
+
+
+def _title_from_url(url: str) -> str | None:
+    slug = url.rstrip("/").rsplit("/", 1)[-1].split("?", 1)[0]
+    if slug.endswith(".html"):
+        slug = slug[:-5]
+    text = re.sub(r"[-_]+", " ", slug).strip()
+    return text or None
+
+
+def _category_from_url(url: str) -> str | None:
+    path = re.sub(r"https?://[^/]+", "", url).strip("/")
+    parts = path.split("/")[:-1]
+    if not parts:
+        return None
+    return " / ".join(re.sub(r"[-_]+", " ", part).strip() for part in parts if part)

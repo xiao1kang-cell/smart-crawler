@@ -44,6 +44,22 @@ const filteredReviews = computed(() => {
 })
 const reviewPages = computed(() => Math.max(1, Math.ceil(filteredReviews.value.length / 20)))
 const reviewPageItems = computed(() => filteredReviews.value.slice((reviewPage.value - 1) * 20, reviewPage.value * 20))
+const jobColumns = [
+  { accessorKey: 'created_at', header: '创建时间' },
+  { accessorKey: 'finished_at', header: '完成时间' },
+  { accessorKey: 'platform', header: '平台' },
+  { accessorKey: 'url', header: 'URL' },
+  { accessorKey: 'listing_count', header: 'listing' },
+  { accessorKey: 'review_count', header: '评论' },
+  { accessorKey: 'status', header: '状态' },
+  { id: 'actions', header: '操作' },
+]
+const listingColumns = [
+  { accessorKey: 'sku', header: 'SKU' },
+  { accessorKey: 'title', header: '标题' },
+  { accessorKey: 'sale_price', header: '售价' },
+  { accessorKey: 'original_price', header: '原价' },
+]
 
 async function load(options: { silent?: boolean } = {}) {
   if (!options.silent) loading.value = true
@@ -199,7 +215,7 @@ onUnmounted(() => {
 
     <div v-if="showBatch" class="od-modal" @click.self="showBatch = false">
       <div class="od-modal-card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div class="od-modal-head">
           <h3 style="margin:0">批量抓取（最多 {{ maxBatch }} 条）</h3>
           <button class="btn-prim btn-plain" @click="showBatch = false">✕</button>
         </div>
@@ -222,26 +238,26 @@ onUnmounted(() => {
       </div>
       <div v-if="loading" class="inf-empty-note">加载中…</div>
       <div v-else-if="!jobs.length" class="inf-empty-note">暂无抓取记录</div>
-      <table v-else class="od-table">
-        <thead><tr><th>创建时间</th><th>完成时间</th><th>平台</th><th>URL</th><th>listing</th><th>评论</th><th>状态</th><th>操作</th></tr></thead>
-        <tbody>
-          <tr v-for="job in jobs" :key="job.id" @click="openJob(job)">
-            <td>{{ (job.created_at || '').replace('T', ' ').slice(0, 16) }}</td>
-            <td>{{ job.finished_at ? job.finished_at.replace('T', ' ').slice(0, 16) : '—' }}</td>
-            <td>{{ job.platform || job.marketplace }}</td>
-            <td class="url-cell">{{ job.url }}</td>
-            <td>{{ fmtNumber(job.listing_count || job.product_count || job.products_count || job.items_count) }}</td>
-            <td>{{ fmtNumber(job.review_count || job.reviews_count) }}</td>
-            <td><StatusBadge :status="job.status" /></td>
-            <td class="actions-cell"><button v-if="job.status === 'failed' || job.status === 'partial'" class="btn-prim btn-mini btn-retry" @click.stop="retry(job)">重试</button><button class="btn-prim btn-mini btn-danger" @click.stop="remove(job)">删除</button></td>
-          </tr>
-        </tbody>
-      </table>
+      <UTable v-else class="od-table ui-table" :data="jobs" :columns="jobColumns" sticky="header" empty="暂无抓取记录">
+        <template #created_at-cell="{ row }">{{ (row.original.created_at || '').replace('T', ' ').slice(0, 16) }}</template>
+        <template #finished_at-cell="{ row }">{{ row.original.finished_at ? row.original.finished_at.replace('T', ' ').slice(0, 16) : '—' }}</template>
+        <template #platform-cell="{ row }">{{ row.original.platform || row.original.marketplace }}</template>
+        <template #url-cell="{ row }"><button class="table-link url-cell" @click="openJob(row.original)">{{ row.original.url }}</button></template>
+        <template #listing_count-cell="{ row }">{{ fmtNumber(row.original.listing_count || row.original.product_count || row.original.products_count || row.original.items_count) }}</template>
+        <template #review_count-cell="{ row }">{{ fmtNumber(row.original.review_count || row.original.reviews_count) }}</template>
+        <template #status-cell="{ row }"><StatusBadge :status="row.original.status" /></template>
+        <template #actions-cell="{ row }">
+          <div class="actions-cell">
+            <button v-if="row.original.status === 'failed' || row.original.status === 'partial'" class="btn-prim btn-mini btn-retry" @click.stop="retry(row.original)">重试</button>
+            <button class="btn-prim btn-mini btn-danger" @click.stop="remove(row.original)">删除</button>
+          </div>
+        </template>
+      </UTable>
     </div>
 
     <div v-if="showDetail" class="od-modal" @click.self="closeDetail">
       <div class="od-modal-card" style="max-width:760px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div class="od-modal-head">
           <h3 style="margin:0">抓取详情</h3>
           <button class="btn-prim btn-plain" @click="closeDetail">✕</button>
         </div>
@@ -251,17 +267,12 @@ onUnmounted(() => {
             <li v-for="(note, index) in detailJob.notes" :key="index">{{ note }}</li>
           </ul>
 
-          <table v-if="detailListings.length" class="od-table" style="margin-bottom:8px">
-            <thead><tr><th>SKU</th><th>标题</th><th>售价</th><th>原价</th></tr></thead>
-            <tbody>
-              <tr v-for="product in detailListings" :key="product.sku || product.item_id">
-                <td>{{ product.sku || product.item_id }}</td>
-                <td>{{ product.title || product.name }}</td>
-                <td>{{ product.sale_price || product.price || '—' }}</td>
-                <td>{{ product.original_price || '—' }}</td>
-              </tr>
-            </tbody>
-          </table>
+          <UTable v-if="detailListings.length" class="od-table ui-table detail-listing-table" :data="detailListings" :columns="listingColumns" empty="暂无 listing">
+            <template #sku-cell="{ row }">{{ row.original.sku || row.original.item_id }}</template>
+            <template #title-cell="{ row }">{{ row.original.title || row.original.name }}</template>
+            <template #sale_price-cell="{ row }">{{ row.original.sale_price || row.original.price || '—' }}</template>
+            <template #original_price-cell="{ row }">{{ row.original.original_price || '—' }}</template>
+          </UTable>
 
           <div v-if="detailReviews.length" style="margin-top:6px">
             <div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">
@@ -289,6 +300,7 @@ onUnmounted(() => {
               <button
                 v-for="opt in [{ v: 0, t: '全部' }, { v: 5, t: '5★' }, { v: 4, t: '4★' }, { v: 3, t: '3★' }, { v: 2, t: '2★' }, { v: 1, t: '1★' }]"
                 :key="opt.v"
+                class="review-filter-btn"
                 :style="{ padding: '3px 11px', borderRadius: '13px', border: '1px solid var(--ui-border)', cursor: 'pointer', fontSize: '0.78rem', background: reviewFilter === opt.v ? 'var(--ui-purple)' : 'var(--ui-card)', color: reviewFilter === opt.v ? '#fff' : 'var(--ui-text)' }"
                 @click="setReviewFilter(opt.v)"
               >

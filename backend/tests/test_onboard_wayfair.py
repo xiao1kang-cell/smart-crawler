@@ -109,8 +109,8 @@ def _make_fake_fetcher(crawler, url_map: dict):
 # Test: curl path — sitemap + PDP GET counts api_calls
 # ---------------------------------------------------------------------------
 
-def test_wayfair_curl_path_counts_api(monkeypatch):
-    """curl 路径：warmup(1) + sitemap_index(1) + sub-sitemap(1) + PDP(1) = api_calls >= 4."""
+def test_wayfair_default_crawl_uses_sitemap_only(monkeypatch):
+    """默认非住宅路径：warmup + sitemap_index + sub-sitemap，不打 PDP。"""
     from app.crawlers.wayfair import WayfairCrawler
 
     crawler = WayfairCrawler(_site())
@@ -136,11 +136,6 @@ def test_wayfair_curl_path_counts_api(monkeypatch):
             final_url="https://www.wayfair.com/seo-pdp-sitemap~1.xml",
             fetcher="curl_cffi",
         ),
-        _PDP_URL: FetchResult(
-            ok=True, url=_PDP_URL, status=200,
-            text=_PDP_HTML, content=_PDP_HTML.encode(),
-            final_url=_PDP_URL, fetcher="curl_cffi",
-        ),
     }
 
     monkeypatch.setattr(crawler, "make_fetcher",
@@ -150,9 +145,9 @@ def test_wayfair_curl_path_counts_api(monkeypatch):
 
     result = crawler.crawl()
 
-    # warmup + sitemap_index + sub-sitemap + PDP = at least 4
-    assert crawler.counter.api_calls >= 4, (
-        f"Expected >=4 api_calls (warmup+sitemap_index+sub-sitemap+PDP), "
+    # warmup + sitemap_index + sub-sitemap = at least 3
+    assert crawler.counter.api_calls >= 3, (
+        f"Expected >=3 api_calls (warmup+sitemap_index+sub-sitemap), "
         f"got {crawler.counter.api_calls}. Notes: {result.notes}"
     )
     assert isinstance(result.products, list), "result.products 应为 list"
@@ -163,7 +158,6 @@ def test_wayfair_curl_path_counts_api(monkeypatch):
     p = result.products[0]
     assert p["sku"] == _SKU
     assert "Some Chair" in p["title"]
-    assert p["sale_price"] == 399.99
     assert p["currency"] == "USD"
     assert p["site"] == "wayfair"
 

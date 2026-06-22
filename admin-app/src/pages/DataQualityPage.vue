@@ -64,6 +64,7 @@ const detailError = ref('')
 const detailPage = ref(1)
 const detailLimit = ref(50)
 const qualityFilter = ref('')
+const EMPTY_SELECT = '__empty__'
 const detailIssues = [
   { key: '', label: '全部问题' },
   { key: 'no_products', label: '无商品' },
@@ -91,6 +92,58 @@ const detailIssues = [
   { key: 'empty_sitemap', label: '空站点图' },
   { key: 'market_paused', label: '市场暂停' },
 ]
+const tenantItems = computed(() => [
+  { label: '全部 workspace', value: EMPTY_SELECT },
+  ...tenantRows.value.map((tenant) => ({
+    label: `${tenant.name} (${tenant.site_count || 0})`,
+    value: String(tenant.id)
+  }))
+])
+const tenantSelect = computed({
+  get: () => tenantId.value || EMPTY_SELECT,
+  set: (value: string) => {
+    tenantId.value = value === EMPTY_SELECT ? '' : value
+  }
+})
+const proxyTierItems = [
+  { label: 'none', value: 'none' },
+  { label: 'datacenter', value: 'datacenter' },
+  { label: 'residential', value: 'residential' }
+]
+const priceSourceTypeItems = [
+  { label: '未指定', value: EMPTY_SELECT },
+  { label: 'Feed / JSON', value: 'feed' },
+  { label: 'API 模板', value: 'api' },
+  { label: 'PDP HTML', value: 'pdp' },
+  { label: '外部登记', value: 'external' }
+]
+const booleanModeItems = [
+  { label: '默认', value: EMPTY_SELECT },
+  { label: '启用', value: 'true' },
+  { label: '停用', value: 'false' }
+]
+const stealthModeItems = [
+  { label: '停用', value: EMPTY_SELECT },
+  { label: '启用', value: 'true' }
+]
+const priceSourceTypeSelect = computed({
+  get: () => configForm.value.price_source_type || EMPTY_SELECT,
+  set: (value: string) => {
+    configForm.value.price_source_type = value === EMPTY_SELECT ? '' : value
+  }
+})
+const priceSourceUseProxySelect = computed({
+  get: () => configForm.value.price_source_use_proxy || EMPTY_SELECT,
+  set: (value: string) => {
+    configForm.value.price_source_use_proxy = value === EMPTY_SELECT ? '' : value
+  }
+})
+const priceSourceAllowStealthSelect = computed({
+  get: () => configForm.value.price_source_allow_stealth || EMPTY_SELECT,
+  set: (value: string) => {
+    configForm.value.price_source_allow_stealth = value === EMPTY_SELECT ? '' : value
+  }
+})
 const sortedRows = computed(() => rows.value.slice().sort((a, b) => {
   const rank: Record<string, number> = { critical: 0, warning: 1, healthy: 2 }
   return (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || String(a.site).localeCompare(String(b.site))
@@ -212,6 +265,73 @@ const detailTitle = computed(() => {
   if (detailKind.value === 'trend') return '趋势信号明细'
   return '问题商品明细'
 })
+const qualityColumns = [
+  { accessorKey: 'site', header: '站点' },
+  { accessorKey: 'status', header: '状态' },
+  { accessorKey: 'sku_count', header: 'SKU / SPU' },
+  { accessorKey: 'coverage_pct', header: '覆盖 / 目标偏差' },
+  { accessorKey: 'promotion_count', header: '促销' },
+  { accessorKey: 'signals', header: '标题 / 价格 / 币种 / 销量 / 收入 / 第三方信号' },
+  { accessorKey: 'crawl_queue', header: '任务队列' },
+  { accessorKey: 'latest_job', header: '最近任务' },
+  { accessorKey: 'issues', header: '问题' },
+  { accessorKey: 'suggested_action', header: '建议' },
+  { id: 'actions', header: '操作' },
+]
+const detailProductColumns = [
+  { accessorKey: 'sku', header: 'SKU / SPU' },
+  { accessorKey: 'title', header: '标题 / 类目' },
+  { accessorKey: 'sale_price', header: '价格' },
+  { accessorKey: 'currency', header: '币种' },
+  { accessorKey: 'thirty_day_sales', header: '30日销量 / 收入' },
+  { accessorKey: 'status', header: '状态' },
+  { accessorKey: 'created_time', header: '创建 / 发布 / 更新' },
+  { accessorKey: 'latest_job', header: '最近任务' },
+  { accessorKey: 'issues', header: '命中问题' },
+]
+const detailJobColumns = [
+  { accessorKey: 'id', header: 'ID' },
+  { accessorKey: 'normalized_status', header: '状态' },
+  { accessorKey: 'trigger', header: '触发' },
+  { accessorKey: 'failure_code', header: '失败码' },
+  { accessorKey: 'failure_stage', header: '阶段' },
+  { accessorKey: 'retryable', header: '可重试' },
+  { accessorKey: 'products_count', header: '商品/新品/促销' },
+  { accessorKey: 'started_at', header: '开始/完成' },
+  { accessorKey: 'error', header: '错误' },
+  { accessorKey: 'suggested_action', header: '建议' },
+]
+const detailSiteColumns = [
+  { accessorKey: 'site', header: '站点' },
+  { accessorKey: 'sku_count', header: 'SKU / SPU' },
+  { accessorKey: 'coverage_pct', header: '覆盖' },
+  { accessorKey: 'target_sku_count', header: '目标 SKU' },
+  { accessorKey: 'sku_deviation_pct', header: '偏差' },
+  { accessorKey: 'promotion_count', header: '促销' },
+  { accessorKey: 'last_crawled', header: '最近采集' },
+  { accessorKey: 'last_product_updated', header: '最近商品更新' },
+  { accessorKey: 'latest_job', header: '最近任务' },
+  { accessorKey: 'issues', header: '命中问题' },
+  { accessorKey: 'suggested_action', header: '建议' },
+]
+const detailTrendColumns = [
+  { accessorKey: 'date', header: '日期' },
+  { accessorKey: 'sku_count', header: 'SKU' },
+  { accessorKey: 'new_product_count', header: '新品' },
+  { accessorKey: 'estimated_sales', header: '估算销量' },
+  { accessorKey: 'estimated_revenue', header: '估算收入' },
+  { accessorKey: 'traffic', header: '流量' },
+  { accessorKey: 'conversion_rate', header: '转化率' },
+  { accessorKey: 'issues', header: '命中问题' },
+  { accessorKey: 'note', header: '备注' },
+]
+const activeDetailColumns = computed(() => {
+  if (detailKind.value === 'site') return detailSiteColumns
+  if (detailKind.value === 'job') return detailJobColumns
+  if (detailKind.value === 'trend') return detailTrendColumns
+  return detailProductColumns
+})
+const activeDetailRow = computed(() => rows.value.find((row) => String(row.site || '') === detailSite.value) || null)
 
 function isRerunnableQualityRow(row: Record<string, any>) {
   return row.rerun_recommended === true
@@ -784,12 +904,7 @@ onMounted(bootstrap)
         <p class="page-subtitle">站点级验收明细：覆盖、销量收入、促销、最近任务和失败建议。</p>
       </div>
       <div class="head-actions">
-        <select v-model="tenantId" class="ctl" @change="load">
-          <option value="">全部 workspace</option>
-          <option v-for="tenant in tenantRows" :key="tenant.id" :value="String(tenant.id)">
-            {{ tenant.name }} ({{ tenant.site_count || 0 }})
-          </option>
-        </select>
+        <USelect v-model="tenantSelect" class="select-ctl tenant-select" :items="tenantItems" value-key="value" @update:model-value="load" />
         <label class="inline-check">
           <input v-model="includeHidden" type="checkbox" @change="load" />
           <span>包含隐藏站点</span>
@@ -895,359 +1010,348 @@ onMounted(bootstrap)
     </div>
 
     <div class="table-wrap">
-      <table class="tbl">
-        <thead>
-          <tr>
-            <th>站点</th>
-            <th>状态</th>
-            <th>SKU / SPU</th>
-            <th>覆盖 / 目标偏差</th>
-            <th>促销</th>
-            <th>标题 / 价格 / 币种 / 销量 / 收入 / 第三方信号</th>
-            <th>任务队列</th>
-            <th>最近任务</th>
-            <th>问题</th>
-            <th>建议</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <template v-for="row in visibleRows" :key="row.site">
-            <tr>
-              <td>
-                <b>{{ row.site }}</b>
-                <small>{{ row.brand || '-' }} · {{ row.country || '-' }}</small>
-                <small v-if="row.workspaces?.length">
-                  {{ row.workspaces.map((w: any) => w.name).join(' / ') }}
-                </small>
-              </td>
-              <td><StatusBadge :status="row.status" /></td>
-              <td>{{ fmtNumber(row.sku_count) }} / {{ fmtNumber(row.spu_count) }}</td>
-              <td>
-                {{ row.coverage_pct }}% · {{ fmtNumber(row.fetched_count) }}/{{ fmtNumber(row.estimated_full) }}
-                <small v-if="row.target_sku_count">
-                  目标 SKU {{ fmtNumber(row.target_sku_count) }} · 偏差 {{ row.sku_deviation_pct }}%
-                  · {{ row.target_sku_source === 'acceptance' ? '验收口径' : '工作区配置' }}
-                </small>
-              </td>
-              <td>{{ fmtNumber(row.promotion_count) }}</td>
-              <td>
-                标题 {{ row.title_quality_pct }}% · 价格 {{ row.price_signal_pct }}% · 销量 {{ row.sales_signal_pct }}% · 收入 {{ row.revenue_signal_pct }}%
-                <small v-if="row.weak_title_count">弱标题 {{ fmtNumber(row.weak_title_count) }}</small>
-                <small v-if="row.currency_missing_count || row.currency_mismatch_count">
-                  币种 {{ row.expected_currency || '-' }} · 缺 {{ fmtNumber(row.currency_missing_count) }} · 错 {{ fmtNumber(row.currency_mismatch_count) }}
-                </small>
-                <small v-if="row.price_source_configured" class="source-ok">
-                  价格源 {{ row.price_source_type || '-' }} 已配置
-                </small>
-                <small>流量 {{ fmtNumber(row.traffic_signal_count) }} · 转化 {{ fmtNumber(row.conversion_signal_count) }}</small>
-              </td>
-              <td>
-                <div v-if="queueBadges(row).length" class="queue-badges">
-                  <span v-for="item in queueBadges(row)" :key="item.key" :class="['queue-badge', item.key]">
-                    {{ item.label }} {{ fmtNumber(item.value) }}
-                  </span>
-                </div>
-                <span v-else class="muted">无活跃/失败</span>
-                <small v-if="!row.crawl_queue?.total" class="queue-empty">该站点还没有任何采集任务记录</small>
-                <small v-if="row.crawl_queue?.oldest_active_at">
-                  最早 {{ fmtDate(row.crawl_queue.oldest_active_at) }}
-                </small>
-                <RouterLink class="queue-link" :to="{ path: '/queue', query: { source: 'crawl', dataset: row.site } }">
-                  队列明细
-                </RouterLink>
-                <a class="queue-link" :href="reportHref(row.site, undefined, row)" target="_blank" rel="noreferrer">
-                  打开报表
-                </a>
-              </td>
-              <td>
-                <span v-if="row.latest_job">#{{ row.latest_job.id }} {{ row.latest_job.status }}</span>
-                <span v-else>-</span>
-                <small v-if="row.last_error_code" class="error-code">{{ row.last_error_code }}</small>
-                <small v-if="row.last_error" class="last-error">{{ row.last_error }}</small>
-                <small>{{ fmtDate(row.latest_job?.finished_at || row.last_product_updated || row.last_crawled) }}</small>
-              </td>
-              <td>
-                <div class="issues">
-                  <span v-for="issue in row.issues" :key="issue">{{ issueLabel(issue) }}</span>
-                  <span v-if="!row.issues?.length" class="ok">质量正常</span>
-                </div>
-              </td>
-              <td class="suggest">{{ row.suggested_action || '-' }}</td>
-              <td>
-                <div class="row-actions">
-                  <button class="btn small" @click="toggleDetail(row)">
-                    {{ detailSite === row.site ? '收起' : '明细' }}
-                  </button>
-                  <button
-                    class="btn small"
-                    :disabled="rerunBusy[row.site] || !isRerunnableQualityRow(row)"
-                    :title="isRerunnableQualityRow(row) ? '将该站点加入抓取队列' : (row.suggested_action || '当前问题不能靠重跑解决')"
-                    @click="rerunSites([row.site])"
-                  >
-                    {{ rerunBusy[row.site] ? '入队中...' : (isRerunnableQualityRow(row) ? '重跑' : '不可重跑') }}
-                  </button>
-                  <button
-                    v-if="shouldRebuildPromotions(row)"
-                    class="btn small promote"
-                    :disabled="promoBusy[row.site]"
-                    @click="rebuildPromotions([row.site])"
-                  >
-                    {{ promoBusy[row.site] ? '重算中...' : '重算促销' }}
-                  </button>
-                  <button
-                    v-if="shouldRecomputeAnalytics(row)"
-                    class="btn small"
-                    :disabled="analyticsBusy[row.site]"
-                    @click="recomputeAnalytics([row.site])"
-                  >
-                    {{ analyticsBusy[row.site] ? '重算中...' : '重算销量' }}
-                  </button>
-                  <button
-                    v-if="needsProxyRule(row)"
-                    class="btn small promote"
-                    :disabled="proxyRuleBusy[row.site]"
-                    @click="applyRecommendedProxyRules([row.site])"
-                  >
-                    {{ proxyRuleBusy[row.site] ? '应用中...' : '应用代理规则' }}
-                  </button>
-                  <button
-                    v-if="row.issues?.includes('pdp_price_required')"
-                    class="btn small"
-                    :disabled="configBusy"
-                    @click="openSiteConfig(row.site, 'pdp_price_required')"
-                  >
-                    配置采集
-                  </button>
-                  <button
-                    v-if="row.external_data_required && !row.issues?.includes('pdp_price_required')"
-                    class="btn small"
-                    @click="metricsImportOpen = true"
-                  >
-                    导入指标
-                  </button>
-                </div>
-                <small v-if="rerunMessage[row.site]" class="rerun-msg">{{ rerunMessage[row.site] }}</small>
-                <small v-if="promoMessage[row.site]" class="rerun-msg promo">{{ promoMessage[row.site] }}</small>
-                <small v-if="analyticsMessage[row.site]" class="rerun-msg">{{ analyticsMessage[row.site] }}</small>
-                <small v-if="proxyRuleMessage[row.site]" class="rerun-msg promo">{{ proxyRuleMessage[row.site] }}</small>
-              </td>
-            </tr>
-            <tr v-if="detailSite === row.site" class="detail-row">
-              <td colspan="11">
-                <div class="detail-panel">
-                  <div class="detail-head">
-                    <b>
-                      {{ row.site }} {{ detailTitle }}
-                      <span v-if="detailMeta.total !== undefined" class="detail-count">
-                        当前 {{ fmtNumber(detailStart) }}-{{ fmtNumber(detailEnd) }} / 共 {{ fmtNumber(detailMeta.total) }}
-                      </span>
-                    </b>
-                    <div class="detail-tabs">
-                      <button
-                        v-for="item in detailIssues"
-                        :key="item.key || 'all'"
-                        :class="['btn small', { active: detailIssue === item.key }]"
-                        :disabled="detailLoading"
-                        @click="switchDetailIssue(row.site, item.key)"
-                      >
-                        {{ item.label }}{{ detailIssueCount(item.key) }}
-                      </button>
-                    </div>
-                  </div>
-                  <div v-if="detailError" class="error">{{ detailError }}</div>
-                  <div v-else-if="detailLoading" class="empty inline">加载明细中...</div>
-                  <table v-else-if="detailRows.length && detailKind === 'product'" class="detail-table">
-                    <thead>
-                      <tr>
-                        <th>SKU / SPU</th>
-                        <th>标题 / 类目</th>
-                        <th>价格</th>
-                        <th>币种</th>
-                        <th>30日销量 / 收入</th>
-                        <th>状态</th>
-                        <th>创建 / 发布 / 更新</th>
-                        <th>最近任务</th>
-                        <th>命中问题</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="item in detailRows" :key="item.id">
-                        <td>
-                          <a v-if="item.product_url" :href="item.product_url" target="_blank" rel="noreferrer">{{ item.sku || '-' }}</a>
-                          <span v-else>{{ item.sku || '-' }}</span>
-                          <small>{{ item.spu || '-' }}</small>
-                          <a class="inline-link" :href="reportHref(item.site, item.id, row)" target="_blank" rel="noreferrer">趋势</a>
-                        </td>
-                        <td>
-                          <b>{{ item.title || '-' }}</b>
-                          <small>{{ item.category_path || '-' }}</small>
-                        </td>
-                        <td>{{ fmtNumber(item.sale_price || item.original_price) }}</td>
-                        <td>{{ item.currency || '-' }} / {{ item.expected_currency || '-' }}</td>
-                        <td>
-                          {{ fmtNumber(item.thirty_day_sales) }}
-                          <small>{{ fmtNumber(item.thirty_day_revenue) }}</small>
-                        </td>
-                        <td>{{ item.status || '-' }}</td>
-                        <td>
-                          {{ fmtDate(item.created_time) }}
-                          <small>{{ fmtDate(item.published_at) }} / {{ fmtDate(item.updated_time) }}</small>
-                        </td>
-                        <td>
-                          <RouterLink v-if="item.latest_job?.id" :to="{ path: '/queue', query: { source: 'crawl', dataset: item.site, status: item.latest_job.status } }">
-                            #{{ item.latest_job.id }} {{ item.latest_job.status }}
-                          </RouterLink>
-                          <span v-else>-</span>
-                          <small>{{ item.suggested_action || '-' }}</small>
-                        </td>
-                        <td>
-                          <div class="issues compact">
-                            <span v-for="issue in item.issues" :key="issue">{{ issueLabel(issue) }}</span>
-                          </div>
-                          <small v-if="item.price_source_configured" class="source-ok">
-                            价格源 {{ item.price_source_type || '-' }} 已配置
-                          </small>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                  <table v-else-if="detailRows.length && detailKind === 'job'" class="detail-table">
-                    <thead>
-                      <tr>
-                        <th>ID</th>
-                        <th>状态</th>
-                        <th>触发</th>
-                        <th>失败码</th>
-                        <th>阶段</th>
-                        <th>可重试</th>
-                        <th>商品/新品/促销</th>
-                        <th>开始/完成</th>
-                        <th>错误</th>
-                        <th>建议</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="item in detailRows" :key="`${item.source || 'crawl'}-${item.id}`">
-                        <td>
-                          <RouterLink :to="{ path: '/queue', query: { source: item.source || 'crawl', dataset: row.site, status: item.normalized_status || item.status } }">
-                            #{{ item.id }}
-                          </RouterLink>
-                        </td>
-                        <td><StatusBadge :status="item.normalized_status || item.status" /></td>
-                        <td>{{ item.trigger || '-' }}</td>
-                        <td>{{ item.failure_code || '-' }}</td>
-                        <td>{{ item.failure_stage || '-' }}</td>
-                        <td>{{ item.retryable === true ? '可重试' : item.retryable === false ? '不可重试' : '-' }}</td>
-                        <td>{{ fmtNumber(item.products_count) }} / {{ fmtNumber(item.new_count) }} / {{ fmtNumber(item.promotion_count) }}</td>
-                        <td>{{ fmtDate(item.started_at) }} / {{ fmtDate(item.finished_at) }}</td>
-                        <td>{{ item.failure_detail || item.error || '-' }}</td>
-                        <td>
-                          {{ item.suggested_action || '-' }}
-                          <div class="resolution-flags">
-                            <span v-if="item.rerun_recommended">可重跑</span>
-                            <span v-if="item.rerun_after_setup" class="after-setup">修复后重跑</span>
-                            <span v-if="item.rerun_blocked" class="blocked">暂不可重跑</span>
-                            <span v-if="item.external_data_required" class="external">需外部数据</span>
-                            <span v-if="item.last_error_code" class="error-flag">{{ item.last_error_code }}</span>
-                            <span v-for="pre in item.rerun_preconditions || []" :key="pre" class="precondition">{{ issueLabel(pre) }}</span>
-                          </div>
-                          <small v-if="item.last_error" class="last-error">{{ item.last_error }}</small>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                  <table v-else-if="detailRows.length && detailKind === 'site'" class="detail-table">
-                    <thead>
-                      <tr>
-                        <th>站点</th>
-                        <th>SKU / SPU</th>
-                        <th>覆盖</th>
-                        <th>目标 SKU</th>
-                        <th>偏差</th>
-                        <th>促销</th>
-                        <th>最近采集</th>
-                        <th>最近商品更新</th>
-                        <th>最近任务</th>
-                        <th>命中问题</th>
-                        <th>建议</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="item in detailRows" :key="item.id">
-                        <td>
-                          <a v-if="item.url" :href="item.url" target="_blank" rel="noreferrer">{{ item.site }}</a>
-                          <span v-else>{{ item.site }}</span>
-                        </td>
-                        <td>{{ fmtNumber(item.sku_count) }} / {{ fmtNumber(item.spu_count) }}</td>
-                        <td>{{ item.coverage_pct ?? 0 }}% · {{ fmtNumber(item.fetched_count) }}/{{ fmtNumber(item.estimated_full) }}</td>
-                        <td>{{ item.target_sku_count ? fmtNumber(item.target_sku_count) : '-' }} <small v-if="item.target_sku_source">({{ item.target_sku_source }})</small></td>
-                        <td>{{ item.sku_deviation_pct === null || item.sku_deviation_pct === undefined ? '-' : `${item.sku_deviation_pct}%` }}</td>
-                        <td>{{ fmtNumber(item.promotion_count) }}</td>
-                        <td>{{ fmtDate(item.last_crawled) }}</td>
-                        <td>{{ fmtDate(item.last_product_updated) }}</td>
-                        <td>
-                          <RouterLink v-if="item.latest_job?.id" :to="{ path: '/queue', query: { source: 'crawl', dataset: item.site } }">
-                            #{{ item.latest_job.id }} {{ item.latest_job.status }}
-                          </RouterLink>
-                          <span v-else>-</span>
-                        </td>
-                        <td>
-                          <div class="issues compact">
-                            <span v-for="issue in item.issues" :key="issue">{{ issueLabel(issue) }}</span>
-                          </div>
-                        </td>
-                        <td>{{ item.suggested_action || '-' }}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                  <table v-else-if="detailRows.length && detailKind === 'trend'" class="detail-table">
-                    <thead>
-                      <tr>
-                        <th>日期</th>
-                        <th>SKU</th>
-                        <th>新品</th>
-                        <th>估算销量</th>
-                        <th>估算收入</th>
-                        <th>流量</th>
-                        <th>转化率</th>
-                        <th>命中问题</th>
-                        <th>备注</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="item in detailRows" :key="item.id">
-                        <td>{{ item.date || '-' }}</td>
-                        <td>{{ fmtNumber(item.sku_count) }}</td>
-                        <td>{{ fmtNumber(item.new_product_count) }}</td>
-                        <td>{{ fmtNumber(item.estimated_sales) }}</td>
-                        <td>{{ fmtNumber(item.estimated_revenue) }}</td>
-                        <td>{{ fmtNumber(item.traffic) }}</td>
-                        <td>{{ item.conversion_rate === null || item.conversion_rate === undefined ? '-' : `${item.conversion_rate}%` }}</td>
-                        <td>
-                          <div class="issues compact">
-                            <span v-for="issue in item.issues" :key="issue">{{ issueLabel(issue) }}</span>
-                          </div>
-                        </td>
-                        <td>{{ item.note || '-' }}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                  <div v-else class="empty inline">当前筛选没有问题明细</div>
-                  <div v-if="detailMeta.total > detailLimit" class="detail-pager">
-                    <button class="btn small" :disabled="detailLoading || detailPage <= 1" @click="changeDetailPage(-1)">上一页</button>
-                    <span>第 {{ detailPage }} / {{ detailTotalPages }} 页</span>
-                    <button class="btn small" :disabled="detailLoading || detailPage >= detailTotalPages" @click="changeDetailPage(1)">下一页</button>
-                  </div>
-                </div>
-              </td>
-            </tr>
+      <UTable class="tbl ui-table" :data="visibleRows" :columns="qualityColumns" :loading="loading" sticky="header" empty="当前筛选没有站点">
+        <template #site-cell="{ row }">
+          <b>{{ row.original.site }}</b>
+          <small>{{ row.original.brand || '-' }} · {{ row.original.country || '-' }}</small>
+          <small v-if="row.original.workspaces?.length">
+            {{ row.original.workspaces.map((w: any) => w.name).join(' / ') }}
+          </small>
+        </template>
+
+        <template #status-cell="{ row }">
+          <StatusBadge :status="row.original.status" />
+        </template>
+
+        <template #sku_count-cell="{ row }">
+          {{ fmtNumber(row.original.sku_count) }} / {{ fmtNumber(row.original.spu_count) }}
+        </template>
+
+        <template #coverage_pct-cell="{ row }">
+          {{ row.original.coverage_pct }}% · {{ fmtNumber(row.original.fetched_count) }}/{{ fmtNumber(row.original.estimated_full) }}
+          <small v-if="row.original.target_sku_count">
+            目标 SKU {{ fmtNumber(row.original.target_sku_count) }} · 偏差 {{ row.original.sku_deviation_pct }}%
+            · {{ row.original.target_sku_source === 'acceptance' ? '验收口径' : '工作区配置' }}
+          </small>
+        </template>
+
+        <template #promotion_count-cell="{ row }">
+          {{ fmtNumber(row.original.promotion_count) }}
+        </template>
+
+        <template #signals-cell="{ row }">
+          标题 {{ row.original.title_quality_pct }}% · 价格 {{ row.original.price_signal_pct }}% · 销量 {{ row.original.sales_signal_pct }}% · 收入 {{ row.original.revenue_signal_pct }}%
+          <small v-if="row.original.weak_title_count">弱标题 {{ fmtNumber(row.original.weak_title_count) }}</small>
+          <small v-if="row.original.currency_missing_count || row.original.currency_mismatch_count">
+            币种 {{ row.original.expected_currency || '-' }} · 缺 {{ fmtNumber(row.original.currency_missing_count) }} · 错 {{ fmtNumber(row.original.currency_mismatch_count) }}
+          </small>
+          <small v-if="row.original.price_source_configured" class="source-ok">
+            价格源 {{ row.original.price_source_type || '-' }} 已配置
+          </small>
+          <small>流量 {{ fmtNumber(row.original.traffic_signal_count) }} · 转化 {{ fmtNumber(row.original.conversion_signal_count) }}</small>
+        </template>
+
+        <template #crawl_queue-cell="{ row }">
+          <div v-if="queueBadges(row.original).length" class="queue-badges">
+            <span v-for="item in queueBadges(row.original)" :key="item.key" :class="['queue-badge', item.key]">
+              {{ item.label }} {{ fmtNumber(item.value) }}
+            </span>
+          </div>
+          <span v-else class="muted">无活跃/失败</span>
+          <small v-if="!row.original.crawl_queue?.total" class="queue-empty">该站点还没有任何采集任务记录</small>
+          <small v-if="row.original.crawl_queue?.oldest_active_at">
+            最早 {{ fmtDate(row.original.crawl_queue.oldest_active_at) }}
+          </small>
+          <RouterLink class="queue-link" :to="{ path: '/queue', query: { source: 'crawl', dataset: row.original.site } }">
+            队列明细
+          </RouterLink>
+          <a class="queue-link" :href="reportHref(row.original.site, undefined, row.original)" target="_blank" rel="noreferrer">
+            打开报表
+          </a>
+        </template>
+
+        <template #latest_job-cell="{ row }">
+          <span v-if="row.original.latest_job">#{{ row.original.latest_job.id }} {{ row.original.latest_job.status }}</span>
+          <span v-else>-</span>
+          <small v-if="row.original.last_error_code" class="error-code">{{ row.original.last_error_code }}</small>
+          <small v-if="row.original.last_error" class="last-error">{{ row.original.last_error }}</small>
+          <small>{{ fmtDate(row.original.latest_job?.finished_at || row.original.last_product_updated || row.original.last_crawled) }}</small>
+        </template>
+
+        <template #issues-cell="{ row }">
+          <div class="issues">
+            <span v-for="issue in row.original.issues" :key="issue">{{ issueLabel(issue) }}</span>
+            <span v-if="!row.original.issues?.length" class="ok">质量正常</span>
+          </div>
+        </template>
+
+        <template #suggested_action-cell="{ row }">
+          <span class="suggest">{{ row.original.suggested_action || '-' }}</span>
+        </template>
+
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <button class="btn small" @click="toggleDetail(row.original)">
+              {{ detailSite === row.original.site ? '收起' : '明细' }}
+            </button>
+            <button
+              class="btn small"
+              :disabled="rerunBusy[row.original.site] || !isRerunnableQualityRow(row.original)"
+              :title="isRerunnableQualityRow(row.original) ? '将该站点加入抓取队列' : (row.original.suggested_action || '当前问题不能靠重跑解决')"
+              @click="rerunSites([row.original.site])"
+            >
+              {{ rerunBusy[row.original.site] ? '入队中...' : (isRerunnableQualityRow(row.original) ? '重跑' : '不可重跑') }}
+            </button>
+            <button
+              v-if="shouldRebuildPromotions(row.original)"
+              class="btn small promote"
+              :disabled="promoBusy[row.original.site]"
+              @click="rebuildPromotions([row.original.site])"
+            >
+              {{ promoBusy[row.original.site] ? '重算中...' : '重算促销' }}
+            </button>
+            <button
+              v-if="shouldRecomputeAnalytics(row.original)"
+              class="btn small"
+              :disabled="analyticsBusy[row.original.site]"
+              @click="recomputeAnalytics([row.original.site])"
+            >
+              {{ analyticsBusy[row.original.site] ? '重算中...' : '重算销量' }}
+            </button>
+            <button
+              v-if="needsProxyRule(row.original)"
+              class="btn small promote"
+              :disabled="proxyRuleBusy[row.original.site]"
+              @click="applyRecommendedProxyRules([row.original.site])"
+            >
+              {{ proxyRuleBusy[row.original.site] ? '应用中...' : '应用代理规则' }}
+            </button>
+            <button
+              v-if="row.original.issues?.includes('pdp_price_required')"
+              class="btn small"
+              :disabled="configBusy"
+              @click="openSiteConfig(row.original.site, 'pdp_price_required')"
+            >
+              配置采集
+            </button>
+            <button
+              v-if="row.original.external_data_required && !row.original.issues?.includes('pdp_price_required')"
+              class="btn small"
+              @click="metricsImportOpen = true"
+            >
+              导入指标
+            </button>
+          </div>
+          <small v-if="rerunMessage[row.original.site]" class="rerun-msg">{{ rerunMessage[row.original.site] }}</small>
+          <small v-if="promoMessage[row.original.site]" class="rerun-msg promo">{{ promoMessage[row.original.site] }}</small>
+          <small v-if="analyticsMessage[row.original.site]" class="rerun-msg">{{ analyticsMessage[row.original.site] }}</small>
+          <small v-if="proxyRuleMessage[row.original.site]" class="rerun-msg promo">{{ proxyRuleMessage[row.original.site] }}</small>
+        </template>
+      </UTable>
+    </div>
+
+    <div v-if="detailSite" class="detail-panel standalone-detail">
+      <div class="detail-head">
+        <b>
+          {{ detailSite }} {{ detailTitle }}
+          <span v-if="detailMeta.total !== undefined" class="detail-count">
+            当前 {{ fmtNumber(detailStart) }}-{{ fmtNumber(detailEnd) }} / 共 {{ fmtNumber(detailMeta.total) }}
+          </span>
+        </b>
+        <div class="detail-tabs">
+          <button
+            v-for="item in detailIssues"
+            :key="item.key || 'all'"
+            :class="['btn small', { active: detailIssue === item.key }]"
+            :disabled="detailLoading"
+            @click="switchDetailIssue(detailSite, item.key)"
+          >
+            {{ item.label }}{{ detailIssueCount(item.key) }}
+          </button>
+        </div>
+      </div>
+      <div v-if="detailError" class="error">{{ detailError }}</div>
+      <div v-else-if="detailLoading" class="empty inline">加载明细中...</div>
+      <UTable v-else-if="detailRows.length" class="detail-table ui-table" :data="detailRows" :columns="activeDetailColumns" sticky="header">
+        <template #sku-cell="{ row }">
+          <a v-if="row.original.product_url" :href="row.original.product_url" target="_blank" rel="noreferrer">{{ row.original.sku || '-' }}</a>
+          <span v-else>{{ row.original.sku || '-' }}</span>
+          <small>{{ row.original.spu || '-' }}</small>
+          <a v-if="detailKind === 'product'" class="inline-link" :href="reportHref(row.original.site, row.original.id, activeDetailRow || undefined)" target="_blank" rel="noreferrer">趋势</a>
+        </template>
+
+        <template #title-cell="{ row }">
+          <b>{{ row.original.title || '-' }}</b>
+          <small>{{ row.original.category_path || '-' }}</small>
+        </template>
+
+        <template #sale_price-cell="{ row }">
+          {{ fmtNumber(row.original.sale_price || row.original.original_price) }}
+        </template>
+
+        <template #currency-cell="{ row }">
+          {{ row.original.currency || '-' }} / {{ row.original.expected_currency || '-' }}
+        </template>
+
+        <template #thirty_day_sales-cell="{ row }">
+          {{ fmtNumber(row.original.thirty_day_sales) }}
+          <small>{{ fmtNumber(row.original.thirty_day_revenue) }}</small>
+        </template>
+
+        <template #status-cell="{ row }">
+          <span v-if="detailKind === 'product'">{{ row.original.status || '-' }}</span>
+          <StatusBadge v-else :status="row.original.normalized_status || row.original.status" />
+        </template>
+
+        <template #created_time-cell="{ row }">
+          {{ fmtDate(row.original.created_time) }}
+          <small>{{ fmtDate(row.original.published_at) }} / {{ fmtDate(row.original.updated_time) }}</small>
+        </template>
+
+        <template #latest_job-cell="{ row }">
+          <RouterLink v-if="row.original.latest_job?.id && detailKind === 'product'" :to="{ path: '/queue', query: { source: 'crawl', dataset: row.original.site, status: row.original.latest_job.status } }">
+            #{{ row.original.latest_job.id }} {{ row.original.latest_job.status }}
+          </RouterLink>
+          <RouterLink v-else-if="row.original.latest_job?.id" :to="{ path: '/queue', query: { source: 'crawl', dataset: row.original.site } }">
+            #{{ row.original.latest_job.id }} {{ row.original.latest_job.status }}
+          </RouterLink>
+          <span v-else>-</span>
+          <small v-if="detailKind === 'product'">{{ row.original.suggested_action || '-' }}</small>
+        </template>
+
+        <template #id-cell="{ row }">
+          <RouterLink :to="{ path: '/queue', query: { source: row.original.source || 'crawl', dataset: detailSite, status: row.original.normalized_status || row.original.status } }">
+            #{{ row.original.id }}
+          </RouterLink>
+        </template>
+
+        <template #normalized_status-cell="{ row }">
+          <StatusBadge :status="row.original.normalized_status || row.original.status" />
+        </template>
+
+        <template #trigger-cell="{ row }">
+          {{ row.original.trigger || '-' }}
+        </template>
+
+        <template #failure_code-cell="{ row }">
+          {{ row.original.failure_code || '-' }}
+        </template>
+
+        <template #failure_stage-cell="{ row }">
+          {{ row.original.failure_stage || '-' }}
+        </template>
+
+        <template #retryable-cell="{ row }">
+          {{ row.original.retryable === true ? '可重试' : row.original.retryable === false ? '不可重试' : '-' }}
+        </template>
+
+        <template #products_count-cell="{ row }">
+          {{ fmtNumber(row.original.products_count) }} / {{ fmtNumber(row.original.new_count) }} / {{ fmtNumber(row.original.promotion_count) }}
+        </template>
+
+        <template #started_at-cell="{ row }">
+          {{ fmtDate(row.original.started_at) }} / {{ fmtDate(row.original.finished_at) }}
+        </template>
+
+        <template #error-cell="{ row }">
+          {{ row.original.failure_detail || row.original.error || '-' }}
+        </template>
+
+        <template #site-cell="{ row }">
+          <a v-if="row.original.url" :href="row.original.url" target="_blank" rel="noreferrer">{{ row.original.site }}</a>
+          <span v-else>{{ row.original.site }}</span>
+        </template>
+
+        <template #sku_count-cell="{ row }">
+          <template v-if="detailKind === 'site'">
+            {{ fmtNumber(row.original.sku_count) }} / {{ fmtNumber(row.original.spu_count) }}
           </template>
-          <tr v-if="!visibleRows.length">
-            <td colspan="11" class="empty">{{ loading ? '加载中...' : '当前筛选没有站点' }}</td>
-          </tr>
-        </tbody>
-      </table>
+          <template v-else>
+            {{ fmtNumber(row.original.sku_count) }}
+          </template>
+        </template>
+
+        <template #coverage_pct-cell="{ row }">
+          {{ row.original.coverage_pct ?? 0 }}% · {{ fmtNumber(row.original.fetched_count) }}/{{ fmtNumber(row.original.estimated_full) }}
+        </template>
+
+        <template #target_sku_count-cell="{ row }">
+          {{ row.original.target_sku_count ? fmtNumber(row.original.target_sku_count) : '-' }}
+          <small v-if="row.original.target_sku_source">({{ row.original.target_sku_source }})</small>
+        </template>
+
+        <template #sku_deviation_pct-cell="{ row }">
+          {{ row.original.sku_deviation_pct === null || row.original.sku_deviation_pct === undefined ? '-' : `${row.original.sku_deviation_pct}%` }}
+        </template>
+
+        <template #promotion_count-cell="{ row }">
+          {{ fmtNumber(row.original.promotion_count) }}
+        </template>
+
+        <template #last_crawled-cell="{ row }">
+          {{ fmtDate(row.original.last_crawled) }}
+        </template>
+
+        <template #last_product_updated-cell="{ row }">
+          {{ fmtDate(row.original.last_product_updated) }}
+        </template>
+
+        <template #date-cell="{ row }">
+          {{ row.original.date || '-' }}
+        </template>
+
+        <template #new_product_count-cell="{ row }">
+          {{ fmtNumber(row.original.new_product_count) }}
+        </template>
+
+        <template #estimated_sales-cell="{ row }">
+          {{ fmtNumber(row.original.estimated_sales) }}
+        </template>
+
+        <template #estimated_revenue-cell="{ row }">
+          {{ fmtNumber(row.original.estimated_revenue) }}
+        </template>
+
+        <template #traffic-cell="{ row }">
+          {{ fmtNumber(row.original.traffic) }}
+        </template>
+
+        <template #conversion_rate-cell="{ row }">
+          {{ row.original.conversion_rate === null || row.original.conversion_rate === undefined ? '-' : `${row.original.conversion_rate}%` }}
+        </template>
+
+        <template #issues-cell="{ row }">
+          <div class="issues compact">
+            <span v-for="issue in row.original.issues" :key="issue">{{ issueLabel(issue) }}</span>
+          </div>
+          <small v-if="detailKind === 'product' && row.original.price_source_configured" class="source-ok">
+            价格源 {{ row.original.price_source_type || '-' }} 已配置
+          </small>
+        </template>
+
+        <template #suggested_action-cell="{ row }">
+          {{ row.original.suggested_action || '-' }}
+          <div v-if="detailKind === 'job'" class="resolution-flags">
+            <span v-if="row.original.rerun_recommended">可重跑</span>
+            <span v-if="row.original.rerun_after_setup" class="after-setup">修复后重跑</span>
+            <span v-if="row.original.rerun_blocked" class="blocked">暂不可重跑</span>
+            <span v-if="row.original.external_data_required" class="external">需外部数据</span>
+            <span v-if="row.original.last_error_code" class="error-flag">{{ row.original.last_error_code }}</span>
+            <span v-for="pre in row.original.rerun_preconditions || []" :key="pre" class="precondition">{{ issueLabel(pre) }}</span>
+          </div>
+          <small v-if="detailKind === 'job' && row.original.last_error" class="last-error">{{ row.original.last_error }}</small>
+        </template>
+
+        <template #note-cell="{ row }">
+          {{ row.original.note || '-' }}
+        </template>
+      </UTable>
+      <div v-else class="empty inline">当前筛选没有问题明细</div>
+      <div v-if="detailMeta.total > detailLimit" class="detail-pager">
+        <button class="btn small" :disabled="detailLoading || detailPage <= 1" @click="changeDetailPage(-1)">上一页</button>
+        <span>第 {{ detailPage }} / {{ detailTotalPages }} 页</span>
+        <button class="btn small" :disabled="detailLoading || detailPage >= detailTotalPages" @click="changeDetailPage(1)">下一页</button>
+      </div>
     </div>
 
     <div v-if="configOpen" class="modal-mask" @click.self="configOpen = false">
@@ -1264,20 +1368,10 @@ onMounted(bootstrap)
         <div v-if="configBusy" class="empty inline">读取/保存配置中...</div>
         <div class="config-grid">
           <label>Proxy Tier
-            <select v-model="configForm.proxy_tier" class="ctl">
-              <option value="none">none</option>
-              <option value="datacenter">datacenter</option>
-              <option value="residential">residential</option>
-            </select>
+            <USelect v-model="configForm.proxy_tier" class="select-ctl" :items="proxyTierItems" value-key="value" />
           </label>
           <label>Price Source Type
-            <select v-model="configForm.price_source_type" class="ctl">
-              <option value="">未指定</option>
-              <option value="feed">Feed / JSON</option>
-              <option value="api">API 模板</option>
-              <option value="pdp">PDP HTML</option>
-              <option value="external">外部登记</option>
-            </select>
+            <USelect v-model="priceSourceTypeSelect" class="select-ctl" :items="priceSourceTypeItems" value-key="value" />
           </label>
           <label class="wide">Price Feed URL
             <input v-model.trim="configForm.price_feed_url" class="ctl" placeholder="https://.../feed.csv 或私有文件路径" />
@@ -1295,17 +1389,10 @@ onMounted(bootstrap)
             <input v-model.trim="configForm.price_source_max_items" class="ctl" placeholder="50" />
           </label>
           <label>Use Proxy
-            <select v-model="configForm.price_source_use_proxy" class="ctl">
-              <option value="">默认</option>
-              <option value="true">启用</option>
-              <option value="false">停用</option>
-            </select>
+            <USelect v-model="priceSourceUseProxySelect" class="select-ctl" :items="booleanModeItems" value-key="value" />
           </label>
           <label>Allow Stealth
-            <select v-model="configForm.price_source_allow_stealth" class="ctl">
-              <option value="">停用</option>
-              <option value="true">启用</option>
-            </select>
+            <USelect v-model="priceSourceAllowStealthSelect" class="select-ctl" :items="stealthModeItems" value-key="value" />
           </label>
           <label>Timeout
             <input v-model.trim="configForm.price_source_timeout" class="ctl" placeholder="30" />
@@ -1379,77 +1466,77 @@ onMounted(bootstrap)
 .page-title { font-size:20px; font-weight:600; }
 .page-subtitle { margin-top:4px; font-size:12px; opacity:.55; }
 .head-actions { display:flex; align-items:center; justify-content:flex-end; gap:10px; flex-wrap:wrap; }
-.ctl { min-height:32px; padding:5px 10px; border-radius:7px; border:1px solid var(--ui-border, rgba(255,255,255,.12)); background:var(--ui-bg, rgba(0,0,0,.16)); color:inherit; font-size:12px; }
+.ctl { min-height:32px; padding:5px 10px; border-radius:7px; border:1px solid var(--ui-border, rgba(148,163,184,.32)); background:var(--admin-control-bg, #fff); color:inherit; font-size:12px; }
 .inline-check { display:inline-flex; align-items:center; gap:6px; font-size:12px; opacity:.78; white-space:nowrap; }
-.import-panel { display:flex; flex-direction:column; gap:10px; padding:12px; border:1px solid var(--ui-border, rgba(255,255,255,.08)); border-radius:12px; background:rgba(15,23,42,.30); }
+.import-panel { position:relative; z-index:1; display:flex; flex-direction:column; gap:10px; padding:12px; border:1px solid var(--ui-border, rgba(148,163,184,.32)); border-radius:12px; background:var(--admin-panel-soft, #f8fafc); }
 .import-head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
 .import-head b { font-size:13px; }
 .import-head span { font-size:12px; color:var(--ui-muted, #9ca3af); }
-.import-panel textarea { width:100%; min-height:96px; resize:vertical; padding:10px 12px; border-radius:8px; border:1px solid var(--ui-border, rgba(255,255,255,.12)); background:rgba(2,6,23,.38); color:inherit; font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px; line-height:1.45; box-sizing:border-box; }
+.import-panel textarea { width:100%; min-height:96px; resize:vertical; padding:10px 12px; border-radius:8px; border:1px solid var(--ui-border, rgba(148,163,184,.32)); background:var(--admin-control-bg, #fff); color:inherit; font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px; line-height:1.45; box-sizing:border-box; }
 .import-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .import-msg { color:var(--ui-muted, #9ca3af); font-size:12px; }
-.validation-panel { display:flex; flex-direction:column; gap:8px; padding:10px 12px; border-radius:8px; border:1px solid rgba(148,163,184,.18); background:rgba(2,6,23,.24); }
+.validation-panel { display:flex; flex-direction:column; gap:8px; padding:10px 12px; border-radius:8px; border:1px solid rgba(148,163,184,.24); background:var(--admin-panel-muted, #f1f5f9); }
 .validation-head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
-.validation-head b { color:#bbf7d0; font-size:13px; }
+.validation-head b { color:var(--admin-success-text, #047857); font-size:13px; }
 .validation-head span,
 .validation-errors { color:var(--ui-muted, #9ca3af); font-size:12px; line-height:1.45; }
-.validation-errors { color:#fca5a5; }
+.validation-errors { color:var(--admin-danger-text, #b91c1c); }
 .stat-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(128px,1fr)); gap:12px; }
 .stat-filter { display:block; padding:0; border:0; background:transparent; color:inherit; text-align:left; cursor:pointer; }
 .stat-filter :deep(.stat-card) { height:100%; transition:border-color .16s ease, background .16s ease; }
 .stat-filter:hover :deep(.stat-card), .stat-filter.active :deep(.stat-card) { border-color:rgba(139,92,246,.62); background:rgba(139,92,246,.12); }
-.precondition-panel { display:flex; flex-direction:column; gap:10px; padding:12px; border:1px solid var(--ui-border, rgba(255,255,255,.08)); border-radius:10px; background:rgba(15,23,42,.24); }
+.precondition-panel { display:flex; flex-direction:column; gap:10px; padding:12px; border:1px solid var(--ui-border, rgba(148,163,184,.32)); border-radius:10px; background:var(--admin-panel-soft, #f8fafc); }
 .precondition-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; color:var(--ui-muted, #9ca3af); font-size:12px; }
-.precondition-head b { display:block; color:var(--ui-text, #e5e7eb); font-size:13px; }
+.precondition-head b { display:block; color:var(--ui-text, #0f172a); font-size:13px; }
 .precondition-head span { line-height:1.45; }
 .precondition-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; flex-wrap:wrap; max-width:520px; }
-.precondition-message { flex:0 0 100%; color:#5eead4; text-align:right; font-size:12px; line-height:1.35; }
+.precondition-message { flex:0 0 100%; color:var(--admin-success-text, #047857); text-align:right; font-size:12px; line-height:1.35; }
 .precondition-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; }
-.precondition-card { min-height:138px; display:flex; flex-direction:column; align-items:flex-start; gap:6px; padding:10px; border:1px solid var(--ui-border, rgba(255,255,255,.10)); border-radius:8px; background:rgba(2,6,23,.22); color:inherit; text-align:left; cursor:pointer; }
+.precondition-card { min-height:138px; display:flex; flex-direction:column; align-items:flex-start; gap:6px; padding:10px; border:1px solid var(--ui-border, rgba(148,163,184,.32)); border-radius:8px; background:var(--admin-panel, #fff); color:inherit; text-align:left; cursor:pointer; }
 .precondition-card:hover, .precondition-card.active { border-color:rgba(139,92,246,.52); background:rgba(139,92,246,.12); }
-.precondition-title { color:var(--ui-text, #e5e7eb); font-size:12px; font-weight:700; }
-.precondition-card b { color:var(--ui-text, #e5e7eb); font-size:22px; line-height:1; }
+.precondition-title { color:var(--ui-text, #0f172a); font-size:12px; font-weight:700; }
+.precondition-card b { color:var(--ui-text, #0f172a); font-size:22px; line-height:1; }
 .precondition-card small { color:var(--ui-muted, #9ca3af); font-size:12px; line-height:1.35; }
 .precondition-card em { margin-top:auto; color:#a78bfa; font-size:12px; font-style:normal; font-weight:700; }
 .precondition-sites { width:100%; color:var(--ui-muted, #9ca3af); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.table-wrap { overflow:auto; border:1px solid var(--ui-border, rgba(255,255,255,.08)); border-radius:12px; }
+.table-wrap { position:relative; z-index:0; overflow:auto; border:1px solid var(--ui-border, rgba(148,163,184,.32)); border-radius:12px; background:var(--admin-panel, #fff); }
 .tbl { width:100%; min-width:1440px; border-collapse:collapse; font-size:13px; }
 .tbl th,.tbl td { padding:10px 12px; text-align:left; border-bottom:1px solid var(--ui-border, rgba(255,255,255,.06)); vertical-align:top; }
 .tbl th { font-weight:600; opacity:.7; white-space:nowrap; }
 .tbl b { display:block; }
 .tbl small { display:block; margin-top:3px; opacity:.58; white-space:nowrap; }
 .issues { display:flex; flex-wrap:wrap; gap:5px; min-width:190px; }
-.issues span { display:inline-flex; padding:2px 7px; border-radius:999px; color:#fca5a5; background:rgba(248,113,113,.13); border:1px solid rgba(248,113,113,.24); font-size:11px; font-weight:700; }
-.issues span.ok { color:#86efac; background:rgba(16,185,129,.13); border-color:rgba(16,185,129,.24); }
+.issues span { display:inline-flex; padding:2px 7px; border-radius:999px; color:var(--admin-danger-text, #b91c1c); background:rgba(248,113,113,.13); border:1px solid rgba(248,113,113,.24); font-size:11px; font-weight:700; }
+.issues span.ok { color:var(--admin-success-text, #047857); background:rgba(16,185,129,.13); border-color:rgba(16,185,129,.24); }
 .issues.compact { min-width:0; }
 .queue-badges { display:flex; flex-wrap:wrap; gap:5px; min-width:140px; }
-.queue-badge { display:inline-flex; align-items:center; gap:3px; padding:2px 7px; border-radius:999px; font-size:11px; font-weight:700; border:1px solid rgba(148,163,184,.28); background:rgba(148,163,184,.12); color:var(--ui-text, #e5e7eb); }
-.queue-badge.pending { color:#fde68a; background:rgba(245,158,11,.14); border-color:rgba(245,158,11,.28); }
-.queue-badge.stale { color:#fcd34d; background:rgba(217,119,6,.18); border-color:rgba(217,119,6,.34); }
-.queue-badge.running { color:#93c5fd; background:rgba(59,130,246,.14); border-color:rgba(59,130,246,.28); }
-.queue-badge.stuck { color:#fca5a5; background:rgba(248,113,113,.15); border-color:rgba(248,113,113,.3); }
-.queue-badge.failed { color:#fdba74; background:rgba(249,115,22,.14); border-color:rgba(249,115,22,.3); }
-.queue-badge.blocked { color:#f9a8d4; background:rgba(236,72,153,.13); border-color:rgba(236,72,153,.28); }
-.queue-badge.skipped { color:#c4b5fd; background:rgba(124,58,237,.13); border-color:rgba(124,58,237,.28); }
+.queue-badge { display:inline-flex; align-items:center; gap:3px; padding:2px 7px; border-radius:999px; font-size:11px; font-weight:700; border:1px solid rgba(148,163,184,.28); background:rgba(148,163,184,.12); color:var(--ui-text, #0f172a); }
+.queue-badge.pending { color:var(--admin-warn-text, #b45309); background:rgba(245,158,11,.14); border-color:rgba(245,158,11,.28); }
+.queue-badge.stale { color:var(--admin-warn-text, #b45309); background:rgba(217,119,6,.14); border-color:rgba(217,119,6,.28); }
+.queue-badge.running { color:var(--admin-info-text, #2563eb); background:rgba(59,130,246,.14); border-color:rgba(59,130,246,.28); }
+.queue-badge.stuck { color:var(--admin-danger-text, #b91c1c); background:rgba(248,113,113,.15); border-color:rgba(248,113,113,.3); }
+.queue-badge.failed { color:#c2410c; background:rgba(249,115,22,.14); border-color:rgba(249,115,22,.3); }
+.queue-badge.blocked { color:#be185d; background:rgba(236,72,153,.13); border-color:rgba(236,72,153,.28); }
+.queue-badge.skipped { color:#6d28d9; background:rgba(124,58,237,.13); border-color:rgba(124,58,237,.28); }
 .muted { opacity:.55; white-space:nowrap; }
-.queue-empty { color:#fbbf24; opacity:.86 !important; white-space:normal !important; }
+.queue-empty { color:var(--admin-warn-text, #b45309); opacity:.86 !important; white-space:normal !important; }
 .queue-link { display:inline-flex; margin-top:4px; font-size:12px; color:#a78bfa; text-decoration:none; }
 .queue-link:hover { text-decoration:underline; }
 .inline-link { display:inline-flex; margin-top:3px; color:#a78bfa; font-size:12px; text-decoration:none; }
 .inline-link:hover { text-decoration:underline; }
-.source-ok { color:#86efac !important; opacity:.95 !important; }
+.source-ok { color:var(--admin-success-text, #047857) !important; opacity:.95 !important; }
 .suggest { max-width:260px; line-height:1.45; }
-.error-code { color:#fca5a5; opacity:1 !important; font-weight:700; }
+.error-code { color:var(--admin-danger-text, #b91c1c); opacity:1 !important; font-weight:700; }
 .last-error { max-width:260px; white-space:normal !important; line-height:1.35; color:var(--ui-muted, #9ca3af); opacity:.78 !important; }
-.btn.small { padding:4px 10px; border-radius:6px; font-size:12px; border:1px solid var(--ui-border, rgba(255,255,255,.12)); background:transparent; color:inherit; cursor:pointer; }
+.btn.small { min-height:32px; padding:5px 10px; border-radius:6px; font-size:12px; border:1px solid var(--ui-border, rgba(148,163,184,.32)); background:transparent; color:inherit; cursor:pointer; }
 .btn.small.primary { border-color:rgba(139,92,246,.45); color:#fff; background:rgba(139,92,246,.85); }
-.btn.small.promote { border-color:rgba(20,184,166,.38); color:#99f6e4; background:rgba(20,184,166,.12); }
+.btn.small.promote { border-color:rgba(20,184,166,.38); color:var(--admin-success-text, #047857); background:rgba(20,184,166,.12); }
 .btn.small.promote:hover:not(:disabled) { background:rgba(20,184,166,.2); }
 .btn.small.active { border-color:rgba(139,92,246,.55); color:#fff; background:rgba(139,92,246,.28); }
 .btn:disabled { opacity:.55; cursor:not-allowed; }
 .row-actions { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
-.detail-row td { padding:0 12px 14px; background:rgba(15,23,42,.26); }
-.detail-panel { border:1px solid var(--ui-border, rgba(255,255,255,.08)); border-radius:10px; padding:12px; background:rgba(2,6,23,.28); }
+.detail-panel { border:1px solid var(--ui-border, rgba(148,163,184,.32)); border-radius:10px; padding:12px; background:var(--admin-panel, #fff); }
+.standalone-detail { overflow:auto; }
 .detail-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; }
 .detail-count { margin-left:8px; color:var(--ui-muted, #9ca3af); font-size:12px; font-weight:500; }
 .detail-tabs { display:flex; align-items:center; justify-content:flex-end; gap:6px; flex-wrap:wrap; }
@@ -1458,33 +1545,33 @@ onMounted(bootstrap)
 .detail-table th { opacity:.62; font-weight:600; }
 .detail-table a { color:#a78bfa; text-decoration:none; }
 .detail-table a:hover { text-decoration:underline; }
-.modal-mask { position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; padding:18px; background:rgba(2,6,23,.62); backdrop-filter:blur(5px); }
-.config-modal { width:min(760px, calc(100vw - 36px)); max-height:calc(100vh - 36px); overflow:auto; display:flex; flex-direction:column; gap:12px; padding:16px; border:1px solid var(--ui-border, rgba(255,255,255,.12)); border-radius:10px; background:var(--ui-panel, #0f172a); box-shadow:0 24px 80px rgba(0,0,0,.38); }
+.modal-mask { position:fixed; inset:0; z-index:120; display:flex; align-items:center; justify-content:center; padding:18px; background:var(--admin-overlay, rgba(15,23,42,.42)); backdrop-filter:blur(5px); }
+.config-modal { width:min(760px, calc(100vw - 36px)); max-height:calc(100vh - 36px); overflow:auto; display:flex; flex-direction:column; gap:12px; padding:16px; border:1px solid var(--ui-border, rgba(148,163,184,.32)); border-radius:10px; background:var(--ui-panel, #fff); box-shadow:0 24px 80px rgba(15,23,42,.24); color:var(--ui-text, #0f172a); }
 .config-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
 .config-head h2 { margin:0; font-size:16px; font-weight:700; }
 .config-head span { display:block; margin-top:4px; color:var(--ui-muted, #9ca3af); font-size:12px; }
 .config-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
 .config-grid label { display:flex; flex-direction:column; gap:5px; color:var(--ui-muted, #9ca3af); font-size:12px; }
 .config-grid .wide { grid-column:1 / -1; }
-.config-grid textarea { min-height:78px; resize:vertical; padding:8px 10px; border:1px solid var(--ui-border, rgba(255,255,255,.12)); border-radius:7px; background:var(--ui-bg, rgba(0,0,0,.16)); color:inherit; font:inherit; font-size:12px; line-height:1.45; }
+.config-grid textarea { min-height:78px; resize:vertical; padding:8px 10px; border:1px solid var(--ui-border, rgba(148,163,184,.32)); border-radius:7px; background:var(--admin-control-bg, #fff); color:inherit; font:inherit; font-size:12px; line-height:1.45; }
 .config-keys { color:var(--ui-muted, #9ca3af); font-size:12px; line-height:1.45; }
 .config-test { display:flex; flex-direction:column; gap:8px; padding:10px 12px; border:1px solid rgba(34,197,94,.22); border-radius:8px; background:rgba(22,101,52,.08); }
 .test-head { display:flex; justify-content:space-between; align-items:baseline; gap:10px; flex-wrap:wrap; }
-.test-head b { font-size:13px; color:#bbf7d0; }
+.test-head b { font-size:13px; color:var(--admin-success-text, #047857); }
 .test-head span,
 .test-sample span { color:var(--ui-muted, #9ca3af); font-size:12px; }
-.test-error { color:#fca5a5; font-size:12px; line-height:1.45; }
+.test-error { color:var(--admin-danger-text, #b91c1c); font-size:12px; line-height:1.45; }
 .test-samples { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:6px; }
-.test-sample { display:flex; justify-content:space-between; gap:8px; padding:6px 8px; border-radius:6px; background:rgba(15,23,42,.38); font-size:12px; }
+.test-sample { display:flex; justify-content:space-between; gap:8px; padding:6px 8px; border-radius:6px; background:var(--admin-panel-muted, #f1f5f9); font-size:12px; }
 .test-sample b { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .config-actions { display:flex; justify-content:flex-end; gap:8px; }
 .resolution-flags { display:flex; flex-wrap:wrap; gap:5px; margin-top:6px; }
 .resolution-flags span { display:inline-flex; align-items:center; min-height:20px; padding:2px 7px; border-radius:999px; border:1px solid rgba(34,197,94,.28); color:#86efac; background:rgba(34,197,94,.12); font-size:11px; font-weight:700; white-space:nowrap; }
-.resolution-flags span.blocked { border-color:rgba(248,113,113,.28); color:#fca5a5; background:rgba(248,113,113,.12); }
-.resolution-flags span.external { border-color:rgba(251,191,36,.32); color:#fcd34d; background:rgba(251,191,36,.12); }
-.resolution-flags span.after-setup { border-color:rgba(59,130,246,.30); color:#93c5fd; background:rgba(59,130,246,.12); }
+.resolution-flags span.blocked { border-color:rgba(248,113,113,.28); color:var(--admin-danger-text, #b91c1c); background:rgba(248,113,113,.12); }
+.resolution-flags span.external { border-color:rgba(251,191,36,.32); color:var(--admin-warn-text, #b45309); background:rgba(251,191,36,.12); }
+.resolution-flags span.after-setup { border-color:rgba(59,130,246,.30); color:var(--admin-info-text, #2563eb); background:rgba(59,130,246,.12); }
 .resolution-flags span.precondition { border-color:rgba(148,163,184,.28); color:var(--ui-muted, #9ca3af); background:rgba(148,163,184,.10); }
-.resolution-flags span.error-flag { border-color:rgba(167,139,250,.30); color:#c4b5fd; background:rgba(167,139,250,.12); }
+.resolution-flags span.error-flag { border-color:rgba(167,139,250,.30); color:#6d28d9; background:rgba(167,139,250,.12); }
 .detail-pager { display:flex; justify-content:flex-end; align-items:center; gap:8px; margin-top:10px; color:var(--ui-muted, #9ca3af); font-size:12px; }
 .rerun-msg { display:block; margin-top:4px; color:var(--ui-muted, #9ca3af); max-width:140px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .rerun-msg.promo { color:#5eead4; }

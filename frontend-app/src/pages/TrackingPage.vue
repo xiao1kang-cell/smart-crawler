@@ -195,6 +195,12 @@ function applySearch() {
   load()
 }
 
+function setPage(next: number) {
+  if (next === page.value) return
+  page.value = next
+  load()
+}
+
 function resetFilters() {
   search.value = ''
   fMarket.value = ''
@@ -336,15 +342,15 @@ onMounted(async () => {
       </label>
       <label class="tracking-field small">
         <span>Market</span>
-        <USelect v-model="marketSelect" variant="none" :items="marketItems" value-key="value" />
+        <USelect v-model="marketSelect" :items="marketItems" value-key="value" />
       </label>
       <label class="tracking-field brand-filter">
         <span>Brand</span>
-        <USelect v-model="brandSelect" variant="none" :items="brandItems" value-key="value" />
+        <USelect v-model="brandSelect" :items="brandItems" value-key="value" />
       </label>
       <label class="tracking-field select-field">
         <span>Status</span>
-        <USelect v-model="statusSelect" variant="none" :items="statusItems" value-key="value" />
+        <USelect v-model="statusSelect" :items="statusItems" value-key="value" />
       </label>
       <button type="button" class="tool-btn primary" :disabled="loading" @click="applySearch">
         <SlidersHorizontal v-if="!loading" class="size-4" />
@@ -453,9 +459,16 @@ onMounted(async () => {
 
     <div class="tracking-pager">
       <span>{{ pageFrom }}-{{ pageTo }} / {{ fmtNumber(total) }}</span>
-      <button type="button" class="pager-btn" @click="page = Math.max(1, page - 1); load()" :disabled="page <= 1 || loading">‹</button>
-      <b>{{ page }} / {{ totalPages }}</b>
-      <button type="button" class="pager-btn" @click="page = Math.min(totalPages, page + 1); load()" :disabled="page >= totalPages || loading">›</button>
+      <UPagination
+        :page="page"
+        :total="total"
+        :items-per-page="pageSize"
+        :disabled="loading || totalPages <= 1"
+        size="sm"
+        show-edges
+        @update:page="setPage"
+      />
+      <span class="pager-info">{{ page }} / {{ totalPages }}</span>
       <USelect v-model="pageSize" class="pager-select" variant="outline" :items="pageSizeItems" value-key="value" @update:model-value="page = 1; load()" />
     </div>
 
@@ -540,8 +553,23 @@ onMounted(async () => {
 .tracking-field { height:38px; display:inline-flex; align-items:center; gap:8px; background:var(--ui-card-soft); border:1px solid var(--ui-border); border-radius:7px; padding:0 10px; color:var(--ui-muted); transition:border-color .15s, background .15s; }
 .tracking-field:focus-within { border-color:var(--ui-purple-line); background:var(--ui-card); }
 .tracking-field :deep(input) { width:150px; height:100%; border:0; outline:0; background:transparent; color:var(--ui-heading); font-size:.82rem; }
-.tracking-field :deep(button) { width:86px; min-height:36px; border:0; background:transparent; color:var(--ui-heading); box-shadow:none; padding-inline:0; font-size:.82rem; cursor:pointer; }
-.tracking-field :deep(button:hover) { background:transparent; }
+.tracking-field :deep(button[role="combobox"]) {
+  width:86px;
+  min-height:36px;
+  border:0!important;
+  border-radius:0!important;
+  background:transparent!important;
+  color:var(--ui-heading)!important;
+  box-shadow:none!important;
+  padding:0 4px 0 0!important;
+  font-size:.82rem;
+  cursor:pointer;
+  justify-content:space-between;
+}
+.tracking-field :deep(button[role="combobox"]:hover) { background:transparent!important; }
+.tracking-field :deep(button[role="combobox"]:focus-visible) {
+  outline:0!important;
+}
 .tracking-field.search-field :deep(input) { width:230px; }
 .tracking-field.small :deep(button) { width:64px; text-transform:uppercase; }
 .tracking-field.brand-filter :deep(button) { width:136px; }
@@ -605,21 +633,25 @@ onMounted(async () => {
 .tracking-pager { display:flex; align-items:center; justify-content:flex-end; gap:8px; color:var(--ui-muted); font-size:.82rem; }
 .tracking-pager :deep(button) { height:34px; min-width:38px; border:1px solid var(--ui-border); border-radius:7px; background:var(--ui-card-soft); color:var(--ui-heading); padding:0 10px; box-shadow:none; }
 .tracking-pager :deep(button:disabled) { opacity:.45; cursor:not-allowed; }
-.tracking-pager b { color:var(--ui-heading); min-width:62px; text-align:center; }
+.tracking-pager .pager-info { color:var(--ui-heading); min-width:62px; text-align:center; }
+.tracking-pager .pager-select { width:108px; flex:0 0 auto; }
 
-:global(.tracking-dialog) { width:430px; max-width:calc(100vw - 32px); display:flex; flex-direction:column; background:var(--ui-card); color:var(--ui-text); border:1px solid var(--ui-border); border-radius:8px; box-shadow:0 26px 70px rgba(0,0,0,.36); overflow:hidden; }
-:global(.dialog-head) { min-height:54px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 16px; border-bottom:1px solid var(--ui-border); background:linear-gradient(180deg,var(--ui-card-soft),var(--ui-card)); }
+:global(.tracking-dialog) { width:430px; max-width:calc(100vw - 32px); max-height:calc(100vh - 28px); display:flex; flex-direction:column; background:var(--ui-card); color:var(--ui-text); border:1px solid var(--ui-border); border-radius:8px; box-shadow:0 26px 70px rgba(0,0,0,.36); overflow:hidden; }
+:global(.dialog-head) { position:relative; min-height:54px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 56px 14px 16px; border-bottom:1px solid var(--ui-border); background:linear-gradient(180deg,var(--ui-card-soft),var(--ui-card)); }
+:global(.dialog-head button[aria-label="Close"]) { width:36px!important; min-width:36px!important; height:36px!important; padding:0!important; top:9px!important; right:10px!important; display:inline-flex!important; align-items:center!important; justify-content:center!important; border-radius:9px!important; color:var(--ui-muted)!important; }
+:global(.dialog-head button[aria-label="Close"]:hover) { background:var(--ui-card-soft)!important; color:var(--ui-heading)!important; }
+:global(.dialog-head button[aria-label="Close"] svg) { width:18px!important; height:18px!important; }
 :global(.dialog-title) { color:var(--ui-heading); font-size:1rem; font-weight:900; }
-:global(.dialog-body) { display:flex; flex-direction:column; gap:12px; padding:16px; }
-:global(.dialog-foot) { display:flex; align-items:center; justify-content:flex-end; gap:8px; padding:12px 16px; border-top:1px solid var(--ui-border); background:var(--ui-card-soft); }
+:global(.dialog-body) { position:relative; z-index:1; display:flex; flex-direction:column; gap:12px; padding:16px 16px 20px; overflow:auto; max-height:calc(100vh - 170px); background:var(--ui-card); }
+:global(.dialog-foot) { position:relative; z-index:2; display:flex; align-items:center; justify-content:flex-end; gap:8px; padding:12px 16px; border-top:1px solid var(--ui-border); background:var(--ui-card-soft); flex-shrink:0; }
 :global(.dialog-field) { display:flex; flex-direction:column; gap:6px; color:var(--ui-muted); font-size:.76rem; font-weight:800; }
 :global(.dialog-field input) { width:100%; height:38px; border:1px solid var(--ui-border); border-radius:7px; background:var(--ui-card-soft); color:var(--ui-heading); padding:0 11px; outline:0; font-size:.84rem; box-shadow:none; }
 :global(.dialog-field input:focus) { border-color:var(--ui-purple-line); background:var(--ui-card); }
-.delete-confirm { display:flex; gap:12px; align-items:flex-start; color:var(--ui-text); }
+.delete-confirm { display:flex; gap:12px; align-items:flex-start; color:var(--ui-text); min-width:0; }
 .delete-confirm > svg { margin-top:2px; color:var(--ui-red,#be123c); flex-shrink:0; }
 .delete-confirm b { display:block; color:var(--ui-heading); margin-bottom:5px; }
 .delete-confirm p { margin:0; color:var(--ui-text); line-height:1.55; font-size:.84rem; }
-.delete-confirm small { display:block; margin-top:8px; color:var(--ui-muted); word-break:break-all; }
+.delete-confirm small { display:block; max-width:100%; margin-top:8px; margin-bottom:4px; color:var(--ui-muted); overflow-wrap:anywhere; word-break:break-word; line-height:1.45; }
 
 .spin { animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
@@ -639,5 +671,7 @@ onMounted(async () => {
   .tracking-field :deep(input), .tracking-field.search-field :deep(input) { width:100%; }
   .tracking-field :deep(button) { width:100%; }
   .tracking-pager { justify-content:center; flex-wrap:wrap; }
+  :global(.dialog-foot) { flex-wrap:wrap; }
+  :global(.dialog-foot .dialog-btn) { flex:1 1 132px; }
 }
 </style>

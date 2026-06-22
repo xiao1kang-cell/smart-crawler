@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { changePassword, updateMe } from '../api/auth'
 import { asList, fmtDate, fmtNumber } from '../api/client'
 import { billingUsage, createApiKey, deleteApiKey, listApiKeys, updateApiKey } from '../api/settings'
@@ -27,6 +27,10 @@ const menu = [
   { key: 'api_keys', label: '接口密钥', desc: '外部调用凭证' },
   { key: 'usage', label: '30 天用量', desc: '调用统计' }
 ]
+const workspaceItems = computed(() => workspace.workspaces.map((w) => ({
+  label: w.name || w.slug || `工作区 #${w.id}`,
+  value: String(w.id),
+})))
 
 function formatRole(role?: string) {
   return ({ admin: '管理员', user: '普通用户', viewer: '只读用户', operator: '操作员' } as Record<string, string>)[role || ''] || role || '—'
@@ -179,9 +183,7 @@ onMounted(load)
             </div>
           </div>
           <div v-if="workspace.workspaces.length > 1" class="form-grid one">
-            <select class="set-sel" v-model="currentWorkspaceId" @change="switchWorkspace">
-              <option v-for="w in workspace.workspaces" :key="w.id" :value="String(w.id)">{{ w.name || w.slug || `工作区 #${w.id}` }}</option>
-            </select>
+            <USelect v-model="currentWorkspaceId" class="set-select" :items="workspaceItems" value-key="value" @update:model-value="switchWorkspace" />
           </div>
         </div>
 

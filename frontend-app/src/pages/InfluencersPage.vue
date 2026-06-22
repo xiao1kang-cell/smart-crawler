@@ -13,6 +13,12 @@ const quickTargets = [
   { platform: 'tiktok', username: 'khaby.lame', label: 'Khaby Lame', meta: 'TikTok' },
   { platform: 'twitter', username: 'elonmusk', label: 'Elon Musk', meta: 'X' }
 ]
+const platformItems = [
+  { label: 'Instagram', value: 'instagram' },
+  { label: 'TikTok', value: 'tiktok' },
+  { label: 'YouTube', value: 'youtube' },
+  { label: 'Twitter / X', value: 'twitter' },
+]
 
 async function load() {
   loading.value = true
@@ -41,12 +47,7 @@ function setTarget(item: Record<string, string>) {
       <div class="inf-panel">
         <h3>账号采集</h3>
         <div class="inf-form">
-          <select v-model="form.platform" class="inf-sel">
-            <option value="instagram">📷 Instagram</option>
-            <option value="tiktok">🎵 TikTok</option>
-            <option value="youtube">▶️ YouTube</option>
-            <option value="twitter">🐦 Twitter / X</option>
-          </select>
+          <USelect v-model="form.platform" class="inf-select" :items="platformItems" value-key="value" />
           <input v-model="form.username" class="inf-inp" placeholder="账号名（不带 @）" @keyup.enter="load" />
           <button class="btn-prim" :disabled="loading" @click="load">{{ loading ? '采集中…' : '🚀 抓取' }}</button>
         </div>

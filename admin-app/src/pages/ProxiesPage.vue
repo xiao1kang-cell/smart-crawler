@@ -35,6 +35,7 @@ const error = ref('')
 const message = ref('')
 const antiBot = ref<Record<string, any>>({})
 const EGRESS_CHECK_URL = 'https://api.ipify.org'
+const EMPTY_SELECT = '__empty__'
 
 const probeForm = ref({
   tier: 'residential',
@@ -97,6 +98,104 @@ const health = computed(() => info.value?.health || {})
 const diagnostics = computed(() => info.value?.diagnostics || {})
 const diagnosticItems = computed(() => diagnostics.value?.items || [])
 const byStatus = computed(() => health.value?.by_status || {})
+const endpointTypeItems = [
+  { label: '普通 IP', value: 'datacenter' },
+  { label: '住宅 IP', value: 'residential' }
+]
+const proxySchemeItems = [
+  { label: 'HTTP', value: 'http' },
+  { label: 'SOCKS5H', value: 'socks5h' },
+  { label: 'SOCKS5', value: 'socks5' }
+]
+const poolTypeItems = [
+  { label: '普通 IP', value: 'datacenter' },
+  { label: '住宅 IP', value: 'residential' },
+  { label: '混合池', value: 'mixed' }
+]
+const matchTypeItems = [
+  { label: '精确', value: 'exact' },
+  { label: '包含', value: 'contains' },
+  { label: '前缀', value: 'prefix' }
+]
+const proxyModeItems = [
+  { label: '指定池', value: 'pool' },
+  { label: '普通 IP', value: 'datacenter' },
+  { label: '住宅 IP', value: 'residential' },
+  { label: '不使用代理', value: 'none' }
+]
+const endpointColumns = [
+  { accessorKey: 'proxy', header: '代理' },
+  { accessorKey: 'endpoint_type', header: '类型' },
+  { accessorKey: 'provider', header: '供应商' },
+  { accessorKey: 'pools', header: '池' },
+  { accessorKey: 'exclude', header: '排除站点' },
+  { accessorKey: 'source', header: '来源' },
+  { accessorKey: 'health_status', header: '状态' },
+  { id: 'actions', header: '' }
+]
+const healthColumns = [
+  { accessorKey: 'proxy', header: '代理' },
+  { accessorKey: 'tier', header: '层级' },
+  { accessorKey: 'status', header: '状态' },
+  { accessorKey: 'pool_available', header: '池状态' },
+  { accessorKey: 'success_count', header: '成功 / 失败' },
+  { accessorKey: 'consecutive_failures', header: '连续失败' },
+  { accessorKey: 'last_failure_code', header: '最近失败' },
+  { accessorKey: 'last_checked_at', header: '检测时间' },
+  { id: 'actions', header: '' }
+]
+const probeTierItems = computed(() => [
+  { label: '住宅 IP', value: 'residential' },
+  { label: '普通 IP', value: 'datacenter' },
+  ...pools.value.map((p: Record<string, any>) => ({ label: `池: ${p.slug}`, value: `pool:${p.slug}` }))
+])
+const poolSelectItems = computed(() => [
+  { label: '选择代理池', value: EMPTY_SELECT },
+  ...pools.value.map((p: Record<string, any>) => ({ label: p.slug, value: p.id }))
+])
+const poolSlugItems = computed(() => [
+  { label: '选择池', value: EMPTY_SELECT },
+  { label: '普通 IP 池', value: 'datacenter' },
+  { label: '住宅 IP 池', value: 'residential' },
+  ...pools.value.map((p: Record<string, any>) => ({ label: p.slug, value: p.slug }))
+])
+const fallbackPoolItems = computed(() => [
+  { label: '无备用池', value: EMPTY_SELECT },
+  { label: '普通 IP 池', value: 'datacenter' },
+  { label: '住宅 IP 池', value: 'residential' },
+  ...pools.value.map((p: Record<string, any>) => ({ label: `备用: ${p.slug}`, value: p.slug }))
+])
+const endpointSelectItems = computed(() => [
+  { label: '选择代理', value: EMPTY_SELECT },
+  ...endpoints.value.map((e: Record<string, any>) => ({
+    label: `${e.name || e.host} · ${e.endpoint_type}`,
+    value: e.id
+  }))
+])
+const memberPoolSelect = computed({
+  get: () => memberForm.value.pool_id || EMPTY_SELECT,
+  set: (value: string | number) => {
+    memberForm.value.pool_id = value === EMPTY_SELECT ? '' : value as any
+  }
+})
+const memberEndpointSelect = computed({
+  get: () => memberForm.value.endpoint_id || EMPTY_SELECT,
+  set: (value: string | number) => {
+    memberForm.value.endpoint_id = value === EMPTY_SELECT ? '' : value as any
+  }
+})
+const rulePoolSlugSelect = computed({
+  get: () => ruleForm.value.pool_slug || EMPTY_SELECT,
+  set: (value: string | number) => {
+    ruleForm.value.pool_slug = value === EMPTY_SELECT ? '' : String(value)
+  }
+})
+const ruleFallbackPoolSlugSelect = computed({
+  get: () => ruleForm.value.fallback_pool_slug || EMPTY_SELECT,
+  set: (value: string | number) => {
+    ruleForm.value.fallback_pool_slug = value === EMPTY_SELECT ? '' : String(value)
+  }
+})
 const available = computed(() => Object.values(pool.value?.by_tier || {}).reduce(
   (sum: number, row: any) => sum + Number(row?.available || 0),
   0
@@ -584,11 +683,7 @@ watch(() => route.fullPath, applyRouteContext)
         <span class="meta">更新于 {{ fmtDate(info.updated_at) }}</span>
       </div>
       <div class="form-grid probe-grid">
-        <select v-model="probeForm.tier" class="ctl">
-          <option value="residential">住宅 IP</option>
-          <option value="datacenter">普通 IP</option>
-          <option v-for="p in pools" :key="p.id" :value="`pool:${p.slug}`">池: {{ p.slug }}</option>
-        </select>
+        <USelect v-model="probeForm.tier" class="select-ctl" :items="probeTierItems" value-key="value" />
         <input v-model="probeForm.site" class="ctl" placeholder="site" />
         <input v-model="probeForm.url" class="ctl span-2" placeholder="URL" />
         <input v-model.number="probeForm.timeout" type="number" min="3" max="30" class="ctl" />
@@ -611,10 +706,7 @@ watch(() => route.fullPath, applyRouteContext)
       <h2 class="block-title">新增代理端点</h2>
       <div class="form-grid endpoint-grid">
         <input v-model="endpointForm.proxy_url" class="ctl span-2" placeholder="http://user:pass@host:port" />
-        <select v-model="endpointForm.endpoint_type" class="ctl">
-          <option value="datacenter">普通 IP</option>
-          <option value="residential">住宅 IP</option>
-        </select>
+        <USelect v-model="endpointForm.endpoint_type" class="select-ctl" :items="endpointTypeItems" value-key="value" />
         <input v-model="endpointForm.name" class="ctl" placeholder="名称" />
         <input v-model="endpointForm.provider" class="ctl" placeholder="供应商" />
         <input v-model="endpointForm.country" class="ctl" placeholder="国家/地区" />
@@ -639,15 +731,8 @@ watch(() => route.fullPath, applyRouteContext)
           placeholder="socks5h://user:pass@108.95.61.130:1080&#10;108.95.61.131:1080:user:pass"
         ></textarea>
         <div class="bulk-side">
-          <select v-model="bulkForm.endpoint_type" class="ctl">
-            <option value="datacenter">普通 IP</option>
-            <option value="residential">住宅 IP</option>
-          </select>
-          <select v-model="bulkForm.scheme" class="ctl">
-            <option value="http">HTTP</option>
-            <option value="socks5h">SOCKS5H</option>
-            <option value="socks5">SOCKS5</option>
-          </select>
+          <USelect v-model="bulkForm.endpoint_type" class="select-ctl" :items="endpointTypeItems" value-key="value" />
+          <USelect v-model="bulkForm.scheme" class="select-ctl" :items="proxySchemeItems" value-key="value" />
           <input v-model="bulkForm.provider" class="ctl" placeholder="供应商" />
           <input v-model="bulkForm.country" class="ctl" placeholder="国家/地区" />
           <input v-model="bulkForm.name_prefix" class="ctl" placeholder="名称前缀" />
@@ -672,11 +757,7 @@ watch(() => route.fullPath, applyRouteContext)
         <div class="form-grid pool-grid">
           <input v-model="poolForm.slug" class="ctl" placeholder="pool slug" />
           <input v-model="poolForm.name" class="ctl" placeholder="池名称" />
-          <select v-model="poolForm.pool_type" class="ctl">
-            <option value="datacenter">普通 IP</option>
-            <option value="residential">住宅 IP</option>
-            <option value="mixed">混合池</option>
-          </select>
+          <USelect v-model="poolForm.pool_type" class="select-ctl" :items="poolTypeItems" value-key="value" />
           <input v-model="poolForm.fallback_pool_slug" class="ctl" placeholder="fallback slug" />
           <input v-model="poolForm.description" class="ctl span-2" placeholder="说明" />
           <button class="btn small primary" :disabled="!!busy || !poolForm.slug" @click="createPool">保存池</button>
@@ -702,14 +783,8 @@ watch(() => route.fullPath, applyRouteContext)
       <div class="block">
         <h2 class="block-title">池成员</h2>
         <div class="form-grid pool-grid">
-          <select v-model="memberForm.pool_id" class="ctl">
-            <option value="">选择代理池</option>
-            <option v-for="p in pools" :key="p.id" :value="p.id">{{ p.slug }}</option>
-          </select>
-          <select v-model="memberForm.endpoint_id" class="ctl">
-            <option value="">选择代理</option>
-            <option v-for="e in endpoints" :key="e.id" :value="e.id">{{ e.name || e.host }} · {{ e.endpoint_type }}</option>
-          </select>
+          <USelect v-model="memberPoolSelect" class="select-ctl" :items="poolSelectItems" value-key="value" />
+          <USelect v-model="memberEndpointSelect" class="select-ctl" :items="endpointSelectItems" value-key="value" />
           <input v-model.number="memberForm.priority" type="number" class="ctl" placeholder="优先级" />
           <input v-model.number="memberForm.weight" type="number" min="1" class="ctl" placeholder="权重" />
           <button class="btn small primary" :disabled="!!busy || !memberForm.pool_id || !memberForm.endpoint_id" @click="addMember">加入池</button>
@@ -721,25 +796,10 @@ watch(() => route.fullPath, applyRouteContext)
       <h2 class="block-title">站点代理规则</h2>
       <div class="form-grid rule-grid">
         <input v-model="ruleForm.site_pattern" class="ctl" placeholder="site, 如 vidaxl_ca" />
-        <select v-model="ruleForm.match_type" class="ctl">
-          <option value="exact">精确</option>
-          <option value="contains">包含</option>
-          <option value="prefix">前缀</option>
-        </select>
-        <select v-model="ruleForm.proxy_mode" class="ctl">
-          <option value="pool">指定池</option>
-          <option value="datacenter">普通 IP</option>
-          <option value="residential">住宅 IP</option>
-          <option value="none">不使用代理</option>
-        </select>
-        <select v-model="ruleForm.pool_slug" class="ctl">
-          <option value="">选择池</option>
-          <option v-for="p in pools" :key="p.id" :value="p.slug">{{ p.slug }}</option>
-        </select>
-        <select v-model="ruleForm.fallback_pool_slug" class="ctl">
-          <option value="">无备用池</option>
-          <option v-for="p in pools" :key="p.id" :value="p.slug">备用: {{ p.slug }}</option>
-        </select>
+        <USelect v-model="ruleForm.match_type" class="select-ctl" :items="matchTypeItems" value-key="value" />
+        <USelect v-model="ruleForm.proxy_mode" class="select-ctl" :items="proxyModeItems" value-key="value" />
+        <USelect v-model="rulePoolSlugSelect" class="select-ctl" :items="poolSlugItems" value-key="value" />
+        <USelect v-model="ruleFallbackPoolSlugSelect" class="select-ctl" :items="fallbackPoolItems" value-key="value" />
         <input v-model.number="ruleForm.priority" type="number" class="ctl" placeholder="优先级" />
         <input v-model="ruleForm.notes" class="ctl" placeholder="备注" />
         <button class="btn small primary" :disabled="!!busy || !ruleForm.site_pattern" @click="createRule">保存规则</button>
@@ -783,105 +843,67 @@ watch(() => route.fullPath, applyRouteContext)
         </div>
       </div>
       <div class="table-wrap">
-        <table class="tbl">
-          <thead>
-            <tr>
-              <th>代理</th>
-              <th>类型</th>
-              <th>供应商</th>
-              <th>池</th>
-              <th>排除站点</th>
-              <th>来源</th>
-              <th>状态</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in endpoints" :key="row.id">
-              <td>
-                <div class="proxy-cell">
-                  <b>{{ row.proxy || row.host || '-' }}</b>
-                  <span>{{ shortHash(row.hash) }}</span>
-                </div>
-              </td>
-              <td>{{ row.endpoint_type }}</td>
-              <td>{{ row.provider || row.country || '-' }}</td>
-              <td>{{ (row.pools || []).join(', ') || '-' }}</td>
-              <td>{{ (row.exclude || []).join(', ') || '-' }}</td>
-              <td>{{ row.source || '-' }}</td>
-              <td>
-	                <div class="state-stack">
-	                  <span class="badge" :class="row.active ? 'ok' : 'warn'">{{ row.active ? '启用' : '停用' }}</span>
-	                  <span class="badge" :class="statusClass(row.health || {})">{{ statusLabel(row.health_status || row.health?.status) }}</span>
-	                  <span v-if="healthHint(row)" class="state-hint">{{ healthHint(row) }}</span>
-	                </div>
-              </td>
-              <td>
-                <button class="icon-btn" :disabled="!!busy" @click="toggleEndpoint(row)">
-                  <ToggleRight v-if="row.active" class="size-4" />
-                  <ToggleLeft v-else class="size-4" />
-                </button>
-                <button class="btn small" :disabled="!!busy" @click="checkEndpoint(row)">
-                  {{ busy === `endpoint-check:${row.id}` ? '检测中' : '检测' }}
-                </button>
-              </td>
-            </tr>
-            <tr v-if="!endpoints.length">
-              <td colspan="8" class="empty">{{ loading ? '加载中...' : '暂无代理端点' }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <UTable class="tbl ui-table" :data="endpoints" :columns="endpointColumns" :loading="loading" sticky="header" empty="暂无代理端点">
+          <template #proxy-cell="{ row }">
+            <div class="proxy-cell">
+              <b>{{ row.original.proxy || row.original.host || '-' }}</b>
+              <span>{{ shortHash(row.original.hash) }}</span>
+            </div>
+          </template>
+          <template #provider-cell="{ row }">{{ row.original.provider || row.original.country || '-' }}</template>
+          <template #pools-cell="{ row }">{{ (row.original.pools || []).join(', ') || '-' }}</template>
+          <template #exclude-cell="{ row }">{{ (row.original.exclude || []).join(', ') || '-' }}</template>
+          <template #source-cell="{ row }">{{ row.original.source || '-' }}</template>
+          <template #health_status-cell="{ row }">
+            <div class="state-stack">
+              <span class="badge" :class="row.original.active ? 'ok' : 'warn'">{{ row.original.active ? '启用' : '停用' }}</span>
+              <span class="badge" :class="statusClass(row.original.health || {})">{{ statusLabel(row.original.health_status || row.original.health?.status) }}</span>
+              <span v-if="healthHint(row.original)" class="state-hint">{{ healthHint(row.original) }}</span>
+            </div>
+          </template>
+          <template #actions-cell="{ row }">
+            <button class="icon-btn" :disabled="!!busy" @click="toggleEndpoint(row.original)">
+              <ToggleRight v-if="row.original.active" class="size-4" />
+              <ToggleLeft v-else class="size-4" />
+            </button>
+            <button class="btn small" :disabled="!!busy" @click="checkEndpoint(row.original)">
+              {{ busy === `endpoint-check:${row.original.id}` ? '检测中' : '检测' }}
+            </button>
+          </template>
+        </UTable>
       </div>
     </section>
 
     <section class="block">
       <h2 class="block-title">健康状态</h2>
       <div class="table-wrap">
-        <table class="tbl">
-          <thead>
-            <tr>
-              <th>代理</th>
-              <th>层级</th>
-              <th>状态</th>
-              <th>池状态</th>
-              <th>成功 / 失败</th>
-              <th>连续失败</th>
-              <th>最近失败</th>
-              <th>检测时间</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in items" :key="row.hash">
-              <td>
-                <div class="proxy-cell">
-                  <b>{{ row.proxy || '-' }}</b>
-                  <span>{{ shortHash(row.hash) }}</span>
-                </div>
-              </td>
-              <td>{{ row.tier || '-' }}</td>
-              <td><span class="badge" :class="statusClass(row)">{{ statusLabel(row.status) }}</span></td>
-              <td>
-                <span class="badge" :class="row.pool_available ? 'ok' : 'warn'">
-                  {{ row.pool_available ? '可用' : row.pool_blocked_for_sec ? `冷却 ${row.pool_blocked_for_sec}s` : '未配置' }}
-                </span>
-              </td>
-              <td>{{ fmtNumber(row.success_count) }} / {{ fmtNumber(row.failure_count) }}</td>
-              <td>{{ fmtNumber(row.consecutive_failures) }}</td>
-              <td class="err-cell" :title="row.last_failure_detail || ''">{{ row.last_failure_code || '-' }}</td>
-              <td>{{ fmtDate(row.last_checked_at || row.updated_at) }}</td>
-              <td>
-                <button class="btn small" :disabled="!!busy || !row.hash" @click="doClear(row)">
-                  <Unlock class="size-4" />
-                  <span>{{ busy === `clear:${row.hash}` ? '处理中' : '解除冷却' }}</span>
-                </button>
-              </td>
-            </tr>
-            <tr v-if="!items.length">
-              <td colspan="9" class="empty">{{ loading ? '加载中...' : '暂无代理状态' }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <UTable class="tbl ui-table" :data="items" :columns="healthColumns" :loading="loading" sticky="header" empty="暂无代理状态">
+          <template #proxy-cell="{ row }">
+            <div class="proxy-cell">
+              <b>{{ row.original.proxy || '-' }}</b>
+              <span>{{ shortHash(row.original.hash) }}</span>
+            </div>
+          </template>
+          <template #tier-cell="{ row }">{{ row.original.tier || '-' }}</template>
+          <template #status-cell="{ row }"><span class="badge" :class="statusClass(row.original)">{{ statusLabel(row.original.status) }}</span></template>
+          <template #pool_available-cell="{ row }">
+            <span class="badge" :class="row.original.pool_available ? 'ok' : 'warn'">
+              {{ row.original.pool_available ? '可用' : row.original.pool_blocked_for_sec ? `冷却 ${row.original.pool_blocked_for_sec}s` : '未配置' }}
+            </span>
+          </template>
+          <template #success_count-cell="{ row }">{{ fmtNumber(row.original.success_count) }} / {{ fmtNumber(row.original.failure_count) }}</template>
+          <template #consecutive_failures-cell="{ row }">{{ fmtNumber(row.original.consecutive_failures) }}</template>
+          <template #last_failure_code-cell="{ row }">
+            <span class="err-cell" :title="row.original.last_failure_detail || ''">{{ row.original.last_failure_code || '-' }}</span>
+          </template>
+          <template #last_checked_at-cell="{ row }">{{ fmtDate(row.original.last_checked_at || row.original.updated_at) }}</template>
+          <template #actions-cell="{ row }">
+            <button class="btn small" :disabled="!!busy || !row.original.hash" @click="doClear(row.original)">
+              <Unlock class="size-4" />
+              <span>{{ busy === `clear:${row.original.hash}` ? '处理中' : '解除冷却' }}</span>
+            </button>
+          </template>
+        </UTable>
       </div>
     </section>
   </div>
@@ -1121,8 +1143,9 @@ watch(() => route.fullPath, applyRouteContext)
 }
 
 .check-row input {
-  width: 14px;
-  height: 14px;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
 }
 
 .btn,

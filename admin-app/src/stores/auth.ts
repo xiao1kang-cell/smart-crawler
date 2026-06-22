@@ -7,6 +7,13 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<Record<string, any> | null>(null)
 
   const isAuthed = computed(() => Boolean(token.value))
+  const canAccessAdmin = computed(() => {
+    const u = user.value
+    return Boolean(
+      u?.global_role === 'super_admin' ||
+      (u?.username === 'admin' && u?.role === 'admin')
+    )
+  })
 
   function setToken(nextToken: string) {
     token.value = nextToken
@@ -38,5 +45,5 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  return { token, user, isAuthed, setToken, clear, login, loadMe, logout }
+  return { token, user, isAuthed, canAccessAdmin, setToken, clear, login, loadMe, logout }
 })

@@ -4,11 +4,16 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from app.crawl_diagnostics import FailureInfo, STAGE_JOB, record_failure
+from app.crawl_diagnostics import (
+    FailureInfo,
+    STAGE_JOB,
+    TRACKING_PAUSED,
+    record_failure,
+)
 from app.crawlers.base import CrawlResult
 from app.db import SessionLocal, init_db
-from app.models import CrawlFailure, CrawlJob, Product, Site
-from app.runner import claim_job, enqueue, execute_job
+from app.models import CrawlFailure, CrawlJob, Product, Site, Workspace, WorkspaceSite
+from app.runner import claim_job, enqueue, execute_job, _is_non_fatal_partial
 
 pytestmark = pytest.mark.unit
 
@@ -69,6 +74,39 @@ class _PartialCrawler:
             "sale_price": 10,
         })
         out.notes.append("rate limited after first page")
+        return out
+
+
+class _HighYieldTransientCrawler:
+    job_id: int | None = None
+
+    def crawl(self) -> CrawlResult:
+        s = SessionLocal()
+        try:
+            record_failure(
+                s,
+                site="runner_high_yield_probe",
+                job_id=self.job_id,
+                info=FailureInfo(
+                    "network_timeout",
+                    "fetch",
+                    "one PDP timed out after enough products were parsed",
+                    True,
+                    "稍后重试或检查代理稳定性",
+                ),
+            )
+            s.commit()
+        finally:
+            s.close()
+        out = CrawlResult()
+        for idx in range(60):
+            out.products.append({
+                "sku": f"HY-{idx}",
+                "title": f"High Yield {idx}",
+                "site": "runner_high_yield_probe",
+                "product_url": f"https://example.com/products/{idx}",
+                "sale_price": 10,
+            })
         return out
 
 
@@ -134,6 +172,51 @@ def test_execute_job_products_with_failure_becomes_partial(monkeypatch):
         assert job.failure_stage == "fetch"
     finally:
         s.close()
+
+
+def test_execute_job_high_yield_transient_failure_stays_success(monkeypatch):
+    init_db()
+    s = SessionLocal()
+    try:
+        if not s.query(Site).filter(Site.site == "runner_high_yield_probe").first():
+            s.add(Site(site="runner_high_yield_probe", brand="Probe", country="US",
+                       url="https://example.com", platform="generic",
+                       proxy_tier="none"))
+            s.commit()
+    finally:
+        s.close()
+
+    monkeypatch.setattr("app.runner.get_crawler", lambda site: _HighYieldTransientCrawler())
+    job_id = enqueue("runner_high_yield_probe")
+
+    result = execute_job(job_id)
+
+    s = SessionLocal()
+    try:
+        job = s.get(CrawlJob, job_id)
+        failures = s.query(CrawlFailure).filter(CrawlFailure.job_id == job_id).all()
+        assert result["status"] == "success"
+        assert result["products"] == 60
+        assert "failure_code" not in result
+        assert job.status == "success"
+        assert job.failure_code is None
+        assert job.products_count == 60
+        assert [f.code for f in failures] == ["network_timeout"]
+    finally:
+        s.close()
+
+
+def test_non_fatal_partial_uses_cdiscount_site_threshold():
+    cdiscount = CrawlJob(site="cdiscount_fr", failure_code="anti_bot_challenge",
+                         success_rate=100.0)
+    generic = CrawlJob(site="other_site", failure_code="anti_bot_challenge",
+                       success_rate=100.0)
+    parse_noise = CrawlJob(site="vidaxl_ro", failure_code="parse_no_jsonld",
+                           success_rate=100.0)
+
+    assert _is_non_fatal_partial(cdiscount, 48) is True
+    assert _is_non_fatal_partial(generic, 48) is False
+    assert _is_non_fatal_partial(parse_noise, 199) is True
 
 
 def test_execute_job_applies_configured_price_feed(monkeypatch, tmp_path):
@@ -277,5 +360,115 @@ def test_claim_job_skips_proxy_preflight_failure_and_claims_next(monkeypatch):
         assert blocked.failure_code == "proxy_unavailable"
         assert ready.status == "running"
         assert ready.heartbeat_at is not None
+    finally:
+        s.close()
+
+
+def test_enqueue_skips_paused_tracking_site_before_proxy_preflight(monkeypatch):
+    init_db()
+    from app import proxy_pool
+
+    monkeypatch.setattr(proxy_pool, "has_available_proxy",
+                        lambda tier, site=None: False)
+    s = SessionLocal()
+    try:
+        s.query(CrawlJob).delete()
+        s.query(Site).filter(Site.site == "runner_paused_probe").delete()
+        s.add(Site(site="runner_paused_probe", brand="Probe", country="US",
+                   url="https://example.com", platform="generic",
+                   proxy_tier="residential", track_status="paused"))
+        s.commit()
+    finally:
+        s.close()
+
+    job_id = enqueue("runner_paused_probe", trigger="daily_refresh")
+
+    s = SessionLocal()
+    try:
+        job = s.get(CrawlJob, job_id)
+        failure = (s.query(CrawlFailure)
+                   .filter(CrawlFailure.job_id == job_id)
+                   .order_by(CrawlFailure.id.desc())
+                   .first())
+        assert job.status == "skipped"
+        assert job.failure_code == TRACKING_PAUSED
+        assert job.retryable is False
+        assert failure is not None
+        assert failure.code == TRACKING_PAUSED
+    finally:
+        s.close()
+
+
+def test_claim_job_skips_paused_tracking_site_and_claims_next():
+    init_db()
+    now = datetime.utcnow()
+    s = SessionLocal()
+    try:
+        s.query(CrawlJob).delete()
+        for site_name in ("runner_paused_claim", "runner_ready_claim"):
+            s.query(Site).filter(Site.site == site_name).delete()
+        s.add(Site(site="runner_paused_claim", brand="Probe", country="US",
+                   url="https://example.com/paused", platform="generic",
+                   proxy_tier="none", track_status="paused"))
+        s.add(Site(site="runner_ready_claim", brand="Probe", country="US",
+                   url="https://example.com/ready", platform="generic",
+                   proxy_tier="none"))
+        s.flush()
+        paused = CrawlJob(site="runner_paused_claim", status="pending",
+                          trigger="daily_refresh", created_at=now)
+        ready = CrawlJob(site="runner_ready_claim", status="pending",
+                         trigger="daily_refresh",
+                         created_at=now + timedelta(seconds=1))
+        s.add_all([paused, ready])
+        s.commit()
+        paused_id = paused.id
+        ready_id = ready.id
+    finally:
+        s.close()
+
+    assert claim_job("worker-test") == ready_id
+
+    s = SessionLocal()
+    try:
+        paused = s.get(CrawlJob, paused_id)
+        ready = s.get(CrawlJob, ready_id)
+        assert paused.status == "skipped"
+        assert paused.failure_code == TRACKING_PAUSED
+        assert ready.status == "running"
+    finally:
+        s.close()
+
+
+def test_enqueue_auto_job_skips_site_hidden_from_enabled_workspaces():
+    init_db()
+    s = SessionLocal()
+    try:
+        s.query(CrawlJob).delete()
+        s.query(WorkspaceSite).filter(WorkspaceSite.site == "runner_hidden_probe").delete()
+        s.query(Site).filter(Site.site == "runner_hidden_probe").delete()
+        ws = Workspace(slug="runner-hidden-ws", name="Runner Hidden")
+        s.add(ws)
+        s.flush()
+        s.add(Site(site="runner_hidden_probe", brand="Probe", country="US",
+                   url="https://example.com", platform="generic",
+                   proxy_tier="none"))
+        s.add(WorkspaceSite(workspace_id=ws.id, site="runner_hidden_probe",
+                            enabled=True, hidden=True))
+        s.commit()
+    finally:
+        s.close()
+
+    auto_job_id = enqueue("runner_hidden_probe", trigger="scheduled")
+    manual_job_id = enqueue("runner_hidden_probe", trigger="admin_retry")
+
+    s = SessionLocal()
+    try:
+        auto_job = s.get(CrawlJob, auto_job_id)
+        manual_job = s.get(CrawlJob, manual_job_id)
+        assert auto_job.status == "skipped"
+        assert auto_job.failure_code == "workspace_hidden"
+        assert auto_job.retryable is False
+        assert manual_job.status == "pending"
+        assert manual_job.failure_code is None
     finally:
         s.close()

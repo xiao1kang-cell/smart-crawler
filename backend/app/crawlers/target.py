@@ -17,6 +17,8 @@
 """
 from __future__ import annotations
 
+import gzip
+import html
 import os
 import re
 import uuid
@@ -30,6 +32,7 @@ KEY = os.environ.get("TARGET_REDSKY_KEY",
 DEFAULT_LIMIT = int(os.environ.get("TARGET_LIMIT", "1000"))
 STORE_ID = os.environ.get("TARGET_STORE_ID", "1768")  # Brentwood CA 物理店
 MAX_OFFSET = int(os.environ.get("TARGET_MAX_OFFSET", "240"))
+SITEMAP_INDEX = "https://www.target.com/sitemap_pdp-index.xml.gz"
 
 # 实测：单字宽泛词（sofa）返 0；具体 2-3 字组合稳定返 24 条
 # 不带 category（5xtg6 反而 gate 掉结果）
@@ -62,6 +65,27 @@ class TargetCrawler(BaseCrawler):
         }
 
     def crawl(self) -> CrawlResult:
+        if os.environ.get("TARGET_USE_REDSKY", "0") != "1":
+            return self._crawl_sitemap_only()
+        return self._crawl_redsky()
+
+    def _crawl_sitemap_only(self) -> CrawlResult:
+        result = CrawlResult()
+        fetcher = self.make_fetcher(
+            source="target_sitemap",
+            timeout=30,
+            use_proxy=False,
+        )
+        urls = self._collect_sitemap_urls(fetcher, result)
+        targets = urls[: self.limit]
+        rows = [self._row_from_sitemap(entry) for entry in targets]
+        result.products.extend(row for row in rows if row)
+        result.notes.append(
+            f"Target sitemap-only 产出 {len(result.products)} 个商品"
+            "（价格/库存字段后续由 RedSky/PDP 增量补齐）")
+        return result
+
+    def _crawl_redsky(self) -> CrawlResult:
         result = CrawlResult()
         fetcher = self.make_fetcher(
             source="target_redsky",
@@ -163,6 +187,98 @@ class TargetCrawler(BaseCrawler):
             f"Target RedSky 成功 {ok}/{len(tcins)} · 解析失败 {denied}")
         return result
 
+    def _collect_sitemap_urls(self, fetcher, result: CrawlResult) -> list[dict]:
+        shards = self._sitemap_locs(fetcher, SITEMAP_INDEX)
+        result.notes.append(f"Target sitemap index 发现 {len(shards)} 个子图")
+        out: list[dict] = []
+        seen: set[str] = set()
+        sample_limit = max(self.limit * 10, 200)
+        for shard in shards:
+            entries = self._sitemap_entries(fetcher, shard)
+            for entry in entries:
+                url = entry.get("url") or ""
+                if "/p/" not in url or "/-/A-" not in url or url in seen:
+                    continue
+                seen.add(url)
+                out.append(entry)
+                if len(out) >= sample_limit:
+                    return self._prioritize_home(out)
+        return self._prioritize_home(out)
+
+    def _sitemap_locs(self, fetcher, url: str) -> list[str]:
+        text = self._sitemap_text(fetcher, url)
+        return re.findall(r"<loc>\s*(.*?)\s*</loc>", text)
+
+    def _sitemap_entries(self, fetcher, url: str) -> list[dict]:
+        text = self._sitemap_text(fetcher, url)
+        entries: list[dict] = []
+        for block in re.findall(r"<url>(.*?)</url>", text, re.S):
+            loc = re.search(r"<loc>\s*(.*?)\s*</loc>", block, re.S)
+            if not loc:
+                continue
+            images = re.findall(
+                r"<image:loc>\s*(.*?)\s*</image:loc>", block, re.S)
+            entries.append({
+                "url": html.unescape(loc.group(1).strip()),
+                "images": [html.unescape(x.strip()) for x in images if x.strip()],
+            })
+        return entries
+
+    def _sitemap_text(self, fetcher, url: str) -> str:
+        res = fetcher.get(url, headers=self._headers(), timeout=30)
+        raw = res.content or (res.text or "").encode()
+        if url.endswith(".gz"):
+            try:
+                return gzip.decompress(raw).decode("utf-8", "ignore")
+            except Exception:
+                pass
+        try:
+            return raw.decode("utf-8", "ignore")
+        except Exception:
+            return res.text or ""
+
+    def _row_from_sitemap(self, entry: dict) -> dict | None:
+        url = entry.get("url") or ""
+        match = re.search(r"/-/A-(\d+)", url)
+        if not match:
+            return None
+        sku = match.group(1)
+        title = _title_from_target_url(url)
+        return {
+            "sku": sku,
+            "spu": sku,
+            "title": title,
+            "description": None,
+            "image_urls": entry.get("images") or [],
+            "category_path": None,
+            "sale_price": None,
+            "original_price": None,
+            "currency": "USD",
+            "ratings": None,
+            "review_count": None,
+            "status": "on_sale",
+            "brand": self.site.brand,
+            "product_url": url,
+            "site": self.site.site,
+            "attributes": {"source": "sitemap"},
+        }
+
+    @staticmethod
+    def _prioritize_home(entries: list[dict]) -> list[dict]:
+        terms = (
+            "rug", "pillow", "lamp", "table", "chair", "sofa", "couch",
+            "cabinet", "shelf", "storage", "curtain", "bedding", "comforter",
+            "mattress", "decor", "kitchen", "bath", "patio", "outdoor",
+            "furniture", "dining", "desk", "mirror", "blanket",
+        )
+        return sorted(
+            entries,
+            key=lambda e: (
+                not any(t in (e.get("url") or "").lower() for t in terms),
+                e.get("url") or "",
+            ),
+        )
+
     def _map_pdp(self, js: dict, tcin: str, url: str) -> dict | None:
         try:
             prod = js.get("data", {}).get("product", {})
@@ -234,3 +350,9 @@ def _int(v):
         return int(float(v))
     except (TypeError, ValueError):
         return None
+
+
+def _title_from_target_url(url: str) -> str:
+    match = re.search(r"/p/([^/]+)/-/A-\d+", url)
+    slug = match.group(1) if match else url.rstrip("/").split("/")[-1]
+    return html.unescape(slug.replace("-", " ").strip()).title()

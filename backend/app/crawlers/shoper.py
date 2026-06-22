@@ -25,6 +25,7 @@ from selectolax.parser import HTMLParser
 
 from ..antiban import BlockedError
 from ..config import get_sites
+from ..url_filters import is_obvious_non_product_url
 from .base import BaseCrawler, CrawlResult
 
 DEFAULT_LIMIT = int(os.environ.get("SHOPER_LIMIT", "200"))
@@ -147,16 +148,15 @@ class ShoperCrawler(BaseCrawler):
         out: list[str] = []
         for h in candidates:
             slug = h.lstrip("/").split("/")[0].split("?")[0]
-            if not slug or slug in _NON_PRODUCT_SLUGS:
-                continue
-            if slug.startswith("assets") or slug.endswith((".css", ".js",
-                                                            ".svg", ".png")):
-                continue
             path = "/" + slug
+            full = self.base + path
+            if (not slug or slug in _NON_PRODUCT_SLUGS
+                    or is_obvious_non_product_url(full)):
+                continue
             if path in seen:
                 continue
             seen.add(path)
-            out.append(self.base + path)
+            out.append(full)
         return out
 
     def _collect_product_urls(self, fetcher,
@@ -180,17 +180,18 @@ class ShoperCrawler(BaseCrawler):
             hrefs = re.findall(r'href=["\'](/[^"\']+)["\']', res.text)
             for h in hrefs:
                 slug = h.lstrip("/").split("/")[0].split("?")[0]
-                if not slug or slug in _NON_PRODUCT_SLUGS:
+                path = "/" + slug
+                full = self.base + path
+                if (not slug or slug in _NON_PRODUCT_SLUGS
+                        or is_obvious_non_product_url(full)):
                     continue
                 if slug.startswith("assets") or "." in slug:
                     continue
-                path = "/" + slug
                 if path in known_categories:
                     continue
                 # 商品 slug 一般含连字符（描述性 SEO slug）
                 if "-" not in slug:
                     continue
-                full = self.base + path
                 if full in seen:
                     continue
                 seen.add(full)

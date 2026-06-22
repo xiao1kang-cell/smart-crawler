@@ -15,7 +15,7 @@ async function submit() {
   try {
     await auth.login({ username: form.value.username, password: form.value.password })
     await auth.loadMe()
-    if (auth.user?.global_role !== 'super_admin') {
+    if (!auth.canAccessAdmin) {
       auth.clear()
       throw new Error('该账号无管理后台权限')
     }

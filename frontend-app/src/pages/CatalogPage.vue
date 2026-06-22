@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { Download, Eye, ExternalLink, RefreshCw, RotateCw, X } from 'lucide-vue-next'
 import { asList, fmtDate, fmtNumber, fmtPrice, qs } from '../api/client'
 import { getProduct, listProducts, listSites, productPriceHistory } from '../api/products'
@@ -27,6 +27,51 @@ const loading = ref(false)
 const error = ref('')
 const exportMessage = ref('')
 const jobTrigger = useJobTrigger({ onDone: () => load() })
+const ALL_STATUS = '__all_status__'
+const siteItems = computed(() => sites.value.map((site) => {
+  const value = site.site || site.name
+  return { label: value, value }
+}))
+const tabItems = [
+  { label: '全部商品', value: 'all' },
+  { label: '畅销商品', value: 'bestseller' },
+  { label: '最新商品', value: 'new' },
+]
+const statusItems = [
+  { label: '全部状态', value: ALL_STATUS },
+  { label: 'Active', value: 'active' },
+  { label: 'Sold out', value: 'sold_out' },
+  { label: 'Offline', value: 'offline' },
+]
+const statusSelect = computed({
+  get: () => statusFilter.value || ALL_STATUS,
+  set: (value: string) => {
+    statusFilter.value = value === ALL_STATUS ? '' : value
+  },
+})
+const pageSizeItems = [
+  { label: '30 / 页', value: 30 },
+  { label: '60 / 页', value: 60 },
+  { label: '100 / 页', value: 100 },
+]
+const productColumns = [
+  { id: 'image', header: '' },
+  { accessorKey: 'sku', header: '商品编码' },
+  { accessorKey: 'title', header: '商品' },
+  { accessorKey: 'price', header: '价格' },
+  { accessorKey: 'ratings', header: '评分' },
+  { accessorKey: 'thirty_day_sales', header: '30 天销量' },
+  { accessorKey: 'thirty_day_revenue', header: '30 天收入' },
+  { accessorKey: 'updated_time', header: '更新时间' },
+  { accessorKey: 'status', header: '状态' },
+  { id: 'actions', header: '操作' },
+]
+const priceHistoryColumns = [
+  { accessorKey: 'date', header: '日期' },
+  { accessorKey: 'sale_price', header: '售价' },
+  { accessorKey: 'original_price', header: '原价' },
+  { accessorKey: 'review_count', header: '评论数' },
+]
 
 // 商品详情 + 价格历史弹窗
 const detail = ref<Record<string, any> | null>(null)
@@ -175,30 +220,15 @@ onMounted(load)
     <div class="sub">{{ loading ? '加载中' : (fmtNumber(total) + ' 条') }} · {{ selectedSite || '未选择站点' }}</div>
     <UAlert v-if="error" color="error" variant="soft" :title="error" />
     <div class="cat-filters">
-        <select v-model="selectedSite" @change="onSiteChange">
-          <option v-for="site in sites" :key="site.site || site.name" :value="site.site || site.name">{{ site.site || site.name }}</option>
-        </select>
-        <select v-model="tab" @change="runSearch">
-          <option value="all">全部商品</option>
-          <option value="bestseller">畅销商品</option>
-          <option value="new">最新商品</option>
-        </select>
-        <select v-model="statusFilter" @change="runSearch">
-          <option value="">全部状态</option>
-          <option value="active">Active</option>
-          <option value="sold_out">Sold out</option>
-          <option value="offline">Offline</option>
-        </select>
+        <USelect v-model="selectedSite" class="cat-select site-select" :items="siteItems" value-key="value" @update:model-value="onSiteChange" />
+        <USelect v-model="tab" class="cat-select" :items="tabItems" value-key="value" @update:model-value="runSearch" />
+        <USelect v-model="statusSelect" class="cat-select" :items="statusItems" value-key="value" @update:model-value="runSearch" />
         <input v-model="search" placeholder="搜索 SKU / 标题 / 类目" @keydown.enter="runSearch" />
         <input v-model="minPrice" class="num-filter" inputmode="decimal" placeholder="最低价" @keydown.enter="runSearch" />
         <input v-model="maxPrice" class="num-filter" inputmode="decimal" placeholder="最高价" @keydown.enter="runSearch" />
         <input v-model="minSales" class="num-filter" inputmode="numeric" placeholder="最低销量" @keydown.enter="runSearch" />
         <input v-model="maxSales" class="num-filter" inputmode="numeric" placeholder="最高销量" @keydown.enter="runSearch" />
-        <select v-model.number="pageSize" class="page-size" @change="runSearch">
-          <option :value="30">30 / 页</option>
-          <option :value="60">60 / 页</option>
-          <option :value="100">100 / 页</option>
-        </select>
+        <USelect v-model="pageSize" class="cat-select page-size" :items="pageSizeItems" value-key="value" @update:model-value="runSearch" />
         <button class="btn-go" :disabled="loading" title="按当前筛选刷新列表" @click="runSearch">
           <RefreshCw :size="15" :class="{ spin: loading }" />
           <span>{{ loading ? '刷新中' : '刷新列表' }}</span>
@@ -222,38 +252,53 @@ onMounted(load)
 
     <DataLoadingPanel class="cat-table-wrap" :loading="loading" :has-data="products.length > 0" label="正在更新商品列表">
       <PageLoading v-if="loading && !products.length" compact title="加载商品数据..." note="正在读取站点商品库" />
-      <table v-else class="cat-table">
-        <thead><tr><th></th><th>商品编码</th><th>商品</th><th>价格</th><th>评分</th><th>30 天销量</th><th>30 天收入</th><th>更新时间</th><th>状态</th><th>操作</th></tr></thead>
-        <tbody>
-          <tr v-for="p in products" :key="p.id || `${p.site}-${p.sku}`">
-            <td><img v-if="p.image" :src="p.image" class="thumb-img" alt="" /><div v-else class="thumb">📦</div></td>
-            <td><code v-if="!p.product_url">{{ p.sku || p.item_id || p.id }}</code><a v-else :href="p.product_url" target="_blank" rel="noopener" class="sku-link" @click.stop><code>{{ p.sku || p.item_id || p.id }}</code></a></td>
-            <td><span class="title-text" :title="productTitle(p)">{{ productTitle(p) }}</span></td>
-            <td><span>{{ productPrice(p) }}</span><div v-if="p.original_price && p.original_price !== p.sale_price" class="price-sub">原价 {{ fmtPrice(p.original_price, p.currency) }}</div></td>
-            <td>{{ p.ratings || p.rating || '—' }}</td>
-            <td>{{ p.thirty_day_sales || 0 }}</td>
-            <td>{{ productRevenue(p) }}</td>
-            <td>{{ fmtDate(p.updated_time || p.created_time) }}</td>
-            <td><StatusBadge :status="p.status" /></td>
-            <td>
-              <button class="row-icon" title="查看商品详情" @click="openDetail(p.id)">
-                <Eye :size="15" />
-              </button>
-              <a v-if="p.product_url" class="row-icon link" title="打开商品原页" :href="p.product_url" target="_blank" rel="noopener">
-                <ExternalLink :size="15" />
-              </a>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <UTable v-else class="cat-table ui-table" :data="products" :columns="productColumns" :loading="loading" sticky="header" empty="暂无商品数据">
+        <template #image-cell="{ row }">
+          <img v-if="row.original.image" :src="row.original.image" class="thumb-img" alt="" />
+          <div v-else class="thumb">📦</div>
+        </template>
+        <template #sku-cell="{ row }">
+          <code v-if="!row.original.product_url">{{ row.original.sku || row.original.item_id || row.original.id }}</code>
+          <a v-else :href="row.original.product_url" target="_blank" rel="noopener" class="sku-link" @click.stop>
+            <code>{{ row.original.sku || row.original.item_id || row.original.id }}</code>
+          </a>
+        </template>
+        <template #title-cell="{ row }">
+          <span class="title-text" :title="productTitle(row.original)">{{ productTitle(row.original) }}</span>
+        </template>
+        <template #price-cell="{ row }">
+          <span>{{ productPrice(row.original) }}</span>
+          <div v-if="row.original.original_price && row.original.original_price !== row.original.sale_price" class="price-sub">原价 {{ fmtPrice(row.original.original_price, row.original.currency) }}</div>
+        </template>
+        <template #ratings-cell="{ row }">{{ row.original.ratings || row.original.rating || '—' }}</template>
+        <template #thirty_day_sales-cell="{ row }">{{ row.original.thirty_day_sales || 0 }}</template>
+        <template #thirty_day_revenue-cell="{ row }">{{ productRevenue(row.original) }}</template>
+        <template #updated_time-cell="{ row }">{{ fmtDate(row.original.updated_time || row.original.created_time) }}</template>
+        <template #status-cell="{ row }"><StatusBadge :status="row.original.status" /></template>
+        <template #actions-cell="{ row }">
+          <button class="row-icon" title="查看商品详情" @click="openDetail(row.original.id)">
+            <Eye :size="15" />
+          </button>
+          <a v-if="row.original.product_url" class="row-icon link" title="打开商品原页" :href="row.original.product_url" target="_blank" rel="noopener">
+            <ExternalLink :size="15" />
+          </a>
+        </template>
+      </UTable>
       <div v-if="!loading && !products.length" class="empty-state cat-table-empty">
         <b>当前站点暂无商品数据</b>
         可先在覆盖率页面触发抓取，或切换到已有数据的站点。
       </div>
       <div v-if="totalPages() > 1" class="cat-pager">
-        <button class="btn-go" :disabled="page <= 1 || loading" @click="gotoPage(page - 1)">‹ 上一页</button>
+        <UPagination
+          :page="page"
+          :total="total"
+          :items-per-page="pageSize"
+          :disabled="loading"
+          size="sm"
+          show-edges
+          @update:page="gotoPage"
+        />
         <span class="cat-pager-info">第 {{ page }} / {{ totalPages() }} 页 · 共 {{ fmtNumber(total) }} 条</span>
-        <button class="btn-go" :disabled="page >= totalPages() || loading" @click="gotoPage(page + 1)">下一页 ›</button>
       </div>
     </DataLoadingPanel>
 
@@ -290,17 +335,12 @@ onMounted(load)
           <div class="prod-detail-history">
             <h4>价格历史</h4>
             <div v-if="!priceHistory.length" class="sub">暂无价格历史</div>
-            <table v-else class="cat-table cat-table-sm">
-              <thead><tr><th>日期</th><th>售价</th><th>原价</th><th>评论数</th></tr></thead>
-              <tbody>
-                <tr v-for="(h, i) in priceHistory" :key="i">
-                  <td>{{ (h.date || '').slice(0, 10) }}</td>
-                  <td>{{ fmtPrice(h.sale_price, detail.currency) }}</td>
-                  <td>{{ fmtPrice(h.original_price, detail.currency) }}</td>
-                  <td>{{ h.review_count != null ? h.review_count : '—' }}</td>
-                </tr>
-              </tbody>
-            </table>
+            <UTable v-else class="cat-table cat-table-sm ui-table" :data="priceHistory" :columns="priceHistoryColumns" empty="暂无价格历史">
+              <template #date-cell="{ row }">{{ (row.original.date || '').slice(0, 10) }}</template>
+              <template #sale_price-cell="{ row }">{{ fmtPrice(row.original.sale_price, detail.currency) }}</template>
+              <template #original_price-cell="{ row }">{{ fmtPrice(row.original.original_price, detail.currency) }}</template>
+              <template #review_count-cell="{ row }">{{ row.original.review_count != null ? row.original.review_count : '—' }}</template>
+            </UTable>
           </div>
         </div>
       </div>
@@ -312,7 +352,7 @@ onMounted(load)
 .cat-filters {
   align-items: center;
 }
-.cat-filters select,
+.cat-filters .cat-select,
 .cat-filters input {
   min-height: 34px;
 }
@@ -404,7 +444,7 @@ onMounted(load)
   text-decoration: none;
 }
 .price-sub { color:var(--ui-muted, #9ca3af); font-size:.72rem; margin-top:2px; }
-.cat-pager { display:flex; justify-content:center; align-items:center; gap:12px; margin-top:14px; }
+.cat-pager { display:flex; justify-content:center; align-items:center; gap:12px; margin-top:14px; flex-wrap:wrap; }
 .cat-pager-info { color:var(--ui-muted, #9ca3af); font-size:0.82rem; }
 .prod-detail-top { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap; }
 .prod-detail-img { width:120px; height:120px; object-fit:cover; border-radius:8px; border:1px solid var(--ui-border, #2a2a3a); }

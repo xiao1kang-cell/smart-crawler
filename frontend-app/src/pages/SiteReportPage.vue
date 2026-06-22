@@ -101,6 +101,76 @@ function loadCfg() {
 const cfg = ref(loadCfg())
 const activeSite = computed(() => sites.value.find((x) => (x.site || x.name) === site.value) || { site: site.value })
 const visibleProductColumnCount = computed(() => Object.values(cfg.value.productCols).filter(Boolean).length)
+const trendColumns = [
+  { accessorKey: 'date', header: 'Period' },
+  { accessorKey: 'sku_count', header: 'SKU' },
+  { accessorKey: 'new_product_count', header: 'New Products' },
+  { accessorKey: 'estimated_sales', header: 'Sales' },
+  { accessorKey: 'estimated_revenue', header: 'Revenues' },
+  { accessorKey: 'traffic', header: 'Traffic' },
+  { accessorKey: 'conversion_rate', header: 'Conversion Rate' },
+  { accessorKey: 'review_total', header: 'Reviews' }
+]
+const productColumnDefs = [
+  { id: 'no', header: 'NO.', enabled: () => true },
+  { accessorKey: 'sku', header: 'SKU', enabled: () => cfg.value.productCols.sku },
+  { accessorKey: 'title', header: 'Products Details', enabled: () => cfg.value.productCols.title },
+  { accessorKey: 'label', header: 'Label', enabled: () => cfg.value.productCols.label },
+  { accessorKey: 'variantId', header: 'VariantId', enabled: () => cfg.value.productCols.variantId },
+  { accessorKey: 'variantCount', header: 'Variants', enabled: () => cfg.value.productCols.variantCount },
+  { accessorKey: 'attrs', header: 'Attributes', enabled: () => cfg.value.productCols.attrs },
+  { accessorKey: 'salePrice', header: 'Sales Price', enabled: () => cfg.value.productCols.salePrice },
+  { accessorKey: 'price', header: 'Price', enabled: () => cfg.value.productCols.price },
+  { accessorKey: 'sales', header: 'Sales', enabled: () => cfg.value.productCols.sales },
+  { accessorKey: 'revenue', header: 'Revenues', enabled: () => cfg.value.productCols.revenue },
+  { accessorKey: 'rating', header: 'Ratings', enabled: () => cfg.value.productCols.rating },
+  { accessorKey: 'reviews', header: 'Reviews', enabled: () => cfg.value.productCols.reviews },
+  { accessorKey: 'status', header: 'Status', enabled: () => cfg.value.productCols.status },
+  { accessorKey: 'category', header: 'Category', enabled: () => cfg.value.productCols.category },
+  { accessorKey: 'inventory', header: 'Inventory', enabled: () => cfg.value.productCols.inventory },
+  { accessorKey: 'video', header: 'Video', enabled: () => cfg.value.productCols.video },
+  { accessorKey: 'freeShipping', header: 'Free shipping', enabled: () => cfg.value.productCols.freeShipping },
+  { accessorKey: 'createdTime', header: 'Created Time', enabled: () => cfg.value.productCols.createdTime },
+  { accessorKey: 'updatedTime', header: 'Updated Time', enabled: () => cfg.value.productCols.updatedTime },
+  { id: 'action', header: 'Action', enabled: () => cfg.value.productCols.action }
+]
+const productTableColumns = computed(() => productColumnDefs.filter((col) => col.enabled()).map(({ enabled, ...col }) => col))
+const promoColumns = [
+  { id: 'no', header: 'NO.' },
+  { accessorKey: 'sku', header: 'SKU' },
+  { accessorKey: 'detected_time', header: 'Updated Time' },
+  { accessorKey: 'product_title', header: 'Products Details' },
+  { accessorKey: 'promotion_type', header: 'Type' },
+  { accessorKey: 'promotion_name', header: 'Name' },
+  { accessorKey: 'discount', header: 'Discount' },
+  { accessorKey: 'original_price', header: 'Pre-price' },
+  { accessorKey: 'promotion_price', header: 'Post-price' },
+  { accessorKey: 'threshold', header: 'Threshold' },
+  { accessorKey: 'start_time', header: 'Start Time' },
+  { accessorKey: 'end_time', header: 'End Time' }
+]
+const trendDetailColumns = [
+  { accessorKey: 'date', header: 'Date' },
+  { accessorKey: 'sale_price', header: 'Sales Price' },
+  { accessorKey: 'original_price', header: 'Price' },
+  { accessorKey: 'avg_rating', header: 'Ratings' },
+  { accessorKey: 'review_total', header: 'Reviews' },
+  { accessorKey: 'estimated_sales', header: 'Sales' },
+  { accessorKey: 'estimated_revenue', header: 'Revenues' }
+]
+const trendPromoColumns = [
+  { accessorKey: 'detected_time', header: 'Updated Time' },
+  { accessorKey: 'sku', header: 'SKU' },
+  { accessorKey: 'product_title', header: 'Products Details' },
+  { accessorKey: 'promotion_type', header: 'Type' },
+  { accessorKey: 'promotion_name', header: 'Name' },
+  { accessorKey: 'discount', header: 'Discount' },
+  { accessorKey: 'original_price', header: 'Pre-price' },
+  { accessorKey: 'promotion_price', header: 'Post-price' },
+  { accessorKey: 'threshold', header: 'Threshold' },
+  { accessorKey: 'start_time', header: 'Start Time' },
+  { accessorKey: 'end_time', header: 'End Time' }
+]
 const cards = computed<Record<string, any>>(() => {
   const data = overview.value || {}
   return data.cards && typeof data.cards === 'object' ? data.cards : data
@@ -119,6 +189,56 @@ const latestProductCount = computed(() => subTab.value === 'new' ? total.value :
 const initialReportLoading = computed(() => loading.value && !overview.value && !products.value.length && !promotions.value.length)
 const granularity = ref<'day' | 'week' | 'month'>('month')
 const aggregatedTrends = computed<Record<string, any>[]>(() => trends.value)
+const aggregatedTrendRows = computed(() => aggregatedTrends.value.slice().reverse())
+const siteItems = computed(() => sites.value.map((s) => ({
+  label: `${s.site || s.name} (${s.brand || 'brand'})`,
+  value: s.site || s.name
+})))
+const granularityItems = [
+  { label: 'By Month', value: 'month' },
+  { label: 'By Week', value: 'week' },
+  { label: 'By Days', value: 'day' }
+]
+const exportScopeItems = [
+  { label: 'Export all', value: 'all' },
+  { label: 'Export page', value: 'page' }
+]
+const productPageSizeItems = [
+  { label: '10 / page', value: 10 },
+  { label: '20 / page', value: 20 },
+  { label: '50 / page', value: 50 },
+  { label: '100 / page', value: 100 },
+  { label: '200 / page', value: 200 }
+]
+const EMPTY_SELECT = '__empty__'
+const promoPageSizeItems = [
+  { label: '20 / page', value: 20 },
+  { label: '50 / page', value: 50 },
+  { label: '100 / page', value: 100 },
+  { label: '200 / page', value: 200 }
+]
+const promoTypeItems = [
+  { label: 'All types', value: EMPTY_SELECT },
+  { label: 'Price Promotion', value: 'price' },
+  { label: 'Coupons', value: 'coupon' },
+  { label: 'Bundle', value: 'bundle' }
+]
+const timeRangeItems = [
+  { label: '近 7 天', value: '7d' },
+  { label: '近 30 天', value: '30d' },
+  { label: '近 90 天', value: '90d' },
+  { label: '全部', value: 'all' }
+]
+const categoryItems = computed(() => [
+  { label: '全部类目', value: EMPTY_SELECT },
+  ...categoryOptions.value.map((cat) => ({ label: cat, value: cat }))
+])
+const categorySelect = computed({
+  get: () => filters.value.category || EMPTY_SELECT,
+  set: (value: string) => {
+    filters.value.category = value === EMPTY_SELECT ? '' : value
+  }
+})
 
 function isoDate(value: Date) {
   const y = value.getFullYear()
@@ -446,6 +566,15 @@ const productTrendRows = computed(() => productTrendDetail.value?.trend || price
 const productPromotions = computed(() => productTrendDetail.value?.promotions || [])
 const productSummary = computed(() => productTrendDetail.value?.summary || {})
 const productTrendVariants = computed<Record<string, any>[]>(() => productTrendDetail.value?.variants || [])
+const trendVariantItems = computed(() => {
+  const rows = productTrendVariants.value.map((item) => ({ label: variantLabel(item), value: item.id }))
+  if (!rows.length && detail.value) return [{ label: detail.value.sku || String(detail.value.id), value: detail.value.id }]
+  return rows
+})
+const trendPromoSkuItems = computed(() => [
+  { label: 'All SKU promotions', value: EMPTY_SELECT },
+  ...productTrendVariants.value.map((item) => ({ label: item.sku || String(item.id), value: item.sku }))
+])
 const productCurrentPeriod = computed(() => productSummary.value?.current_period || null)
 const productPreviousPeriod = computed(() => productSummary.value?.previous_period || null)
 const trendGranularityLabel = computed(() => granularityLabel(trendGranularity.value))
@@ -526,6 +655,46 @@ function changeTrendPromoPage(next: number) {
   trendPromoPage.value = value
   reloadProductTrend()
 }
+
+function setProductPage(next: number) {
+  page.value = next
+}
+
+function setPromoPage(next: number) {
+  promoPage.value = next
+}
+
+function setPromoType(value: string) {
+  promoType.value = value === EMPTY_SELECT ? '' : String(value)
+  applyPromoFilters()
+}
+
+async function setSelectedTrendProduct(value: string | number) {
+  selectedTrendProductId.value = value
+  await switchProductTrendSku()
+}
+
+function setTrendGranularity(value: 'day' | 'week' | 'month') {
+  trendGranularity.value = value
+  applyProductTrendFilters()
+}
+
+function setTrendPromoSku(value: string) {
+  trendPromoSku.value = value === EMPTY_SELECT ? '' : String(value)
+  applyProductTrendFilters()
+}
+
+function setTrendPromoType(value: string) {
+  trendPromoType.value = value === EMPTY_SELECT ? '' : String(value)
+  applyProductTrendFilters()
+}
+
+function setTrendPromoPageSize(value: number) {
+  trendPromoPageSize.value = Number(value)
+  trendPromoPage.value = 1
+  reloadProductTrend()
+}
+
 function exportProductTrend() {
   if (!detail.value?.id) return
   window.open(`/api/export/product-trend${qs({ pid: detail.value.id, ...productTrendParams(true), export_scope: trendPromoExportScope.value })}`, '_blank')
@@ -687,9 +856,7 @@ onMounted(async () => {
             <a class="url" :href="activeSite.url || '#'" target="_blank">{{ activeSite.url || site }}</a>
           </div>
           <div class="date-picker">
-            <select v-model="site">
-              <option v-for="s in sites" :key="s.site || s.name" :value="s.site || s.name">{{ s.site || s.name }} ({{ s.brand || 'brand' }})</option>
-            </select>
+            <USelect v-model="site" class="report-select site-select" :items="siteItems" value-key="value" />
             <button v-if="canEdit" class="icon-btn" @click="cfgOpen = true">⚙ 自定义</button>
             <button class="icon-btn" @click="loadReport">↻ 刷新</button>
           </div>
@@ -725,11 +892,7 @@ onMounted(async () => {
           <div class="section-head">
             <h3>📈 Sales Trends <span class="desc">分析整体销售情况和品牌市场份额</span></h3>
             <div class="actions">
-              <select v-model="granularity" class="gran-select">
-                <option value="month">By Month</option>
-                <option value="week">By Week</option>
-                <option value="day">By Days</option>
-              </select>
+              <USelect v-model="granularity" class="report-select gran-select" :items="granularityItems" value-key="value" />
               <input v-model="dateRange.from" class="date-input" type="date" />
               <span class="range-sep">→</span>
               <input v-model="dateRange.to" class="date-input" type="date" />
@@ -743,32 +906,16 @@ onMounted(async () => {
           </div>
           <div v-if="aggregatedTrends.length" class="store-trend-table">
             <div class="store-trend-title">Trend Details</div>
-            <table>
-              <thead>
-                <tr>
-                  <th>Period</th>
-                  <th>SKU</th>
-                  <th>New Products</th>
-                  <th>Sales</th>
-                  <th>Revenues</th>
-                  <th>Traffic</th>
-                  <th>Conversion Rate</th>
-                  <th>Reviews</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="row in aggregatedTrends.slice().reverse()" :key="row.date">
-                  <td>{{ row.date || row.source_date || '-' }}</td>
-                  <td>{{ fmtNumber(row.sku_count) }}</td>
-                  <td>{{ fmtNumber(row.new_product_count) }}</td>
-                  <td>{{ fmtNumber(row.estimated_sales) }}</td>
-                  <td>{{ fmtPrice(row.estimated_revenue, reportCurrency) }}</td>
-                  <td>{{ row.traffic != null ? fmtNumber(row.traffic) : '暂无第三方数据' }}</td>
-                  <td>{{ row.conversion_rate != null ? Number(row.conversion_rate).toFixed(2) + '%' : '暂无第三方数据' }}</td>
-                  <td>{{ row.review_total != null ? fmtNumber(row.review_total) : '-' }}</td>
-                </tr>
-              </tbody>
-            </table>
+            <UTable class="ui-table" :data="aggregatedTrendRows" :columns="trendColumns" sticky="header">
+              <template #date-cell="{ row }">{{ row.original.date || row.original.source_date || '-' }}</template>
+              <template #sku_count-cell="{ row }">{{ fmtNumber(row.original.sku_count) }}</template>
+              <template #new_product_count-cell="{ row }">{{ fmtNumber(row.original.new_product_count) }}</template>
+              <template #estimated_sales-cell="{ row }">{{ fmtNumber(row.original.estimated_sales) }}</template>
+              <template #estimated_revenue-cell="{ row }">{{ fmtPrice(row.original.estimated_revenue, reportCurrency) }}</template>
+              <template #traffic-cell="{ row }">{{ row.original.traffic != null ? fmtNumber(row.original.traffic) : '暂无第三方数据' }}</template>
+              <template #conversion_rate-cell="{ row }">{{ row.original.conversion_rate != null ? Number(row.original.conversion_rate).toFixed(2) + '%' : '暂无第三方数据' }}</template>
+              <template #review_total-cell="{ row }">{{ row.original.review_total != null ? fmtNumber(row.original.review_total) : '-' }}</template>
+            </UTable>
           </div>
         </div>
       </template>
@@ -779,10 +926,7 @@ onMounted(async () => {
             <h3>📦 产品分析 <span class="desc">查看产品的基本信息和详细属性</span></h3>
             <div class="actions">
               <button class="icon-btn" @click="loadReport">↻ Refresh</button>
-              <select v-if="canEdit" v-model="productExportScope" class="export-scope" aria-label="Product export scope">
-                <option value="all">Export all</option>
-                <option value="page">Export page</option>
-              </select>
+              <USelect v-if="canEdit" v-model="productExportScope" class="report-select export-scope" :items="exportScopeItems" value-key="value" aria-label="Product export scope" />
               <button v-if="canEdit" class="icon-btn" @click="exportProducts">↓ Export</button>
             </div>
           </div>
@@ -796,109 +940,67 @@ onMounted(async () => {
             </div>
           </div>
           <DataLoadingPanel class="report-table-wrap" :loading="loading" :has-data="products.length > 0" label="正在更新产品列表">
-            <table>
-              <thead>
-                <tr>
-                  <th style="width:50px">NO.</th>
-                  <th v-if="cfg.productCols.sku">SKU</th>
-                  <th v-if="cfg.productCols.title" style="min-width:280px">Products Details</th>
-                  <th v-if="cfg.productCols.label">Label</th>
-                  <th v-if="cfg.productCols.variantId">VariantId</th>
-                  <th v-if="cfg.productCols.variantCount" style="width:90px">Variants</th>
-                  <th v-if="cfg.productCols.attrs" style="min-width:180px">Attributes</th>
-                  <th v-if="cfg.productCols.salePrice" style="width:100px">Sales Price</th>
-                  <th v-if="cfg.productCols.price" style="width:100px">Price</th>
-                  <th v-if="cfg.productCols.sales" style="width:110px">Sales</th>
-                  <th v-if="cfg.productCols.revenue" style="width:120px">Revenues</th>
-                  <th v-if="cfg.productCols.rating" style="width:90px">Ratings</th>
-                  <th v-if="cfg.productCols.reviews" style="width:90px">Reviews</th>
-                  <th v-if="cfg.productCols.status" style="width:100px">Status</th>
-                  <th v-if="cfg.productCols.category" style="min-width:180px">Category</th>
-                  <th v-if="cfg.productCols.inventory" style="width:100px">Inventory</th>
-                  <th v-if="cfg.productCols.video" style="width:80px">Video</th>
-                  <th v-if="cfg.productCols.freeShipping" style="width:120px">Free shipping</th>
-                  <th v-if="cfg.productCols.createdTime" style="width:150px">Created Time</th>
-                  <th v-if="cfg.productCols.updatedTime" style="width:150px">Updated Time</th>
-                  <th v-if="cfg.productCols.action" style="width:88px">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(p, i) in products" :key="p.id || p.sku" style="cursor:pointer" @click="openDetail(p.id)">
-                  <td>{{ (page - 1) * pageSize + i + 1 }}</td>
-                  <td v-if="cfg.productCols.sku"><a class="sku-link" :href="p.product_url || undefined" :target="p.product_url ? '_blank' : undefined" rel="noopener" @click.stop>{{ p.sku || p.item_id }}</a></td>
-                  <td v-if="cfg.productCols.title">
-                    <div class="title-cell">
-                      <img v-if="p.image" :src="p.image" class="thumb thumb-img" alt="" />
-                      <div v-else class="thumb">📦</div>
-                      <div class="info">
-                        <span class="title-text" :title="productTitle(p)">{{ productTitle(p) }}</span>
-                        <div v-if="productLabels(p).length" class="mini-tags">
-                          <span v-for="(tag, idx) in productLabels(p).slice(0, 4)" :key="`${tag}-${idx}`">{{ tag }}</span>
-                        </div>
-                      </div>
+            <UTable class="ui-table report-data-table" :data="products" :columns="productTableColumns" :loading="loading" sticky="header" empty="暂无数据 · 切换 site 或先抓取">
+              <template #no-cell="{ row }">{{ (page - 1) * pageSize + row.index + 1 }}</template>
+              <template #sku-cell="{ row }"><a class="sku-link" :href="row.original.product_url || undefined" :target="row.original.product_url ? '_blank' : undefined" rel="noopener" @click.stop>{{ row.original.sku || row.original.item_id }}</a></template>
+              <template #title-cell="{ row }">
+                <div class="title-cell" @click="openDetail(row.original.id)">
+                  <img v-if="row.original.image" :src="row.original.image" class="thumb thumb-img" alt="" />
+                  <div v-else class="thumb">📦</div>
+                  <div class="info">
+                    <span class="title-text" :title="productTitle(row.original)">{{ productTitle(row.original) }}</span>
+                    <div v-if="productLabels(row.original).length" class="mini-tags">
+                      <span v-for="(tag, idx) in productLabels(row.original).slice(0, 4)" :key="`${tag}-${idx}`">{{ tag }}</span>
                     </div>
-                  </td>
-                  <td v-if="cfg.productCols.label">
-                    <div v-if="productLabels(p).length" class="mini-tags">
-                      <span v-for="tag in productLabels(p)" :key="tag">{{ tag }}</span>
-                    </div>
-                    <span v-else>--</span>
-                  </td>
-                  <td v-if="cfg.productCols.variantId">{{ p.variant_id || p.variantId || '--' }}</td>
-                  <td v-if="cfg.productCols.variantCount">{{ p.variant_count ?? 1 }}</td>
-                  <td v-if="cfg.productCols.attrs">
-                    <div class="attr-cell">
-                      <div v-for="[key, val] in attrEntries(p).slice(0, 4)" :key="key">{{ key }}: {{ val }}</div>
-                      <div v-if="attrEntries(p).length > 4" style="color:#9ca3af">+{{ attrEntries(p).length - 4 }}</div>
-                      <div v-if="attrEntries(p).length === 0" style="color:#9ca3af">--</div>
-                    </div>
-                  </td>
-                  <td v-if="cfg.productCols.salePrice">{{ fmtPrice(p.sale_price ?? p.price, rowCurrency(p)) }}</td>
-                  <td v-if="cfg.productCols.price">{{ fmtPrice(p.original_price, rowCurrency(p)) }}</td>
-                  <td v-if="cfg.productCols.sales">{{ p.thirty_day_sales != null ? Number(p.thirty_day_sales).toLocaleString() : '0' }}</td>
-                  <td v-if="cfg.productCols.revenue">{{ fmtPrice(p.thirty_day_revenue ?? 0, rowCurrency(p)) }}</td>
-                  <td v-if="cfg.productCols.rating">
-                    <div class="rating-cell">
-                      <span class="stars">{{ ratingStars(p) }}</span>
-                      <small>{{ ratingLabel(p) }}</small>
-                    </div>
-                  </td>
-                  <td v-if="cfg.productCols.reviews">{{ p.review_count != null ? Number(p.review_count).toLocaleString() : '0' }}</td>
-                  <td v-if="cfg.productCols.status"><span class="product-status" :class="productStatusTone(p.status)">{{ productStatusLabel(p.status) }}</span></td>
-                  <td v-if="cfg.productCols.category"><span class="title-text" :title="p.category_path">{{ p.category_path || '--' }}</span></td>
-                  <td v-if="cfg.productCols.inventory">{{ p.inventory ?? '--' }}</td>
-                  <td v-if="cfg.productCols.video">{{ yesNo(p.has_video) }}</td>
-                  <td v-if="cfg.productCols.freeShipping">{{ yesNo(p.has_free_shipping) }}</td>
-                  <td v-if="cfg.productCols.createdTime">{{ dateOnly(productCreatedTime(p)) }}</td>
-                  <td v-if="cfg.productCols.updatedTime">{{ shortDate(p.updated_time) }}</td>
-                  <td v-if="cfg.productCols.action">
-                    <a class="row-action" :href="productTrendHref(p)" @click.stop.prevent="openProductTrend(p)">Trend</a>
-                  </td>
-                </tr>
-                <tr v-if="loading && !products.length">
-                  <td :colspan="1 + visibleProductColumnCount" class="empty">产品数据加载中...</td>
-                </tr>
-                <tr v-else-if="!products.length">
-                  <td :colspan="1 + visibleProductColumnCount" class="empty">暂无数据 · 切换 site 或先抓取</td>
-                </tr>
-              </tbody>
-            </table>
+                  </div>
+                </div>
+              </template>
+              <template #label-cell="{ row }">
+                <div v-if="productLabels(row.original).length" class="mini-tags">
+                  <span v-for="tag in productLabels(row.original)" :key="tag">{{ tag }}</span>
+                </div>
+                <span v-else>--</span>
+              </template>
+              <template #variantId-cell="{ row }">{{ row.original.variant_id || row.original.variantId || '--' }}</template>
+              <template #variantCount-cell="{ row }">{{ row.original.variant_count ?? 1 }}</template>
+              <template #attrs-cell="{ row }">
+                <div class="attr-cell">
+                  <div v-for="[key, val] in attrEntries(row.original).slice(0, 4)" :key="key">{{ key }}: {{ val }}</div>
+                  <div v-if="attrEntries(row.original).length > 4" style="color:#9ca3af">+{{ attrEntries(row.original).length - 4 }}</div>
+                  <div v-if="attrEntries(row.original).length === 0" style="color:#9ca3af">--</div>
+                </div>
+              </template>
+              <template #salePrice-cell="{ row }">{{ fmtPrice(row.original.sale_price ?? row.original.price, rowCurrency(row.original)) }}</template>
+              <template #price-cell="{ row }">{{ fmtPrice(row.original.original_price, rowCurrency(row.original)) }}</template>
+              <template #sales-cell="{ row }">{{ row.original.thirty_day_sales != null ? Number(row.original.thirty_day_sales).toLocaleString() : '0' }}</template>
+              <template #revenue-cell="{ row }">{{ fmtPrice(row.original.thirty_day_revenue ?? 0, rowCurrency(row.original)) }}</template>
+              <template #rating-cell="{ row }">
+                <div class="rating-cell">
+                  <span class="stars">{{ ratingStars(row.original) }}</span>
+                  <small>{{ ratingLabel(row.original) }}</small>
+                </div>
+              </template>
+              <template #reviews-cell="{ row }">{{ row.original.review_count != null ? Number(row.original.review_count).toLocaleString() : '0' }}</template>
+              <template #status-cell="{ row }"><span class="product-status" :class="productStatusTone(row.original.status)">{{ productStatusLabel(row.original.status) }}</span></template>
+              <template #category-cell="{ row }"><span class="title-text" :title="row.original.category_path">{{ row.original.category_path || '--' }}</span></template>
+              <template #inventory-cell="{ row }">{{ row.original.inventory ?? '--' }}</template>
+              <template #video-cell="{ row }">{{ yesNo(row.original.has_video) }}</template>
+              <template #freeShipping-cell="{ row }">{{ yesNo(row.original.has_free_shipping) }}</template>
+              <template #createdTime-cell="{ row }">{{ dateOnly(productCreatedTime(row.original)) }}</template>
+              <template #updatedTime-cell="{ row }">{{ shortDate(row.original.updated_time) }}</template>
+              <template #action-cell="{ row }"><a class="row-action" :href="productTrendHref(row.original)" @click.stop.prevent="openProductTrend(row.original)">Trend</a></template>
+            </UTable>
           </DataLoadingPanel>
           <div class="pagination">
-            <button @click="page = Math.max(1, page - 1)" :disabled="page <= 1">‹</button>
-            <button v-if="productPageButtons[0] > 1" @click="page = 1">1</button>
-            <span v-if="productPageButtons[0] > 2">…</span>
-            <button v-for="p in productPageButtons" :key="p" @click="page = p" :class="{ active: page === p }">{{ p }}</button>
-            <span v-if="productPageButtons[productPageButtons.length - 1] < totalPages - 1">…</span>
-            <button v-if="productPageButtons[productPageButtons.length - 1] < totalPages" @click="page = totalPages">{{ totalPages }}</button>
-            <button @click="page = Math.min(totalPages, page + 1)" :disabled="page >= totalPages">›</button>
-            <select v-model="pageSize" @change="page = 1">
-              <option :value="10">10 / page</option>
-              <option :value="20">20 / page</option>
-              <option :value="50">50 / page</option>
-              <option :value="100">100 / page</option>
-              <option :value="200">200 / page</option>
-            </select>
+            <UPagination
+              :page="page"
+              :total="total"
+              :items-per-page="Number(pageSize)"
+              size="sm"
+              show-edges
+              @update:page="setProductPage"
+            />
+            <USelect v-model="pageSize" class="report-select page-size-select" :items="productPageSizeItems" value-key="value" @update:model-value="page = 1" />
           </div>
         </div>
       </template>
@@ -909,96 +1011,60 @@ onMounted(async () => {
             <h3>🎁 销售促销 <span class="desc">查看产品的促销信息</span></h3>
             <div class="actions">
               <button class="icon-btn" @click="loadReport">↻ Refresh</button>
-              <select v-if="canEdit" v-model="promoExportScope" class="export-scope" aria-label="Promotion export scope">
-                <option value="all">Export all</option>
-                <option value="page">Export page</option>
-              </select>
+              <USelect v-if="canEdit" v-model="promoExportScope" class="report-select export-scope" :items="exportScopeItems" value-key="value" aria-label="Promotion export scope" />
               <button v-if="canEdit" class="icon-btn" @click="exportPromotions">↓ Export</button>
             </div>
           </div>
           <div class="promo-filters">
             <input v-model="promoSearch" placeholder="Search SKU / Product title / URL / Campaign" @keyup.enter="applyPromoFilters" />
-            <select v-model="promoType" @change="applyPromoFilters">
-              <option value="">All types</option>
-              <option value="price">Price Promotion</option>
-              <option value="coupon">Coupons</option>
-              <option value="bundle">Bundle</option>
-            </select>
+            <USelect :model-value="promoType || EMPTY_SELECT" class="report-select promo-type-select" :items="promoTypeItems" value-key="value" @update:model-value="setPromoType" />
             <input v-model="promoDateFrom" type="date" @change="applyPromoFilters" />
             <input v-model="promoDateTo" type="date" @change="applyPromoFilters" />
             <button class="icon-btn" @click="applyPromoFilters">Filter</button>
             <button class="icon-btn" @click="resetPromoFilters">Reset</button>
           </div>
           <DataLoadingPanel class="report-table-wrap" :loading="loading" :has-data="promotions.length > 0" label="正在更新促销列表">
-            <table>
-              <thead><tr>
-                <th style="width:50px">NO.</th>
-                <th style="width:110px">SKU</th>
-                <th style="width:150px">Updated Time</th>
-                <th style="min-width:300px">Products Details</th>
-                <th style="width:120px">Type</th>
-                <th style="min-width:180px">Name</th>
-                <th style="width:90px">Discount</th>
-                <th style="width:100px">Pre-price</th>
-                <th style="width:100px">Post-price</th>
-                <th style="min-width:130px">Threshold</th>
-                <th style="width:150px">Start Time</th>
-                <th style="width:150px">End Time</th>
-              </tr></thead>
-              <tbody>
-                <tr v-for="(p, i) in promotions" :key="p.id || p.sku">
-                  <td>{{ (promoPage - 1) * promoPageSize + i + 1 }}</td>
-                  <td>
-                    <div class="sku-stack">
-                      <a class="sku-link" :href="p.product_url || undefined" :target="p.product_url ? '_blank' : undefined" rel="noopener">{{ promoSkuLabel(p) }}</a>
-                      <span v-if="promoVariantText(p)" class="sku-variants">{{ promoVariantText(p) }}</span>
+            <UTable class="ui-table report-data-table" :data="promotions" :columns="promoColumns" :loading="loading" sticky="header" empty="暂无促销数据">
+              <template #no-cell="{ row }">{{ (promoPage - 1) * promoPageSize + row.index + 1 }}</template>
+              <template #sku-cell="{ row }">
+                <div class="sku-stack">
+                  <a class="sku-link" :href="row.original.product_url || undefined" :target="row.original.product_url ? '_blank' : undefined" rel="noopener">{{ promoSkuLabel(row.original) }}</a>
+                  <span v-if="promoVariantText(row.original)" class="sku-variants">{{ promoVariantText(row.original) }}</span>
+                </div>
+              </template>
+              <template #detected_time-cell="{ row }">{{ shortDate(row.original.detected_time || row.original.updated_at) }}</template>
+              <template #product_title-cell="{ row }">
+                <div class="title-cell">
+                  <img v-if="row.original.product_image" :src="row.original.product_image" class="thumb thumb-img" alt="" />
+                  <div v-else class="thumb">📦</div>
+                  <div class="info">
+                    <span class="title-text" :title="promoTitle(row.original)">{{ promoTitle(row.original) }}</span>
+                    <div v-if="promoLabels(row.original).length" class="mini-tags">
+                      <span v-for="(label, idx) in promoLabels(row.original)" :key="`${label}-${idx}`">{{ label }}</span>
                     </div>
-                  </td>
-                  <td>{{ shortDate(p.detected_time || p.updated_at) }}</td>
-                  <td>
-                    <div class="title-cell">
-                      <img v-if="p.product_image" :src="p.product_image" class="thumb thumb-img" alt="" />
-                      <div v-else class="thumb">📦</div>
-                      <div class="info">
-                        <span class="title-text" :title="promoTitle(p)">{{ promoTitle(p) }}</span>
-                        <div v-if="promoLabels(p).length" class="mini-tags">
-                          <span v-for="(label, idx) in promoLabels(p)" :key="`${label}-${idx}`">{{ label }}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </td>
-                  <td>{{ promoTypeLabel(p.promotion_type || p.type) }}</td>
-                  <td><span class="title-text" :title="promoName(p)">{{ promoName(p) }}</span></td>
-                  <td>{{ promoDiscount(p) }}</td>
-                  <td>{{ fmtPrice(p.original_price, rowCurrency(p)) }}</td>
-                  <td>{{ fmtPrice(p.promotion_price, rowCurrency(p)) }}</td>
-                  <td>{{ p.threshold || '--' }}</td>
-                  <td>{{ dateTime(p.start_time) }}</td>
-                  <td>{{ dateTime(p.end_time) }}</td>
-                </tr>
-                <tr v-if="loading && !promotions.length">
-                  <td colspan="12" class="empty">促销数据加载中...</td>
-                </tr>
-                <tr v-else-if="!promotions.length">
-                  <td colspan="12" class="empty">暂无促销数据</td>
-                </tr>
-              </tbody>
-            </table>
+                  </div>
+                </div>
+              </template>
+              <template #promotion_type-cell="{ row }">{{ promoTypeLabel(row.original.promotion_type || row.original.type) }}</template>
+              <template #promotion_name-cell="{ row }"><span class="title-text" :title="promoName(row.original)">{{ promoName(row.original) }}</span></template>
+              <template #discount-cell="{ row }">{{ promoDiscount(row.original) }}</template>
+              <template #original_price-cell="{ row }">{{ fmtPrice(row.original.original_price, rowCurrency(row.original)) }}</template>
+              <template #promotion_price-cell="{ row }">{{ fmtPrice(row.original.promotion_price, rowCurrency(row.original)) }}</template>
+              <template #threshold-cell="{ row }">{{ row.original.threshold || '--' }}</template>
+              <template #start_time-cell="{ row }">{{ dateTime(row.original.start_time) }}</template>
+              <template #end_time-cell="{ row }">{{ dateTime(row.original.end_time) }}</template>
+            </UTable>
           </DataLoadingPanel>
           <div v-if="promoTotal" class="pagination">
-            <button @click="promoPage = Math.max(1, promoPage - 1)" :disabled="promoPage <= 1">‹</button>
-            <button v-if="promoPageButtons[0] > 1" @click="promoPage = 1">1</button>
-            <span v-if="promoPageButtons[0] > 2">…</span>
-            <button v-for="p in promoPageButtons" :key="p" @click="promoPage = p" :class="{ active: promoPage === p }">{{ p }}</button>
-            <span v-if="promoPageButtons[promoPageButtons.length - 1] < promoTotalPages - 1">…</span>
-            <button v-if="promoPageButtons[promoPageButtons.length - 1] < promoTotalPages" @click="promoPage = promoTotalPages">{{ promoTotalPages }}</button>
-            <button @click="promoPage = Math.min(promoTotalPages, promoPage + 1)" :disabled="promoPage >= promoTotalPages">›</button>
-            <select v-model="promoPageSize" @change="promoPage = 1">
-              <option :value="20">20 / page</option>
-              <option :value="50">50 / page</option>
-              <option :value="100">100 / page</option>
-              <option :value="200">200 / page</option>
-            </select>
+            <UPagination
+              :page="promoPage"
+              :total="promoTotal"
+              :items-per-page="Number(promoPageSize)"
+              size="sm"
+              show-edges
+              @update:page="setPromoPage"
+            />
+            <USelect v-model="promoPageSize" class="report-select page-size-select" :items="promoPageSizeItems" value-key="value" @update:model-value="promoPage = 1" />
             <span style="margin-left:8px;color:#9ca3af;font-size:12px">共 {{ promoTotal }} 条</span>
           </div>
         </div>
@@ -1055,12 +1121,7 @@ onMounted(async () => {
             <h4>时间范围</h4>
             <div class="cfg-row">
               <label style="flex:0">默认</label>
-              <select v-model="cfg.timeRange" style="margin-left:14px;flex:1">
-                <option value="7d">近 7 天</option>
-                <option value="30d">近 30 天</option>
-                <option value="90d">近 90 天</option>
-                <option value="all">全部</option>
-              </select>
+              <USelect v-model="cfg.timeRange" class="report-select cfg-select" :items="timeRangeItems" value-key="value" />
             </div>
           </div>
         </div>
@@ -1079,10 +1140,7 @@ onMounted(async () => {
           </div>
           <div class="filter-grid">
             <label>Category
-              <select v-model="filters.category">
-                <option value="">全部类目</option>
-                <option v-for="cat in categoryOptions" :key="cat" :value="cat">{{ cat }}</option>
-              </select>
+              <USelect v-model="categorySelect" class="report-select filter-select" :items="categoryItems" value-key="value" />
             </label>
             <label>Status
               <span class="choice-row">
@@ -1149,38 +1207,16 @@ onMounted(async () => {
             </div>
 
             <div class="trend-controls">
-              <select v-model="selectedTrendProductId" @change="switchProductTrendSku">
-                <option v-for="item in productTrendVariants" :key="item.id" :value="item.id">
-                  {{ variantLabel(item) }}
-                </option>
-                <option v-if="!productTrendVariants.length" :value="detail.id">{{ detail.sku || detail.id }}</option>
-              </select>
-              <select v-model="trendGranularity" @change="applyProductTrendFilters">
-                <option value="month">By Month</option>
-                <option value="week">By Week</option>
-                <option value="day">By Days</option>
-              </select>
+              <USelect :model-value="selectedTrendProductId" class="report-select" :items="trendVariantItems" value-key="value" @update:model-value="setSelectedTrendProduct" />
+              <USelect :model-value="trendGranularity" class="report-select" :items="granularityItems" value-key="value" @update:model-value="setTrendGranularity" />
               <input v-model="trendDateFrom" type="date" @change="applyProductTrendFilters" />
               <input v-model="trendDateTo" type="date" @change="applyProductTrendFilters" />
               <input v-model="trendPromoSearch" placeholder="Search product title / campaign" @keyup.enter="applyProductTrendFilters" />
-              <select v-model="trendPromoSku" @change="applyProductTrendFilters">
-                <option value="">All SKU promotions</option>
-                <option v-for="item in productTrendVariants" :key="`promo-${item.id}`" :value="item.sku">
-                  {{ item.sku || item.id }}
-                </option>
-              </select>
-              <select v-model="trendPromoType" @change="applyProductTrendFilters">
-                <option value="">All campaign types</option>
-                <option value="coupon">Coupons</option>
-                <option value="price">Price Promotion</option>
-                <option value="bundle">Bundle</option>
-              </select>
+              <USelect :model-value="trendPromoSku || EMPTY_SELECT" class="report-select" :items="trendPromoSkuItems" value-key="value" @update:model-value="setTrendPromoSku" />
+              <USelect :model-value="trendPromoType || EMPTY_SELECT" class="report-select" :items="promoTypeItems" value-key="value" @update:model-value="setTrendPromoType" />
               <button class="row-action" @click="applyProductTrendFilters">Filter</button>
               <button class="row-action" @click="resetProductTrendFilters">Reset</button>
-              <select v-if="canEdit" v-model="trendPromoExportScope" class="export-scope" aria-label="Product trend promotion export scope">
-                <option value="all">Export all</option>
-                <option value="page">Export page</option>
-              </select>
+              <USelect v-if="canEdit" v-model="trendPromoExportScope" class="report-select export-scope" :items="exportScopeItems" value-key="value" aria-label="Product trend promotion export scope" />
               <button v-if="canEdit" class="row-action" @click="exportProductTrend">Export</button>
             </div>
             <div v-if="productTrendVariants.length > 1" class="variant-count-note">
@@ -1209,73 +1245,65 @@ onMounted(async () => {
             <div class="prod-detail-history">
               <h4>Trend Details</h4>
               <div v-if="!productTrendRows.length" class="sub">暂无历史快照</div>
-              <table v-else>
-                <thead><tr><th>Date</th><th>Sales Price</th><th>Price</th><th>Ratings</th><th>Reviews</th><th>Sales</th><th>Revenues</th></tr></thead>
-                <tbody>
-                  <tr v-for="(h, i) in productTrendRows" :key="i">
-                    <td>{{ (h.date || '').slice(0, 10) }}</td>
-                    <td>{{ fmtPrice(h.sale_price, rowCurrency(h)) }}</td>
-                    <td>{{ fmtPrice(h.original_price, rowCurrency(h)) }}</td>
-                    <td>{{ h.avg_rating ?? h.ratings ?? '—' }}</td>
-                    <td>{{ h.review_total ?? h.review_count ?? '—' }}</td>
-                    <td>{{ h.estimated_sales ?? 0 }}</td>
-                    <td>{{ fmtPrice(h.estimated_revenue ?? 0, rowCurrency(h)) }}</td>
-                  </tr>
-                </tbody>
-              </table>
+              <UTable v-else class="ui-table" :data="productTrendRows" :columns="trendDetailColumns" sticky="header">
+                <template #date-cell="{ row }">{{ (row.original.date || '').slice(0, 10) }}</template>
+                <template #sale_price-cell="{ row }">{{ fmtPrice(row.original.sale_price, rowCurrency(row.original)) }}</template>
+                <template #original_price-cell="{ row }">{{ fmtPrice(row.original.original_price, rowCurrency(row.original)) }}</template>
+                <template #avg_rating-cell="{ row }">{{ row.original.avg_rating ?? row.original.ratings ?? '—' }}</template>
+                <template #review_total-cell="{ row }">{{ row.original.review_total ?? row.original.review_count ?? '—' }}</template>
+                <template #estimated_sales-cell="{ row }">{{ row.original.estimated_sales ?? 0 }}</template>
+                <template #estimated_revenue-cell="{ row }">{{ fmtPrice(row.original.estimated_revenue ?? 0, rowCurrency(row.original)) }}</template>
+              </UTable>
             </div>
 
             <div class="prod-detail-history">
               <h4>Sales Promotion <span class="sub">({{ trendPromoSku ? `SKU ${trendPromoSku}` : 'All listing SKU' }})</span></h4>
               <div v-if="!productPromotions.length" class="sub">暂无促销记录</div>
-              <table v-else>
-                <thead><tr><th>Updated Time</th><th>SKU</th><th style="min-width:220px">Products Details</th><th>Type</th><th>Name</th><th>Discount</th><th>Pre-price</th><th>Post-price</th><th>Threshold</th><th>Start Time</th><th>End Time</th></tr></thead>
-                <tbody>
-                  <tr v-for="promo in productPromotions" :key="promo.id">
-                    <td>{{ dateTime(promo.detected_time) }}</td>
-                    <td>
-                      <div class="sku-stack">
-                        <span>{{ promoSkuLabel(promo) }}</span>
-                        <span v-if="promoVariantText(promo)" class="sku-variants">{{ promoVariantText(promo) }}</span>
+              <UTable v-else class="ui-table" :data="productPromotions" :columns="trendPromoColumns" sticky="header">
+                <template #detected_time-cell="{ row }">{{ dateTime(row.original.detected_time) }}</template>
+                <template #sku-cell="{ row }">
+                  <div class="sku-stack">
+                    <span>{{ promoSkuLabel(row.original) }}</span>
+                    <span v-if="promoVariantText(row.original)" class="sku-variants">{{ promoVariantText(row.original) }}</span>
+                  </div>
+                </template>
+                <template #product_title-cell="{ row }">
+                  <div class="title-cell">
+                    <img v-if="row.original.product_image || detail.image" :src="row.original.product_image || detail.image" class="thumb thumb-img" alt="" />
+                    <div v-else class="thumb">📦</div>
+                    <div class="info">
+                      <span class="title-text" :title="row.original.product_title || productTitle(detail)">{{ row.original.product_title || productTitle(detail) }}</span>
+                      <div v-if="promoLabels(row.original).length" class="mini-tags">
+                        <span v-for="(label, idx) in promoLabels(row.original)" :key="`${label}-${idx}`">{{ label }}</span>
                       </div>
-                    </td>
-                    <td>
-                      <div class="title-cell">
-                        <img v-if="promo.product_image || detail.image" :src="promo.product_image || detail.image" class="thumb thumb-img" alt="" />
-                        <div v-else class="thumb">📦</div>
-                        <div class="info">
-                          <span class="title-text" :title="promo.product_title || productTitle(detail)">{{ promo.product_title || productTitle(detail) }}</span>
-                          <div v-if="promoLabels(promo).length" class="mini-tags">
-                            <span v-for="(label, idx) in promoLabels(promo)" :key="`${label}-${idx}`">{{ label }}</span>
-                          </div>
-                        </div>
-                      </div>
-                    </td>
-                    <td>{{ promoTypeLabel(promo.promotion_type) }}</td>
-                    <td>{{ promo.promotion_name || promo.product_title || '--' }}</td>
-                    <td>{{ promoDiscount(promo) }}</td>
-                    <td>{{ fmtPrice(promo.original_price, rowCurrency(promo)) }}</td>
-                    <td>{{ fmtPrice(promo.promotion_price, rowCurrency(promo)) }}</td>
-                    <td>{{ promo.threshold || '/' }}</td>
-                    <td>{{ dateTime(promo.start_time) }}</td>
-                    <td>{{ dateTime(promo.end_time) }}</td>
-                  </tr>
-                </tbody>
-              </table>
+                    </div>
+                  </div>
+                </template>
+                <template #promotion_type-cell="{ row }">{{ promoTypeLabel(row.original.promotion_type) }}</template>
+                <template #promotion_name-cell="{ row }">{{ row.original.promotion_name || row.original.product_title || '--' }}</template>
+                <template #discount-cell="{ row }">{{ promoDiscount(row.original) }}</template>
+                <template #original_price-cell="{ row }">{{ fmtPrice(row.original.original_price, rowCurrency(row.original)) }}</template>
+                <template #promotion_price-cell="{ row }">{{ fmtPrice(row.original.promotion_price, rowCurrency(row.original)) }}</template>
+                <template #threshold-cell="{ row }">{{ row.original.threshold || '/' }}</template>
+                <template #start_time-cell="{ row }">{{ dateTime(row.original.start_time) }}</template>
+                <template #end_time-cell="{ row }">{{ dateTime(row.original.end_time) }}</template>
+              </UTable>
               <div v-if="trendPromoTotal > trendPromoPageSize" class="pagination trend-promo-pager">
-                <button @click="changeTrendPromoPage(trendPromoPage - 1)" :disabled="trendPromoPage <= 1">‹</button>
-                <button v-if="trendPromoPageButtons[0] > 1" @click="changeTrendPromoPage(1)">1</button>
-                <span v-if="trendPromoPageButtons[0] > 2">…</span>
-                <button v-for="p in trendPromoPageButtons" :key="`trend-promo-${p}`" @click="changeTrendPromoPage(p)" :class="{ active: trendPromoPage === p }">{{ p }}</button>
-                <span v-if="trendPromoPageButtons[trendPromoPageButtons.length - 1] < trendPromoTotalPages - 1">…</span>
-                <button v-if="trendPromoPageButtons[trendPromoPageButtons.length - 1] < trendPromoTotalPages" @click="changeTrendPromoPage(trendPromoTotalPages)">{{ trendPromoTotalPages }}</button>
-                <button @click="changeTrendPromoPage(trendPromoPage + 1)" :disabled="trendPromoPage >= trendPromoTotalPages">›</button>
-                <select v-model="trendPromoPageSize" @change="trendPromoPage = 1; reloadProductTrend()">
-                  <option :value="20">20 / page</option>
-                  <option :value="50">50 / page</option>
-                  <option :value="100">100 / page</option>
-                  <option :value="200">200 / page</option>
-                </select>
+                <UPagination
+                  :page="trendPromoPage"
+                  :total="trendPromoTotal"
+                  :items-per-page="Number(trendPromoPageSize)"
+                  size="sm"
+                  show-edges
+                  @update:page="changeTrendPromoPage"
+                />
+                <USelect
+                  :model-value="trendPromoPageSize"
+                  class="report-select page-size-select"
+                  :items="promoPageSizeItems"
+                  value-key="value"
+                  @update:model-value="setTrendPromoPageSize"
+                />
                 <span class="pager-total">共 {{ trendPromoTotal }} 条</span>
               </div>
             </div>
@@ -1302,8 +1330,54 @@ onMounted(async () => {
   --report-warning-text: #b45309;
 }
 .icon-btn.filter-on { border-color:var(--report-accent); color:var(--report-accent); background:var(--report-accent-soft); }
-.gran-select { padding:7px 30px 7px 10px; border:1px solid var(--report-control-border); border-radius:7px; font-size:12.5px; font-family:inherit; background:var(--report-control-bg); color:var(--report-control-text); cursor:pointer; }
-.export-scope { height:34px; padding:0 28px 0 10px; border:1px solid var(--report-control-border); border-radius:7px; background:var(--report-control-bg); color:var(--report-control-text); font:inherit; font-size:12.5px; cursor:pointer; }
+.report-select {
+  min-width:0;
+  min-height:34px!important;
+  border:1px solid var(--report-control-border)!important;
+  border-radius:8px!important;
+  background:var(--report-control-bg)!important;
+  color:var(--report-control-text)!important;
+  flex:0 0 auto;
+  box-shadow:0 8px 18px rgba(37,29,61,.06)!important;
+}
+.report-select:hover {
+  border-color:var(--report-accent)!important;
+  background:var(--report-control-bg-strong)!important;
+}
+.report-select:focus-visible {
+  outline:2px solid rgba(124,58,237,.18)!important;
+  outline-offset:2px!important;
+}
+:global(.report-page .report-select) {
+  min-width:0;
+  min-height:34px!important;
+  border:1px solid var(--report-control-border)!important;
+  border-radius:8px!important;
+  background:var(--report-control-bg)!important;
+  color:var(--report-control-text)!important;
+  flex:0 0 auto;
+  box-shadow:0 8px 18px rgba(37,29,61,.06)!important;
+}
+:global(.report-page .report-select:hover) {
+  border-color:var(--report-accent)!important;
+  background:var(--report-control-bg-strong)!important;
+}
+:global(.report-page .report-select:focus-visible) {
+  outline:2px solid rgba(124,58,237,.18)!important;
+  outline-offset:2px!important;
+}
+.site-select { width:220px!important; max-width:100%; }
+.gran-select { width:132px!important; min-width:132px!important; }
+.export-scope { width:132px!important; min-width:132px!important; }
+.page-size-select { width:116px!important; min-width:116px!important; }
+.promo-type-select { width:142px!important; min-width:142px!important; }
+.cfg-select,.filter-select { width:100%!important; }
+:global(.report-page .site-select) { width:220px!important; max-width:100%; }
+:global(.report-page .gran-select) { width:132px!important; min-width:132px!important; }
+:global(.report-page .export-scope) { width:132px!important; min-width:132px!important; }
+:global(.report-page .page-size-select) { width:116px!important; min-width:116px!important; }
+:global(.report-page .promo-type-select) { width:142px!important; min-width:142px!important; }
+:global(.report-page .cfg-select),:global(.report-page .filter-select) { width:100%!important; }
 .date-input { height:32px; padding:0 9px; border:1px solid var(--report-control-border); border-radius:7px; background:var(--report-control-bg); color:var(--report-control-text); font-size:12px; font-family:inherit; }
 .range-sep,.range-note { color:var(--report-control-muted); font-size:12px; }
 .store-trend-table { margin-top:14px; overflow:auto; border:1px solid var(--report-control-border); border-radius:8px; background:var(--report-control-bg-strong); }
@@ -1317,8 +1391,8 @@ onMounted(async () => {
 .filter-modal .od-modal-head h3 { margin:0; color:var(--ui-heading); font-size:1rem; font-weight:900; }
 .filter-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:12px; padding:16px; }
 .filter-grid label { display:flex; flex-direction:column; gap:6px; font-size:12px; font-weight:800; color:var(--report-control-muted); }
-.filter-grid input, .filter-grid select { min-height:36px; padding:7px 10px; border:1px solid var(--report-control-border); border-radius:7px; font-size:12.5px; font-family:inherit; background:var(--report-control-bg); color:var(--report-control-text); outline:none; box-shadow:none; }
-.filter-grid input:focus, .filter-grid select:focus { border-color:var(--report-accent); background:var(--report-control-bg-strong); }
+.filter-grid input { min-height:36px; padding:7px 10px; border:1px solid var(--report-control-border); border-radius:7px; font-size:12.5px; font-family:inherit; background:var(--report-control-bg); color:var(--report-control-text); outline:none; box-shadow:none; }
+.filter-grid input:focus { border-color:var(--report-accent); background:var(--report-control-bg-strong); }
 .filter-grid input::placeholder, .promo-filters input::placeholder { color:var(--report-control-muted); }
 .filter-grid .rng { display:flex; gap:6px; }
 .filter-grid .rng input { width:100%; min-width:0; }
@@ -1341,12 +1415,12 @@ onMounted(async () => {
 .sku-variants { max-width:160px; color:var(--report-control-muted); font-size:11px; line-height:1.25; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .row-action { min-height:32px; display:inline-flex; align-items:center; justify-content:center; padding:5px 10px; border:1px solid rgba(167,139,250,.36); border-radius:7px; background:var(--report-accent-soft); color:var(--report-accent-strong); cursor:pointer; font-size:12px; font-weight:700; font-family:inherit; white-space:nowrap; text-decoration:none; }
 .row-action:hover { background:rgba(167,139,250,.20); }
-.filter-actions { display:flex; justify-content:flex-end; gap:8px; margin:0; padding:12px 16px; border-top:1px solid var(--ui-border); background:var(--ui-card-soft); }
+.filter-actions { position:sticky; bottom:0; z-index:3; display:flex; justify-content:flex-end; gap:8px; margin:0; padding:12px 16px; border-top:1px solid var(--ui-border); background:var(--ui-card-soft); }
 .filter-actions button { min-height:38px; padding:0 16px; border-radius:7px; border:1px solid var(--report-control-border); background:var(--report-control-bg); color:var(--report-control-text); cursor:pointer; font-size:12.5px; font-weight:800; font-family:inherit; transition:background .15s,border-color .15s,color .15s,transform .15s; }
 .filter-actions button:hover { transform:translateY(-1px); color:var(--report-accent-strong); border-color:rgba(167,139,250,.36); background:var(--report-accent-soft); }
 .filter-actions button.primary { background:linear-gradient(135deg,#a78bfa,#7c3aed); color:#fff; border-color:transparent; box-shadow:0 8px 18px rgba(124,58,237,.18); }
 .promo-filters { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
-.promo-filters input,.promo-filters select { padding:7px 10px; border:1px solid var(--report-control-border); border-radius:7px; font-size:12.5px; font-family:inherit; background:var(--report-control-bg); color:var(--report-control-text); }
+.promo-filters input { padding:7px 10px; border:1px solid var(--report-control-border); border-radius:7px; font-size:12.5px; font-family:inherit; background:var(--report-control-bg); color:var(--report-control-text); }
 .promo-filters input:first-child { min-width:220px; }
 .report-table-wrap { overflow:auto; border-radius:8px; }
 .thumb-img { object-fit:cover; }
@@ -1362,7 +1436,7 @@ onMounted(async () => {
 .prod-detail-history h4 { margin:0 0 8px; }
 .product-trend-modal { width:min(1120px, calc(100vw - 36px)); max-width:min(1120px, calc(100vw - 36px)); max-height:calc(100vh - 36px); overflow:auto; }
 .trend-controls { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:14px; padding:10px; border:1px solid var(--report-control-border); border-radius:9px; background:var(--report-panel-soft); }
-.trend-controls input,.trend-controls select { min-height:32px; padding:6px 9px; border:1px solid var(--report-control-border); border-radius:7px; background:var(--report-control-bg); color:var(--report-control-text); font-size:12.5px; font-family:inherit; }
+.trend-controls input { min-height:32px; padding:6px 9px; border:1px solid var(--report-control-border); border-radius:7px; background:var(--report-control-bg); color:var(--report-control-text); font-size:12.5px; font-family:inherit; }
 .trend-controls input[type="text"],.trend-controls input:not([type]) { min-width:190px; }
 .variant-count-note { margin-top:8px; color:var(--report-control-muted); font-size:12px; }
 .product-trend-kpis { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; margin-top:16px; }
@@ -1375,15 +1449,53 @@ onMounted(async () => {
 .prod-detail-history table { width:100%; border-collapse:collapse; font-size:12.5px; }
 .prod-detail-history th,.prod-detail-history td { padding:8px 9px; border-bottom:1px solid var(--report-control-border); text-align:left; white-space:nowrap; color:var(--report-control-text); }
 .prod-detail-history th { color:var(--report-control-muted); background:var(--report-panel-soft); font-weight:700; }
-.od-modal-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+.od-modal-head { position:sticky; top:0; z-index:3; display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; background:var(--ui-card); padding-bottom:10px; }
 .od-x { width:30px; height:30px; display:inline-flex; align-items:center; justify-content:center; background:var(--report-control-bg); color:var(--report-control-muted); border:1px solid var(--report-control-border); border-radius:7px; cursor:pointer; font-size:1rem; }
 .od-x:hover { color:var(--report-accent-strong); background:var(--report-accent-soft); border-color:rgba(167,139,250,.36); }
 :global(html[data-theme="dark"]) .report-page {
   --report-warning-bg: rgba(251, 191, 36, .16);
   --report-warning-text: #fcd34d;
 }
+:global(html[data-theme="dark"]) .report-select {
+  box-shadow:0 8px 18px rgba(0,0,0,.28)!important;
+}
 @media (max-width: 980px) {
   .product-trend-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media (max-width: 720px) {
+  .report-page { padding:12px; }
+  .crumb { flex-direction:column; align-items:flex-start; gap:5px; }
+  .site-card .top { flex-direction:column; align-items:stretch; gap:10px; }
+  .site-card h2 { line-height:1.25; overflow-wrap:anywhere; }
+  .site-card .url { display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .date-picker { width:100%; display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .date-picker .site-select { grid-column:1 / -1; min-width:0; width:100%; }
+  .date-picker .icon-btn { width:100%; justify-content:center; }
+  .report-page .tab-row { display:grid; grid-template-columns:1fr; gap:6px; border-bottom:0; margin-bottom:14px; }
+  .report-page .tab-row button { justify-content:center; border:1px solid var(--report-control-border); border-radius:8px; background:var(--report-control-bg-strong); }
+  .report-page .tab-row button.active { border-color:var(--report-accent); background:var(--report-accent-soft); }
+  .section-head { flex-direction:column; align-items:stretch; gap:10px; }
+  .section-head .actions { width:100%; display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .section-head .actions > * { min-width:0; width:100%; justify-content:center; }
+  .sub-tabs { margin:12px 0; display:grid; grid-template-columns:1fr; gap:8px; }
+  .sub-tabs .right { margin-left:0; display:grid; grid-template-columns:1fr; gap:8px; }
+  .sub-tabs button,.search-box { width:100%; min-width:0; }
+  .promo-filters { display:grid; grid-template-columns:1fr; }
+  .promo-filters input:first-child,.promo-filters input,.promo-filters .report-select,.promo-filters button { width:100%!important; min-width:0!important; }
+  :global(.promo-filters .report-select) { width:100%!important; min-width:0!important; }
+  .filter-modal { width:calc(100vw - 28px); max-height:calc(100vh - 28px); }
+  .filter-grid { grid-template-columns:1fr; padding:14px; }
+  .filter-actions { flex-wrap:wrap; }
+  .filter-actions button { flex:1 1 130px; }
+  .cfg-drawer { width:min(100vw, 420px); }
+  .cfg-foot { flex-wrap:wrap; }
+  .cfg-foot button { flex:1 1 130px; }
+  .product-trend-modal { width:calc(100vw - 28px); max-width:calc(100vw - 28px); }
+  .prod-detail-top { flex-direction:column; }
+  .prod-detail-img { width:96px; height:96px; }
+  .trend-controls { display:grid; grid-template-columns:1fr; }
+  .trend-controls input,.trend-controls .report-select,.trend-controls input[type="text"],.trend-controls input:not([type]) { width:100%!important; min-width:0!important; }
+  :global(.trend-controls .report-select) { width:100%!important; min-width:0!important; }
 }
 @media (max-width: 560px) {
   .product-trend-kpis { grid-template-columns:1fr; }
