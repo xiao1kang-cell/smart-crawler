@@ -8,6 +8,7 @@ data/*.db
 .env
 data/
 backups/
+node_modules/
 frontend-app/node_modules/
 frontend-app/dist/
 frontend-app/.vite/
