@@ -183,17 +183,18 @@ workspace_id IN (...))` 子查询补判。两路合并为一个 allowlist / bloc
 
 ### 5.3 策略 B 配置（用户选定）
 
+验证租户 = **`xiaokang`**（`X` = 其 workspace_id，部署时查 PG 解析，见第 13 节）。
+
 | 节点 | 配置 | 效果 |
 |------|------|------|
-| mini1 | `WORKSPACE_ALLOWLIST=X` | 只领验证租户 X 的 job |
-| NAS worker | `WORKSPACE_BLOCKLIST=X` | 不领租户 X 的 job |
+| mini1 | `WORKSPACE_ALLOWLIST=X` | 只领 xiaokang 租户的 job |
+| NAS worker | `WORKSPACE_BLOCKLIST=X` | 不领 xiaokang 租户的 job |
 
-- 租户 X 100% 由 mini 跑，`crawl_jobs.worker` 全为 `US-macmini1-*`，归因无歧义。
+- 租户 xiaokang 100% 由 mini 跑，`crawl_jobs.worker` 全为 `US-macmini1-*`，归因无歧义。
 - 其余租户由 NAS 全量兜底，满足"整体不中断"。
-- **代价**：验证期租户 X 的可用性依赖 mini1；mini1 挂 → X 暂停抓。
-  - **缓解**：第一阶段选**非关键、低 SLA 租户**做 X。
+- **代价**：验证期 xiaokang 的可用性依赖 mini1；mini1 挂 → xiaokang 暂停抓。
   - **回退**：去掉 NAS `WORKSPACE_BLOCKLIST=X` 并重启 NAS worker，NAS 立即重新
-    接管 X（pending job 仍在 PG，乐观锁领取，不丢）。一条命令完成。
+    接管 xiaokang（pending job 仍在 PG，乐观锁领取，不丢）。一条命令完成。
 
 ## 6. NAS 侧改动
 
@@ -374,5 +375,11 @@ crawl_jobs，spine 任务留 NAS。** 后续如需保留 snapshot，可改落共
 - ~~mini SSH 用户名~~：已确认 `solvea@100.75.94.90`（mini1，免密直连）。
 - 每台 mini worker 进程数：默认 `2`（mini1 = 16GB/10核，跑 2 worker + Chrome 合理）。
 - snapshot：第一阶段关闭（`SNAPSHOT_ENABLED=0`）。
-- 验证租户 X 的具体 workspace_id：选非关键、低 SLA 租户。
+- 验证租户：已确认 **`xiaokang`** 租户用 mini 抓。其 `workspace_id` 在部署时
+  从 NAS PG 解析（一行查询）：
+  ```sql
+  SELECT id, name, slug FROM workspaces WHERE name='xiaokang' OR slug='xiaokang';
+  ```
+  把得到的 id 填入 mini 的 `WORKSPACE_ALLOWLIST` 与 NAS worker 的
+  `WORKSPACE_BLOCKLIST`。
 - 各 `proxy_endpoints.max_concurrency` 的具体值（住宅独享=1，网关=N）。
