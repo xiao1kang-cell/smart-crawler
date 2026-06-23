@@ -49,6 +49,16 @@ TRIGGER_ALLOWLIST = tuple(
     trigger.strip() for trigger in os.environ.get("TRIGGER_ALLOWLIST", "").split(",")
     if trigger.strip()
 ) or None
+
+
+def _env_int_tuple(name: str) -> tuple[int, ...] | None:
+    raw = os.environ.get(name, "")
+    ids = tuple(int(x.strip()) for x in raw.split(",") if x.strip().isdigit())
+    return ids or None
+
+
+WORKSPACE_ALLOWLIST = _env_int_tuple("WORKSPACE_ALLOWLIST")
+WORKSPACE_BLOCKLIST = _env_int_tuple("WORKSPACE_BLOCKLIST")
 # 内存自适应并发闸 —— 主机已用内存超阈值则暂停领新 job。设 0/100 关闸。
 MEM_THRESHOLD = float(os.environ.get("MEM_GATE_THRESHOLD", "80"))
 MEM_CHECK_INTERVAL = float(os.environ.get("MEM_GATE_CHECK_INTERVAL", "2"))
@@ -276,7 +286,9 @@ def run_loop(should_continue=None) -> None:
                 time.sleep(POLL_INTERVAL)
             continue
         try:
-            job_id = claim_job(WORKER_ID, TRIGGER_ALLOWLIST)
+            job_id = claim_job(WORKER_ID, TRIGGER_ALLOWLIST,
+                               workspace_allowlist=WORKSPACE_ALLOWLIST,
+                               workspace_blocklist=WORKSPACE_BLOCKLIST)
         except Exception as exc:
             logger.error("领取任务失败: %s", exc)
             time.sleep(POLL_INTERVAL)
