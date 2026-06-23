@@ -41,6 +41,7 @@ def record_proxy_result(
     success: bool,
     failure: FailureInfo | None = None,
     cooldown_sec: int = 600,
+    node: str = "nas",
 ) -> ProxyHealth | None:
     if not proxy_url:
         return None
@@ -49,11 +50,12 @@ def record_proxy_result(
     endpoint_tier = _endpoint_tier(session, h)
     health_tier = endpoint_tier or _normalized_health_tier(tier)
     row = (session.query(ProxyHealth)
-           .filter(ProxyHealth.proxy_hash == h)
+           .filter(ProxyHealth.proxy_hash == h, ProxyHealth.node == node)
            .first())
     if row is None:
         row = ProxyHealth(
             proxy_hash=h,
+            node=node,
             proxy_redacted=redact_proxy(proxy_url),
             tier=health_tier,
         )
@@ -148,23 +150,30 @@ def proxy_health_summary(session: Session) -> dict:
     }
 
 
-def unhealthy_proxy_hashes(session: Session) -> set[str]:
+def unhealthy_proxy_hashes(session: Session, node: str | None = None) -> set[str]:
+    """返回不健康（blocked/down/未过冷却的 degraded）的代理 proxy_hash 集合。
+
+    node：指定出口节点时只返回该节点判定为不健康的代理；node=None 表示
+    跨所有节点合并（向后兼容回退，非等价于任何单节点）——调用方应传入
+    明确的 node 值以获得按节点隔离的黑名单。
+    """
     now = datetime.utcnow()
-    rows = (session.query(ProxyHealth.proxy_hash)
-            .filter(
+    query = session.query(ProxyHealth.proxy_hash).filter(
+        or_(
+            ProxyHealth.status == "blocked",
+            ProxyHealth.status == "down",
+            and_(
+                ProxyHealth.status == "degraded",
                 or_(
-                    ProxyHealth.status == "blocked",
-                    ProxyHealth.status == "down",
-                    and_(
-                        ProxyHealth.status == "degraded",
-                        or_(
-                            ProxyHealth.blocked_until.is_(None),
-                            ProxyHealth.blocked_until > now,
-                        ),
-                    ),
-                )
-            )
-            .all())
+                    ProxyHealth.blocked_until.is_(None),
+                    ProxyHealth.blocked_until > now,
+                ),
+            ),
+        )
+    )
+    if node is not None:
+        query = query.filter(ProxyHealth.node == node)
+    rows = query.all()
     return {row[0] for row in rows if row[0]}
 
 
