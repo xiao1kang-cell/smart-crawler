@@ -12,6 +12,14 @@ def test_proxy_probe_records_timeout(monkeypatch):
     init_db()
     import app.proxy_probe as probe
 
+    # 清理残留数据，确保跨测试隔离（test_proxy_config_db 等可能留下脏行）
+    _cleanup = SessionLocal()
+    try:
+        _cleanup.query(ProxyHealth).delete()
+        _cleanup.commit()
+    finally:
+        _cleanup.close()
+
     monkeypatch.setattr(probe.proxy_pool, "get_proxy",
                         lambda tier, site=None: "http://u:p@127.0.0.1:3128")
     monkeypatch.setattr(probe.proxy_pool, "report_failure",

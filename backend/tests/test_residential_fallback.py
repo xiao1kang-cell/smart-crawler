@@ -59,6 +59,9 @@ def test_no_upgrade_when_pool_empty(monkeypatch):
 
 def test_proxy_middleware_uses_effective_tier(monkeypatch):
     """升级后 ProxyMiddleware 用 residential 取代理。"""
+    # proxy_lease_ttl_sec=0 强制走 get_proxy 分支（不走 lease），
+    # 以便 monkeypatch 的 get_proxy 能观察到 tier 值。
+    monkeypatch.setenv("PROXY_LEASE_TTL_SEC", "0")
     f = _fetcher(monkeypatch)
     fail = FailureInfo(HTTP_429, STAGE_FETCH, "429", True, "慢")
     for _ in range(3):
