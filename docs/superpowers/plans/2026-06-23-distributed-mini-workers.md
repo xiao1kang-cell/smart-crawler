@@ -869,6 +869,21 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 以下任务改动生产环境。**每个 Task 完成后人工确认再进入下一个**。回滚方案见设计文档第 9 节。
 
+### NAS 接入方式（关键 —— Task 9-12 的所有 NAS 命令都适用）
+
+NAS（`vocserver`，Tailscale `100.116.163.64`）有两个 SSH 入口，**用途不同**：
+
+- **`ssh root@100.116.163.64`（直连，免密）** → 进的是 **Tailscale sidecar 容器**（只有 `nc`，无 docker/psql）。**仅用于网络连通验证**（如从这里 `nc -z 127.0.0.1 5432`），**不能跑 docker/psql/迁移**。
+- **`ssh -J root@100.116.163.64 shilong@127.0.0.1`（跳板，内层 shilong 密码由用户提供）** → 才是能 `sudo docker` / `psql` 的真正部署环境。**本计划所有 `docker exec ...` / `psql ...` / 改 compose / 跑迁移命令都必须经此跳板执行。**
+
+**执行约定**：下文写成 `docker exec smart-crawler-pg psql ...` 的命令，实际执行时包成：
+```bash
+ssh -tt -J root@100.116.163.64 shilong@127.0.0.1 'sudo docker exec smart-crawler-pg psql ...'
+```
+（`-tt` 给 sudo 分配 TTY；`shilong` 不在 docker 组，故 `sudo docker`；**别加 `-o BatchMode=yes`**，会禁掉内层密码输入；**别反复无密码重试**，会触发 `Too many authentication failures` 锁连接。scp 用 `scp -O -J root@100.116.163.64 shilong@127.0.0.1:...`。）
+
+或直接调用 `smart-crawler-nas-deploy` skill，它封装了这套跳板 + sudo docker。
+
 ---
 
 ## Task 9: 【NAS·阶段0】PG 暴露到 Tailscale + worker 专用角色
@@ -877,7 +892,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - Modify: `docker-compose.yml`（postgres ports）
 - 运维：NAS 上的 pg_hba.conf、PG 角色
 
-**前置**：通过 NAS 部署方式登录（参考 `smart-crawler-nas-deploy` skill）。
+**前置**：经跳板 `ssh -J root@100.116.163.64 shilong@127.0.0.1` 登录（见上方"NAS 接入方式"），或用 `smart-crawler-nas-deploy` skill。
 
 - [ ] **Step 1: 建 worker 专用 PG 角色（最小权限）**
 
