@@ -55,16 +55,24 @@ import json
 import os
 import re
 import time
+from urllib.parse import urlencode
 
+from curl_cffi import requests as creq
+
+from .. import proxy_pool
 from ..antiban import BlockedError
+from ..crawl_diagnostics import STAGE_FETCH, classify_exception
+from ..fetching import FetchResult
 from .base import BaseCrawler, CrawlResult
 
-DEFAULT_LIMIT = int(os.environ.get("CDISCOUNT_LIMIT", "1000"))
-MAX_ELAPSED_SEC = float(os.environ.get("CDISCOUNT_MAX_ELAPSED_SEC", "180"))
-# 单类目最多翻几页（防止某些大类几百页打爆）
-PAGES_PER_CATEGORY = int(os.environ.get("CDISCOUNT_PAGES_PER_CAT", "5"))
-# 最多探索多少个列表页（防止 BFS 漫游失控）
-MAX_LIST_PAGES = int(os.environ.get("CDISCOUNT_MAX_LIST_PAGES", "120"))
+DEFAULT_LIMIT = int(os.environ.get("CDISCOUNT_LIMIT", "999999"))
+if DEFAULT_LIMIT <= 0 or DEFAULT_LIMIT == 1000:
+    DEFAULT_LIMIT = 999999
+MAX_ELAPSED_SEC = float(os.environ.get("CDISCOUNT_MAX_ELAPSED_SEC", "0"))
+# 0 表示不做保护性截断；只在显式调试时设置。
+PAGES_PER_CATEGORY = int(os.environ.get("CDISCOUNT_PAGES_PER_CAT", "0"))
+MAX_LIST_PAGES = int(os.environ.get("CDISCOUNT_MAX_LIST_PAGES", "0"))
+DISCOVERY_TARGET = int(os.environ.get("CDISCOUNT_DISCOVERY_TARGET", "0"))
 # 单 PDP 连续失败上限 → 重新握手 Baleen
 PDP_FAIL_RESET = int(os.environ.get("CDISCOUNT_PDP_FAIL_RESET", "5"))
 
@@ -81,13 +89,72 @@ _LIST_URL_RE = re.compile(r"(/[\w./\-]+/l-[\w.\-]+\.html)")
 _SKU_FROM_URL_RE = re.compile(r"/f-\d+-([\w.\-]+)\.html$")
 
 
+class _PersistentCdiscountFetcher:
+    """CDiscount Baleen requires one curl session across challenge + crawl."""
+
+    def __init__(self, crawler: "CdiscountCrawler"):
+        self.crawler = crawler
+        self.session = creq.Session(impersonate="chrome")
+        self.proxy = None
+        tier = crawler.site.proxy_tier
+        if tier and tier != "none":
+            self.proxy = proxy_pool.get_proxy(tier, site=crawler.site.site)
+            if self.proxy:
+                self.session.proxies = {"http": self.proxy, "https": self.proxy}
+
+    def get(self, url: str, **kwargs) -> FetchResult:
+        return self._request("GET", url, **kwargs)
+
+    def post(self, url: str, **kwargs) -> FetchResult:
+        return self._request("POST", url, **kwargs)
+
+    def _request(self, method: str, url: str, **kwargs) -> FetchResult:
+        timeout = int(kwargs.pop("timeout", 30))
+        headers = kwargs.pop("headers", None) or {}
+        kwargs.pop("kind", None)
+        kwargs.pop("source", None)
+        started = time.time()
+        try:
+            resp = self.session.request(
+                method, url, timeout=timeout, headers=headers, **kwargs)
+            text = resp.text or ""
+            content = resp.content or b""
+            ok = 200 <= int(resp.status_code or 0) < 400
+            if ok:
+                self.crawler.counter.api_calls += 1
+            return FetchResult(
+                ok=ok,
+                url=url,
+                status=resp.status_code,
+                text=text,
+                content=content,
+                final_url=getattr(resp, "url", None) or url,
+                proxy=self.proxy,
+                duration_ms=int((time.time() - started) * 1000),
+            )
+        except Exception as exc:
+            return FetchResult(
+                ok=False,
+                url=url,
+                proxy=self.proxy,
+                duration_ms=int((time.time() - started) * 1000),
+                failure=classify_exception(exc, stage=STAGE_FETCH),
+            )
+
+    def sync_cookies_to(self, jar: dict[str, str]) -> None:
+        for cookie in self.session.cookies.jar:
+            jar[cookie.name] = cookie.value
+
+
 class CdiscountCrawler(BaseCrawler):
     platform = "cdiscount"
 
     def __init__(self, site):
         super().__init__(site)
         self.base = site.url.rstrip("/")
-        self.limit = self._resolve_limit(DEFAULT_LIMIT)
+        # CDiscount 无公开全量 sitemap：limit 只控制详情解析量，不参与分母。
+        self.detail_limit = self._resolve_limit(
+            DEFAULT_LIMIT, honor_persisted=False)
         # Baleen cookie jar：key=name, value=value；握手后逐请求透传 Cookie 头
         self._baleen_cookies: dict[str, str] = {}
 
@@ -149,14 +216,19 @@ class CdiscountCrawler(BaseCrawler):
 
             check_url = (f"https://www.cdiscount.com/.well-known/baleen/"
                          f"challengejs/check?{cookie['name']}={cookie['value']}")
-            body = "&".join(f"{k}={v}" for k, v in check_params.items())
+            body = urlencode(check_params)
             try:
                 fetcher.post(
                     check_url, data=body,
                     headers={
                         **self._headers(),
                         "Content-Type": "application/x-www-form-urlencoded",
-                    })
+                        "Origin": "https://www.cdiscount.com",
+                        "Referer": _HOME,
+                    },
+                    kind="challenge",
+                    source="cdiscount_baleen",
+                )
             except Exception as exc:
                 result.notes.append(
                     f"⚠ Baleen 握手 #{attempt} check 失败: {exc}")
@@ -175,6 +247,8 @@ class CdiscountCrawler(BaseCrawler):
 
             html2 = res2.text or ""
             if _BALEEN_MARK not in html2 and len(html2) > 50_000:
+                if hasattr(fetcher, "sync_cookies_to"):
+                    fetcher.sync_cookies_to(self._baleen_cookies)
                 result.notes.append(
                     f"Baleen 握手成功（#{attempt}），首页 {len(html2)//1024}KB")
                 return html2
@@ -190,11 +264,7 @@ class CdiscountCrawler(BaseCrawler):
     # ------------------------------------------------------------------
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
-        fetcher = self.make_fetcher(
-            kind="product",
-            source="cdiscount",
-            use_proxy=False,
-        )
+        fetcher = _PersistentCdiscountFetcher(self)
         started = time.monotonic()
 
         # Step 1: warmup
@@ -215,19 +285,21 @@ class CdiscountCrawler(BaseCrawler):
             result.notes.append("⚠ 商品 URL 发现为 0，放弃 PDP 阶段")
             return result
         result.notes.append(
-            f"商品 URL 池：{len(product_urls)} 个（目标 {self.limit}）")
+            f"商品 URL 发现池：{len(product_urls)} 个"
+            f"（详情解析上限 {self.detail_limit}）")
+        result.total_product_count = len(product_urls)
 
         # Step 3: enrich —— 逐 PDP 解析 JSON-LD
         seen: set[str] = set()
         pdp_fails = 0
         ok = 0
         for idx, url in enumerate(product_urls, 1):
-            if time.monotonic() - started >= MAX_ELAPSED_SEC:
+            if MAX_ELAPSED_SEC > 0 and time.monotonic() - started >= MAX_ELAPSED_SEC:
                 result.notes.append(
                     f"达到 CDISCOUNT_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
                     f"提前返回已解析结果（ok={ok}, pdp_fails={pdp_fails}）")
                 break
-            if len(result.products) >= self.limit:
+            if len(result.products) >= self.detail_limit:
                 break
             try:
                 html = self._fetch_pdp(fetcher, url, result)
@@ -258,11 +330,24 @@ class CdiscountCrawler(BaseCrawler):
                 ok += 1
                 if ok % 100 == 0:
                     result.notes.append(
-                        f"  · 进度 {ok} / 目标 {self.limit}（已尝试 {idx}）")
+                        f"  · 进度 {ok} / 详情上限 {self.detail_limit}"
+                        f"（已尝试 {idx}）")
             self.sleep()
 
         result.notes.append(
             f"采集 {len(result.products)} 商品（PDP 失败累计 {pdp_fails}）")
+        if len(result.products) < len(product_urls):
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "fetch"
+            result.coverage_reason = (
+                f"CDiscount 已发现 {len(product_urls)} 个商品 URL，"
+                f"本次只完成 {len(result.products)} 个详情解析"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = (
+                "移除详情解析上限或继续重跑，直到本次发现池全部入库"
+            )
         return result
 
     # ------------------------------------------------------------------
@@ -280,12 +365,15 @@ class CdiscountCrawler(BaseCrawler):
 
         list_queue: list[str] = list(seed_lists)
         list_seen: set[str] = set()
-        # 目标 URL 数 = limit * 1.3（留 30% 余量给 PDP 失败/重复 SKU）
-        target = int(self.limit * 1.3)
+        # DISCOVERY_TARGET 仅用于调试，默认 0 表示把可达列表池扫完。
+        target = DISCOVERY_TARGET
         scanned_lists = 0
 
-        while (list_queue and len(products) < target
-               and scanned_lists < MAX_LIST_PAGES):
+        while (
+            list_queue
+            and (target <= 0 or len(products) < target)
+            and (MAX_LIST_PAGES <= 0 or scanned_lists < MAX_LIST_PAGES)
+        ):
             list_path = list_queue.pop(0)
             if list_path in list_seen:
                 continue
@@ -296,8 +384,11 @@ class CdiscountCrawler(BaseCrawler):
 
             # 翻 PAGES_PER_CATEGORY 页
             empty_streak = 0
-            for page in range(1, PAGES_PER_CATEGORY + 1):
-                if len(products) >= target:
+            page = 1
+            while True:
+                if target > 0 and len(products) >= target:
+                    break
+                if PAGES_PER_CATEGORY > 0 and page > PAGES_PER_CATEGORY:
                     break
                 url = full if page == 1 else f"{full}?page={page}"
                 try:
@@ -344,6 +435,7 @@ class CdiscountCrawler(BaseCrawler):
                     empty_streak = 0
 
                 self.sleep()
+                page += 1
 
             if scanned_lists % 20 == 0:
                 result.notes.append(

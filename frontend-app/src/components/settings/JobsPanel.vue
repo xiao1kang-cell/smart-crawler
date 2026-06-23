@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { asList, fmtDate } from '../../api/client'
-import { crawlDiagnostics, listJobs, retryJob } from '../../api/jobs'
+import { crawlDiagnostics, listFailedProducts, listJobs, retryFailedProducts, retryJob } from '../../api/jobs'
 import DataLoadingPanel from '../common/DataLoadingPanel.vue'
 import PageLoading from '../common/PageLoading.vue'
 import StatusBadge from '../common/StatusBadge.vue'
@@ -18,6 +18,17 @@ const error = ref('')
 const actionMsg = ref('')
 const loading = ref(false)
 const retryingId = ref<number | string | null>(null)
+const failedDrawerOpen = ref(false)
+const failedLoading = ref(false)
+const failedRetrying = ref(false)
+const failedJob = ref<Record<string, any> | null>(null)
+const failedRows = ref<Record<string, any>[]>([])
+const failedTotal = ref(0)
+const failedPage = ref(1)
+const failedPageSize = ref(50)
+const failedFailureCode = ref('')
+const failedSummary = ref<Record<string, any>>({})
+const selectedFailedUrls = ref<Set<string>>(new Set())
 const statusFilter = ref('all')
 const pageSize = ref(20)
 const page = ref(1)
@@ -41,6 +52,17 @@ const successCount = computed(() => Number(jobSummary.value.success ?? jobs.valu
 const totalPages = computed(() => Math.max(1, Math.ceil(jobTotal.value / Number(pageSize.value || 20))))
 const pageStart = computed(() => jobs.value.length ? (page.value - 1) * Number(pageSize.value || 20) + 1 : 0)
 const pageEnd = computed(() => jobs.value.length ? pageStart.value + jobs.value.length - 1 : 0)
+const failedTotalPages = computed(() => Math.max(1, Math.ceil(failedTotal.value / Number(failedPageSize.value || 50))))
+const failedFailureItems = computed(() => {
+  const counts = failedSummary.value?.by_failure || {}
+  return [
+    { label: '全部失败码', value: '' },
+    ...Object.entries(counts).map(([code, count]) => ({
+      label: `${code} · ${count}`,
+      value: code,
+    })),
+  ]
+})
 
 async function load() {
   loading.value = true
@@ -83,9 +105,132 @@ async function retry(job: Record<string, any>) {
   }
 }
 
+function canOpenFailedProducts(job: Record<string, any>) {
+  return Boolean(job.site)
+}
+
+async function openFailedProducts(job: Record<string, any>) {
+  failedJob.value = job
+  failedDrawerOpen.value = true
+  failedPage.value = 1
+  failedFailureCode.value = ''
+  selectedFailedUrls.value = new Set()
+  await loadFailedProducts()
+}
+
+async function loadFailedProducts() {
+  const job = failedJob.value
+  if (!job?.site) return
+  failedLoading.value = true
+  error.value = ''
+  try {
+    const data = await listFailedProducts({
+      site: job.site,
+      job_id: job.id,
+      failure_code: failedFailureCode.value || undefined,
+      page: failedPage.value,
+      page_size: failedPageSize.value,
+    })
+    failedRows.value = asList(data, ['items'])
+    failedTotal.value = Number(data?.total ?? failedRows.value.length)
+    failedSummary.value = data?.summary || {}
+    failedPage.value = Math.min(Math.max(1, Number(data?.page ?? failedPage.value)), failedTotalPages.value)
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    failedLoading.value = false
+  }
+}
+
+function closeFailedDrawer() {
+  failedDrawerOpen.value = false
+  failedJob.value = null
+  failedRows.value = []
+  selectedFailedUrls.value = new Set()
+}
+
+function toggleFailedUrl(url?: string, checked?: boolean) {
+  if (!url) return
+  const next = new Set(selectedFailedUrls.value)
+  if (checked) next.add(url)
+  else next.delete(url)
+  selectedFailedUrls.value = next
+}
+
+function toggleFailedUrlFromEvent(url: string | undefined, event: Event) {
+  toggleFailedUrl(url, Boolean((event.target as HTMLInputElement | null)?.checked))
+}
+
+function selectAllVisible(checked: boolean) {
+  const next = new Set(selectedFailedUrls.value)
+  for (const row of failedRows.value) {
+    if (!row.url) continue
+    if (checked) next.add(row.url)
+    else next.delete(row.url)
+  }
+  selectedFailedUrls.value = next
+}
+
+function selectAllVisibleFromEvent(event: Event) {
+  selectAllVisible(Boolean((event.target as HTMLInputElement | null)?.checked))
+}
+
+async function retryFailed(scope: 'selected' | 'filter') {
+  const job = failedJob.value
+  if (!job?.site || failedRetrying.value) return
+  const urls = Array.from(selectedFailedUrls.value)
+  if (scope === 'selected' && !urls.length) {
+    actionMsg.value = '请先勾选要重抓的失败 URL'
+    return
+  }
+  failedRetrying.value = true
+  error.value = ''
+  actionMsg.value = ''
+  try {
+    const res = await retryFailedProducts({
+      site: job.site,
+      job_id: job.id,
+      failure_code: scope === 'filter' ? failedFailureCode.value || undefined : undefined,
+      urls: scope === 'selected' ? urls : undefined,
+      limit: 500,
+    })
+    actionMsg.value = `已创建失败商品重抓任务 #${res?.job_id ?? '-'}，选中 ${res?.selected_count ?? (urls.length || 0)} 条`
+    selectedFailedUrls.value = new Set()
+    await Promise.all([loadFailedProducts(), load()])
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    failedRetrying.value = false
+  }
+}
+
+async function copyUrl(url?: string) {
+  if (!url) return
+  try {
+    await navigator.clipboard.writeText(url)
+    actionMsg.value = 'URL 已复制'
+  } catch {
+    actionMsg.value = url
+  }
+}
+
 function resetPageAndLoad() {
   page.value = 1
   load()
+}
+
+function resetFailedPageAndLoad() {
+  failedPage.value = 1
+  selectedFailedUrls.value = new Set()
+  loadFailedProducts()
+}
+
+function changeFailedPage(delta: number) {
+  const next = Math.min(failedTotalPages.value, Math.max(1, failedPage.value + delta))
+  if (next === failedPage.value) return
+  failedPage.value = next
+  selectedFailedUrls.value = new Set()
+  loadFailedProducts()
 }
 
 function changePage(delta: number) {
@@ -108,6 +253,10 @@ function fmtJobTime(value?: string | null) {
 
 function failureText(job: Record<string, any>) {
   return job.failure_code || (job.error ? 'unknown' : '—')
+}
+
+function failedProductCountText() {
+  return `${failedRows.value.length}/${failedTotal.value}`
 }
 
 function failureTitle(job: Record<string, any>) {
@@ -139,7 +288,8 @@ function totalProductCount(job: Record<string, any>) {
 
 function productProgressText(job: Record<string, any>) {
   const fetched = fetchedProductCount(job)
-  const total = totalProductCount(job)
+  const rawTotal = totalProductCount(job)
+  const total = rawTotal == null ? null : Math.max(rawTotal, fetched)
   return `${fetched}/${total ?? '-'}`
 }
 
@@ -194,6 +344,9 @@ onMounted(load)
           <div :title="job.failure_detail || job.error || ''" class="col-action job-action">{{ job.suggested_action || '—' }}</div>
           <div class="col-finished">{{ fmtJobTime(job.finished_at) }}</div>
           <div class="col-ops">
+            <button class="btn-mini" :disabled="!canOpenFailedProducts(job)" @click="openFailedProducts(job)">
+              失败商品
+            </button>
             <button class="btn-mini" :disabled="!canRetry(job) || retryingId === job.id" @click="retry(job)">
               {{ retryingId === job.id ? '重试中' : '重试' }}
             </button>
@@ -222,6 +375,68 @@ onMounted(load)
         />
         <span>{{ page }} / {{ totalPages }}</span>
       </div>
+    </div>
+    <div v-if="failedDrawerOpen" class="failed-drawer-backdrop" @click.self="closeFailedDrawer">
+      <aside class="failed-drawer" aria-label="失败商品明细">
+        <div class="failed-drawer-head">
+          <div>
+            <div class="failed-title">失败商品 URL</div>
+            <div class="failed-sub">#{{ failedJob?.id }} · {{ failedJob?.site }} · {{ failedProductCountText() }}</div>
+          </div>
+          <button class="btn-mini" @click="closeFailedDrawer">关闭</button>
+        </div>
+        <div class="failed-toolbar">
+          <USelect
+            v-model="failedFailureCode"
+            class="jobs-select failed-code-select"
+            :items="failedFailureItems"
+            value-key="value"
+            @update:model-value="resetFailedPageAndLoad"
+          />
+          <button class="btn-mini" :disabled="failedRetrying || failedLoading || selectedFailedUrls.size === 0" @click="retryFailed('selected')">
+            {{ failedRetrying ? '提交中' : `重抓勾选 ${selectedFailedUrls.size}` }}
+          </button>
+          <button class="btn-mini primary" :disabled="failedRetrying || failedLoading || failedTotal === 0" @click="retryFailed('filter')">
+            重抓当前筛选
+          </button>
+        </div>
+        <div class="failed-table">
+          <div class="failed-row failed-head">
+            <label class="failed-check">
+              <input type="checkbox" :checked="failedRows.length > 0 && failedRows.every((row) => selectedFailedUrls.has(row.url))" @change="selectAllVisibleFromEvent" />
+            </label>
+            <div>URL</div>
+            <div>状态</div>
+            <div>失败码</div>
+            <div>次数</div>
+            <div>下次重试</div>
+            <div>操作</div>
+          </div>
+          <PageLoading v-if="failedLoading" compact title="加载失败商品..." note="正在读取 URL 明细" />
+          <template v-else>
+            <div v-for="row in failedRows" :key="row.url" class="failed-row">
+              <label class="failed-check">
+                <input type="checkbox" :checked="selectedFailedUrls.has(row.url)" @change="toggleFailedUrlFromEvent(row.url, $event)" />
+              </label>
+              <div class="failed-url" :title="row.url">{{ row.url }}</div>
+              <div><StatusBadge :status="row.status" /></div>
+              <div class="failure-code" :title="row.failure_detail || row.failure_code">{{ row.failure_code || '—' }}</div>
+              <div>{{ row.attempts ?? 0 }}</div>
+              <div>{{ fmtJobTime(row.next_retry_at) }}</div>
+              <div><button class="btn-mini" @click="copyUrl(row.url)">复制</button></div>
+            </div>
+            <div v-if="!failedRows.length" class="empty-state failed-empty">
+              <b>没有失败商品 URL</b>
+              当前任务没有可展示的失败明细。
+            </div>
+          </template>
+        </div>
+        <div class="failed-footer">
+          <button class="btn-mini" :disabled="failedPage <= 1 || failedLoading" @click="changeFailedPage(-1)">上一页</button>
+          <span>{{ failedPage }} / {{ failedTotalPages }}</span>
+          <button class="btn-mini" :disabled="failedPage >= failedTotalPages || failedLoading" @click="changeFailedPage(1)">下一页</button>
+        </div>
+      </aside>
     </div>
   </section>
 </template>
@@ -312,7 +527,7 @@ onMounted(load)
 .job-row {
   width: 100%;
   min-width: 0;
-  grid-template-columns: 44px minmax(76px, .8fr) 72px 92px 62px minmax(78px, .75fr) minmax(132px, 1.35fr) minmax(98px, .85fr) 58px;
+  grid-template-columns: 44px minmax(76px, .8fr) 72px 92px 62px minmax(78px, .75fr) minmax(132px, 1.35fr) minmax(98px, .85fr) 136px;
   gap: 8px;
 }
 .jobs-list {
@@ -335,6 +550,10 @@ onMounted(load)
 }
 .col-ops {
   justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
 }
 .diag-strip {
   display: flex;
@@ -379,6 +598,104 @@ onMounted(load)
 .btn-mini:disabled {
   cursor: not-allowed;
   opacity: .45;
+}
+.btn-mini.primary {
+  border-color: rgba(139, 92, 246, .45);
+  background: rgba(139, 92, 246, .16);
+  color: var(--ui-purple-strong);
+}
+.failed-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(3, 7, 18, .42);
+}
+.failed-drawer {
+  width: min(920px, 96vw);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  border-left: 1px solid var(--ui-border);
+  background: var(--ui-card);
+  box-shadow: -20px 0 50px rgba(0, 0, 0, .28);
+}
+.failed-drawer-head,
+.failed-toolbar,
+.failed-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.failed-title {
+  font-size: 18px;
+  font-weight: 850;
+  color: var(--ui-heading);
+}
+.failed-sub {
+  margin-top: 2px;
+  color: var(--ui-muted);
+  font-size: 12px;
+}
+.failed-toolbar {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  padding: 10px 0;
+  border-top: 1px solid var(--ui-border);
+  border-bottom: 1px solid var(--ui-border);
+}
+.failed-code-select {
+  width: 220px !important;
+  min-width: 180px !important;
+}
+.failed-table {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+}
+.failed-row {
+  display: grid;
+  grid-template-columns: 34px minmax(220px, 1fr) 88px minmax(108px, .55fr) 52px 118px 64px;
+  gap: 8px;
+  align-items: center;
+  min-height: 42px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--ui-border);
+  color: var(--ui-heading);
+  font-size: 13px;
+}
+.failed-row > div {
+  min-width: 0;
+}
+.failed-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  min-height: 38px;
+  background: var(--ui-card-soft);
+  color: var(--ui-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+.failed-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.failed-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ui-purple-strong);
+}
+.failed-empty {
+  margin: 16px;
 }
 
 @media (max-width: 900px) {
@@ -441,6 +758,21 @@ onMounted(load)
   .col-ops {
     grid-area: ops;
   }
+
+  .failed-row {
+    grid-template-columns: 28px minmax(150px, 1fr) 76px 56px;
+    grid-template-areas:
+      "check url url op"
+      "check status code tries";
+  }
+
+  .failed-row > :nth-child(1) { grid-area: check; }
+  .failed-row > :nth-child(2) { grid-area: url; }
+  .failed-row > :nth-child(3) { grid-area: status; }
+  .failed-row > :nth-child(4) { grid-area: code; }
+  .failed-row > :nth-child(5) { grid-area: tries; }
+  .failed-row > :nth-child(6) { display: none; }
+  .failed-row > :nth-child(7) { grid-area: op; }
 
   .jobs-footer-pager {
     justify-content: flex-start;

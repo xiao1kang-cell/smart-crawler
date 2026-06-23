@@ -26,7 +26,9 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 
 def _default_proxy_file() -> Path:
@@ -76,6 +78,13 @@ class ProxyEntry:
             return True
         s = site.lower()
         return not any(kw in s for kw in self.exclude)
+
+
+@dataclass
+class ProxyLeaseHandle:
+    url: str
+    endpoint_id: int | None
+    lease_token: str | None
 
 
 def _parse_proxy_line(line: str, tier: str) -> ProxyEntry:
@@ -244,6 +253,43 @@ class ProxyPool:
     def has_available(self, tier: str | None = None,
                       site: str | None = None) -> bool:
         return self.available_count(tier, site) > 0
+
+    def lease(self, tier: str | None = None, *, site: str | None = None,
+              job_id: int | None = None, worker: str | None = None,
+              ttl_sec: int = 300) -> ProxyLeaseHandle | None:
+        """租用一个代理端点。
+
+        DB 管理的端点会写 proxy_leases 并按 endpoint.max_concurrency 控制
+        并发；文件/env 兜底代理没有 endpoint_id，只返回 URL，不登记租约。
+        """
+        candidate_tiers = _candidate_tiers_from_rules(site, tier)
+        if not candidate_tiers or candidate_tiers[0] in (None, "none", ""):
+            return None
+        self._ensure_loaded()
+        with self._lock:
+            candidates = self._available_candidates(candidate_tiers, site)
+            if not candidates:
+                return None
+            n = len(candidates)
+            start = self._index
+            ordered = []
+            for offset in range(1, n + 1):
+                ordered.append(candidates[(start + offset) % n])
+        handle = _try_create_proxy_lease(
+            ordered,
+            site=site,
+            job_id=job_id,
+            worker=worker,
+            ttl_sec=ttl_sec,
+        )
+        if handle:
+            with self._lock:
+                for idx, candidate in enumerate(candidates):
+                    if candidate.url == handle.url:
+                        self._index = idx
+                        candidate.last_used = time.time()
+                        break
+        return handle
 
     def _available_candidates(self, candidate_tiers: list[str | None],
                               site: str | None) -> list[ProxyEntry]:
@@ -502,3 +548,99 @@ def available_count(tier: str | None = None, site: str | None = None) -> int:
 
 def has_available_proxy(tier: str | None = None, site: str | None = None) -> bool:
     return _pool.has_available(tier, site)
+
+
+def lease_proxy(tier: str | None = None, *, site: str | None = None,
+                job_id: int | None = None, worker: str | None = None,
+                ttl_sec: int = 300) -> ProxyLeaseHandle | None:
+    return _pool.lease(tier, site=site, job_id=job_id, worker=worker,
+                       ttl_sec=ttl_sec)
+
+
+def release_proxy(lease_token: str | None, *, success: bool | None = None,
+                  failure_code: str | None = None) -> None:
+    if not lease_token:
+        return
+    try:
+        from .db import SessionLocal
+        from .models import ProxyLease
+    except Exception:
+        return
+    db = SessionLocal()
+    try:
+        lease = (db.query(ProxyLease)
+                 .filter(ProxyLease.lease_token == lease_token,
+                         ProxyLease.released_at.is_(None))
+                 .first())
+        if lease is None:
+            return
+        now = datetime.utcnow()
+        lease.released_at = now
+        lease.updated_at = now
+        lease.success = success
+        lease.failure_code = failure_code
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+
+
+def _try_create_proxy_lease(
+    candidates: list[ProxyEntry],
+    *,
+    site: str | None,
+    job_id: int | None,
+    worker: str | None,
+    ttl_sec: int,
+) -> ProxyLeaseHandle | None:
+    if not candidates:
+        return None
+    db_candidates = [p for p in candidates if p.id is not None]
+    if not db_candidates:
+        first = candidates[0]
+        return ProxyLeaseHandle(first.url, None, None)
+    try:
+        from sqlalchemy import func
+        from .db import SessionLocal
+        from .models import ProxyEndpoint, ProxyLease
+    except Exception:
+        return None
+    db = SessionLocal()
+    try:
+        now = datetime.utcnow()
+        expires_at = now + timedelta(seconds=max(30, int(ttl_sec or 300)))
+        for proxy in db_candidates:
+            endpoint = (db.query(ProxyEndpoint)
+                        .filter(ProxyEndpoint.id == proxy.id)
+                        .with_for_update()
+                        .first())
+            if endpoint is None or not endpoint.active:
+                continue
+            active_count = (db.query(func.count(ProxyLease.id))
+                            .filter(ProxyLease.endpoint_id == endpoint.id,
+                                    ProxyLease.released_at.is_(None),
+                                    ProxyLease.expires_at > now)
+                            .scalar() or 0)
+            max_concurrency = max(1, int(endpoint.max_concurrency or 1))
+            if active_count >= max_concurrency:
+                continue
+            token = uuid4().hex
+            db.add(ProxyLease(
+                endpoint_id=endpoint.id,
+                site=site,
+                job_id=job_id,
+                worker=worker,
+                lease_token=token,
+                expires_at=expires_at,
+                created_at=now,
+                updated_at=now,
+            ))
+            db.commit()
+            return ProxyLeaseHandle(proxy.url, endpoint.id, token)
+        return None
+    except Exception:
+        db.rollback()
+        return None
+    finally:
+        db.close()

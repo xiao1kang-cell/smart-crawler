@@ -37,10 +37,13 @@ def _env_int(name: str, default: int) -> int:
 
 WORKER_ID = os.environ.get("WORKER_ID") or f"{socket.gethostname()}-{os.getpid()}"
 POLL_INTERVAL = _env_int("WORKER_POLL", 10)
-DEFAULT_JOB_TIMEOUT = _env_int("WORKER_JOB_TIMEOUT", 14400)  # 4h 默认
+DEFAULT_JOB_TIMEOUT = _env_int("WORKER_JOB_TIMEOUT", 43200)  # 12h 默认
 JOB_TIMEOUT_MIN = _env_int("WORKER_JOB_TIMEOUT_MIN", 300)
 JOB_TIMEOUT_MAX = _env_int("WORKER_JOB_TIMEOUT_MAX", 86400)
-STALE_HEARTBEAT_TIMEOUT = _env_int("WORKER_STALE_HEARTBEAT_TIMEOUT", 1800)
+STALE_HEARTBEAT_TIMEOUT = max(
+    43200,
+    _env_int("WORKER_STALE_HEARTBEAT_TIMEOUT", 43200),
+)
 JOB_HEARTBEAT_INTERVAL = float(os.environ.get("WORKER_JOB_HEARTBEAT_INTERVAL", "30"))
 TRIGGER_ALLOWLIST = tuple(
     trigger.strip() for trigger in os.environ.get("TRIGGER_ALLOWLIST", "").split(",")
@@ -312,8 +315,9 @@ def _stop(*_):
 
 
 def main() -> None:
-    from .db import init_db
-    init_db()
+    from .db import IS_SQLITE, init_db
+    if IS_SQLITE or os.environ.get("WORKER_RUN_INIT_DB") == "1":
+        init_db()
     repaired = _repair_missing_failure_diagnostics()
     if repaired:
         logger.info("补齐 %d 个历史失败任务的结构化诊断", repaired)

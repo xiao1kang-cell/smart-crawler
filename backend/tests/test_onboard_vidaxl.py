@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -88,6 +89,16 @@ _SITEMAP_XML = (
     "<?xml version='1.0' encoding='UTF-8'?>"
     "<urlset>"
     f"<url><loc>{_PDP_URL}</loc></url>"
+    "</urlset>"
+)
+_PDP_URL_2 = "https://www.vidaxl.nl/e/vidaxl-table/5059340100001.html"
+_PDP_URL_3 = "https://www.vidaxl.nl/e/vidaxl-broken/5059340100002.html"
+_SITEMAP_XML_THREE = (
+    "<?xml version='1.0' encoding='UTF-8'?>"
+    "<urlset>"
+    f"<url><loc>{_PDP_URL}</loc></url>"
+    f"<url><loc>{_PDP_URL_2}</loc></url>"
+    f"<url><loc>{_PDP_URL_3}</loc></url>"
     "</urlset>"
 )
 
@@ -190,6 +201,7 @@ def test_vidaxl_api_path_counts_api_calls(monkeypatch):
     assert p["title"] == "Vidaxl Test Chair"
     assert p["currency"] == "EUR"
     assert p["site"] == "vidaxl_api"
+    assert result.total_product_count == 1
 
 
 def test_vidaxl_feed_path_reads_local_csv(monkeypatch, tmp_path):
@@ -263,6 +275,113 @@ def test_vidaxl_feed_path_reads_site_crawler_config(monkeypatch, tmp_path):
     assert result.products[0]["sku"] == "CFG123"
     assert result.products[0]["inventory"] == 7
     assert result.products[0]["category_path"] == "Outdoor"
+
+
+def test_vidaxl_feed_total_not_shrunk_by_limit(monkeypatch, tmp_path):
+    """Feed 分母必须是完整去重商品数，不能被本次产出上限截断。"""
+    monkeypatch.delenv("VIDAXL_API_EMAIL", raising=False)
+    monkeypatch.delenv("VIDAXL_API_TOKEN", raising=False)
+    feed = tmp_path / "vidaxl_limit.csv"
+    feed.write_text(
+        "sku,title,price,currency,stock\n"
+        "A,Chair A,10.00,EUR,1\n"
+        "B,Chair B,20.00,EUR,1\n",
+        encoding="utf-8",
+    )
+
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    crawler = VidaxlCrawler(Site(
+        site="vidaxl_nl",
+        brand="Vidaxl",
+        country="NL",
+        url="https://www.vidaxl.nl/",
+        platform="vidaxl",
+        proxy_tier="none",
+        crawler_config={"feed_url": str(feed)},
+    ))
+    crawler.limit = 1
+
+    result = crawler.crawl()
+
+    assert len(result.products) == 1
+    assert result.total_product_count == 2
+    assert result.coverage_complete is False
+    assert result.coverage_code == "incomplete_detail_parse"
+
+
+def test_vidaxl_storefront_total_uses_full_target_count(monkeypatch):
+    """storefront 路径的总量是全量目标 URL，不是成功解析商品数。"""
+    monkeypatch.delenv("VIDAXL_API_EMAIL", raising=False)
+    monkeypatch.delenv("VIDAXL_API_TOKEN", raising=False)
+    monkeypatch.delenv("VIDAXL_RUN_TARGET_LIMIT", raising=False)
+    monkeypatch.setattr("app.crawlers.base.get_sites",
+                        lambda: [{"site": "vidaxl_nl", "max_products": 0}])
+
+    from app.crawlers import vidaxl as vidaxl_mod
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    crawler = VidaxlCrawler(_site())
+    url_map = {
+        "https://www.vidaxl.nl/sitemap_index.xml": FetchResult(
+            ok=True, url="https://www.vidaxl.nl/sitemap_index.xml",
+            status=200, text=_SITEMAP_INDEX_XML,
+            content=_SITEMAP_INDEX_XML.encode(),
+            final_url="https://www.vidaxl.nl/sitemap_index.xml",
+            fetcher="curl_cffi",
+        ),
+        "https://www.vidaxl.nl/sitemap-custom-product-1.xml": FetchResult(
+            ok=True, url="https://www.vidaxl.nl/sitemap-custom-product-1.xml",
+            status=200, text=_SITEMAP_XML_THREE,
+            content=_SITEMAP_XML_THREE.encode(),
+            final_url="https://www.vidaxl.nl/sitemap-custom-product-1.xml",
+            fetcher="curl_cffi",
+        ),
+    }
+    monkeypatch.setattr(crawler, "make_fetcher",
+                        lambda **kw: _make_fake_fetcher(crawler, url_map))
+    monkeypatch.setattr(crawler, "snapshot", lambda name, content: None)
+    monkeypatch.setattr(vidaxl_mod, "_persist_sitemap_total",
+                        lambda site, total: None)
+    registered = []
+    monkeypatch.setattr(vidaxl_mod, "_register_frontier_targets",
+                        lambda site, urls: registered.extend(urls))
+    monkeypatch.setattr(vidaxl_mod, "_log_fetched", lambda *args, **kw: None)
+
+    class _FakeResponse:
+        def __init__(self, status_code: int, text: str):
+            self.status_code = status_code
+            self.text = text
+
+    class _FakeSession:
+        proxies = None
+
+        def get(self, url: str, timeout: int = 30):
+            if url == _PDP_URL_3:
+                return _FakeResponse(200, "<html>No JSON-LD</html>")
+            product = dict(_JSONLD_PRODUCT)
+            product["sku"] = "5059340100001" if url == _PDP_URL_2 else _SKU
+            product["mpn"] = product["sku"]
+            html = (
+                "<html><head><script type=\"application/ld+json\">"
+                + json.dumps(product)
+                + "</script></head></html>"
+            )
+            return _FakeResponse(200, html)
+
+    monkeypatch.setattr(vidaxl_mod.creq, "Session",
+                        lambda impersonate=None: _FakeSession())
+    import app.proxy_pool as proxy_pool
+    monkeypatch.setattr(proxy_pool, "get_proxy", lambda *args, **kw: None)
+    monkeypatch.setattr(proxy_pool, "report_success", lambda *args, **kw: None)
+    monkeypatch.setattr(proxy_pool, "report_failure", lambda *args, **kw: None)
+
+    result = crawler.crawl()
+
+    assert registered == [_PDP_URL, _PDP_URL_2, _PDP_URL_3]
+    assert result.total_product_count == 3
+    assert len(result.products) == 2
+    assert any("本次全量分母 3" in note for note in result.notes)
 
 
 # ---------------------------------------------------------------------------
@@ -387,3 +506,107 @@ def test_vidaxl_stealth_failure_does_not_count(monkeypatch):
         f"got {crawler.counter.browser_opens}"
     )
     assert html is None
+
+
+def test_vidaxl_failed_product_retry_reuses_storefront_pdp_executor(monkeypatch):
+    """失败商品重抓只抓传入 PDP URL，不触发 sitemap 发现。"""
+    from app.crawlers import vidaxl as vidaxl_mod
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    crawler = VidaxlCrawler(_site())
+    logged: list[tuple[str, int]] = []
+
+    monkeypatch.setattr(
+        crawler,
+        "_try_fetch_storefront_pdp",
+        lambda url: vidaxl_mod._PdpFetchResult(200, _PDP_HTML),
+    )
+    monkeypatch.setattr(
+        vidaxl_mod,
+        "_log_fetched",
+        lambda site, url, status_code, **kw: logged.append((url, status_code)),
+    )
+
+    result = crawler.crawl_failed_products([_PDP_URL])
+
+    assert len(result.products) == 1
+    assert result.products[0]["sku"] == _SKU
+    assert crawler.counter.api_calls == 1
+    assert logged == [(_PDP_URL, 200)]
+    assert "失败商品重抓" in result.notes[-1]
+
+
+def test_vidaxl_collection_page_is_redirected_non_product():
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    html = """
+    <html><head>
+      <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"CollectionPage",
+       "name":"Garden Furniture","url":"https://www.vidaxl.ro/g/123/furniture"}
+      </script>
+    </head><body><h1>Garden Furniture</h1></body></html>
+    """
+
+    assert VidaxlCrawler._is_redirected_non_product_page(html) is True
+    assert VidaxlCrawler(_site())._parse_jsonld(
+        html,
+        "https://www.vidaxl.ro/e/old-product/123.html",
+    ) is None
+
+
+def test_vidaxl_full_pdp_fetch_uses_proxy_lease(monkeypatch):
+    """全站 PDP 抓取的单次请求必须租用并释放代理。"""
+    from app import proxy_pool
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    crawler = VidaxlCrawler(_site(proxy_tier="residential"))
+    lease_calls = []
+    release_calls = []
+    success_calls = []
+
+    monkeypatch.setattr(
+        proxy_pool,
+        "lease_proxy",
+        lambda tier, **kw: lease_calls.append((tier, kw)) or SimpleNamespace(
+            url="http://proxy.local:3128",
+            endpoint_id=1,
+            lease_token="lease-token",
+        ),
+    )
+    monkeypatch.setattr(
+        proxy_pool,
+        "release_proxy",
+        lambda token, **kw: release_calls.append((token, kw)),
+    )
+    monkeypatch.setattr(
+        proxy_pool,
+        "report_success",
+        lambda url: success_calls.append(url),
+    )
+    monkeypatch.setattr(proxy_pool, "report_failure", lambda *a, **kw: None)
+
+    class _Resp:
+        status_code = 200
+        text = _PDP_HTML
+
+    class _Session:
+        def __init__(self, impersonate=None):
+            self.proxies = {}
+
+        def get(self, url, timeout):
+            assert self.proxies == {
+                "http": "http://proxy.local:3128",
+                "https": "http://proxy.local:3128",
+            }
+            return _Resp()
+
+    monkeypatch.setattr("app.crawlers.vidaxl.creq.Session", _Session)
+
+    result = crawler._try_fetch_storefront_pdp(_PDP_URL)
+
+    assert result.status == 200
+    assert lease_calls[0][0] == "residential"
+    assert lease_calls[0][1]["site"] == "vidaxl_nl"
+    assert release_calls == [("lease-token", {"success": True, "failure_code": None})]
+    assert success_calls == ["http://proxy.local:3128"]

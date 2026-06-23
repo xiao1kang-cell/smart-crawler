@@ -24,9 +24,12 @@ if IS_SQLITE:
     _kwargs["connect_args"] = {"check_same_thread": False}
 else:
     # PostgreSQL：连接池 + 回收，避免长连接被 DB / 网络中断
-    _kwargs["pool_size"] = 5
-    _kwargs["max_overflow"] = 10
-    _kwargs["pool_recycle"] = 1800
+    is_worker = bool(os.environ.get("WORKER_ID"))
+    _kwargs["pool_size"] = int(os.environ.get(
+        "DB_POOL_SIZE", "1" if is_worker else "5"))
+    _kwargs["max_overflow"] = int(os.environ.get(
+        "DB_MAX_OVERFLOW", "1" if is_worker else "10"))
+    _kwargs["pool_recycle"] = int(os.environ.get("DB_POOL_RECYCLE", "1800"))
 
 engine = create_engine(DATABASE_URL, **_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
@@ -82,13 +85,21 @@ def _init_lock():
 
     lock_key = 740731551
     with engine.connect() as conn:
+        locked = False
         conn.execute(text("SELECT pg_advisory_lock(:key)"), {"key": lock_key})
         conn.commit()
+        locked = True
         try:
             yield conn
         finally:
-            conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": lock_key})
-            conn.commit()
+            if locked:
+                try:
+                    if conn.in_transaction():
+                        conn.rollback()
+                    conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": lock_key})
+                    conn.commit()
+                except Exception:
+                    conn.invalidate()
 
 
 def _migrate(bind=None) -> None:
@@ -131,6 +142,63 @@ def _migrate_with_connection(conn) -> None:
         conn.execute(text(
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_invite_codes_code_hash_unique "
             "ON invite_codes (code_hash)"))
+    if insp.has_table("proxy_leases"):
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_proxy_leases_active_endpoint "
+            "ON proxy_leases (endpoint_id, expires_at, released_at)"))
+    if insp.has_table("crawl_urls"):
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_crawl_urls_failed_product_lookup "
+            "ON crawl_urls (site, kind, status, failure_code)"))
+    if not IS_SQLITE and insp.has_table("products"):
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_products_site_listing_key "
+            "ON products (site, (COALESCE(spu, sku)))"))
+    if not IS_SQLITE and insp.has_table("crawl_urls"):
+        product_site_url_idx = conn.execute(text(
+            "SELECT to_regclass('public.ix_crawl_urls_product_site_url')"
+        )).scalar()
+        if not product_site_url_idx:
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_crawl_urls_product_site_url "
+                "ON crawl_urls (site, url) "
+                "WHERE kind = 'product' AND url IS NOT NULL"))
+    if not IS_SQLITE and insp.has_table("price_history"):
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_price_history_site_sku_date "
+            "ON price_history (site, sku, date)"))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_price_history_site_sku_review_date "
+            "ON price_history (site, sku, date) "
+            "WHERE review_count IS NOT NULL"))
+    if not IS_SQLITE and insp.has_table("crawl_jobs"):
+        conn.execute(text("""
+            CREATE OR REPLACE FUNCTION guard_legacy_30min_crawl_cancel()
+            RETURNS trigger AS $$
+            BEGIN
+              IF OLD.status = 'running'
+                 AND NEW.status = 'failed'
+                 AND COALESCE(NEW.error, '') =
+                     'auto-canceled: stuck running >30min'
+                 AND OLD.started_at IS NOT NULL
+                 AND OLD.started_at > (
+                     (now() AT TIME ZONE 'UTC') - interval '12 hours'
+                 ) THEN
+                RETURN OLD;
+              END IF;
+              RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        """))
+        conn.execute(text(
+            "DROP TRIGGER IF EXISTS trg_guard_legacy_30min_crawl_cancel "
+            "ON crawl_jobs"))
+        conn.execute(text("""
+            CREATE TRIGGER trg_guard_legacy_30min_crawl_cancel
+            BEFORE UPDATE ON crawl_jobs
+            FOR EACH ROW
+            EXECUTE FUNCTION guard_legacy_30min_crawl_cancel()
+        """))
 
 
 def _seed_sites() -> None:

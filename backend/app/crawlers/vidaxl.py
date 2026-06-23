@@ -23,26 +23,45 @@ import json
 import os
 import re
 import threading
+import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from curl_cffi import requests as creq
 
 from ..antiban import BlockedError
+from ..crawl_diagnostics import (
+    PROXY_UNAVAILABLE,
+    STAGE_FETCH,
+    FailureInfo,
+    classify_exception,
+    classify_http_status,
+)
 from .base import BaseCrawler, CrawlResult
 
 API_BASE = "https://b2b.vidaxl.com/api_customer/products"
 STOREFRONT_LIMIT = int(os.environ.get("VIDAXL_LIMIT", "999999"))
-DEFAULT_STOREFRONT_LIMIT = int(os.environ.get("VIDAXL_DEFAULT_LIMIT", "1000"))
-RUN_TARGET_LIMIT = int(os.environ.get("VIDAXL_RUN_TARGET_LIMIT", "200"))
+if STOREFRONT_LIMIT <= 0 or STOREFRONT_LIMIT == 3000:
+    STOREFRONT_LIMIT = 999999
+RUN_TARGET_LIMIT = int(os.environ.get("VIDAXL_RUN_TARGET_LIMIT", "0"))
+FRONTIER_REGISTER_MAX_URLS = int(os.environ.get(
+    "VIDAXL_FRONTIER_REGISTER_MAX_URLS", "5000"))
 API_PAGE = 500
 _LD_RE = re.compile(
     r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', re.S)
 _CURRENCY = {"US": "USD", "UK": "GBP", "CA": "CAD", "IE": "EUR", "DE": "EUR",
              "IT": "EUR", "ES": "EUR", "FR": "EUR", "RO": "RON", "PT": "EUR",
              "NL": "EUR", "PL": "PLN"}
+
+
+@dataclass
+class _PdpFetchResult:
+    status: int
+    html: str = ""
+    failure: FailureInfo | None = None
 
 
 class VidaxlCrawler(BaseCrawler):
@@ -58,9 +77,9 @@ class VidaxlCrawler(BaseCrawler):
         self.api_token = os.environ.get("VIDAXL_API_TOKEN") or self._config_value(
             "api_token", "vidaxl_api_token")
         self.feed_url = self._resolve_feed_url()
-        self.limit = self._resolve_limit(STOREFRONT_LIMIT)
+        self.limit = self._resolve_limit(STOREFRONT_LIMIT, honor_persisted=False)
         if self.limit <= 0:
-            self.limit = DEFAULT_STOREFRONT_LIMIT
+            self.limit = STOREFRONT_LIMIT
 
     def crawl(self) -> CrawlResult:
         if self.api_email and self.api_token:
@@ -126,6 +145,7 @@ class VidaxlCrawler(BaseCrawler):
             if len(items) < API_PAGE:
                 break
             self.sleep()
+        result.total_product_count = total
         result.notes.append(f"路径1 官方 API：拉取 {total} 个商品")
         return result
 
@@ -142,8 +162,6 @@ class VidaxlCrawler(BaseCrawler):
         total = 0
         seen: set[str] = set()
         for it in items:
-            if len(result.products) >= self.limit:
-                break
             row = self._map_feed(it)
             if not row:
                 continue
@@ -151,8 +169,22 @@ class VidaxlCrawler(BaseCrawler):
             if sku in seen:
                 continue
             seen.add(sku)
-            result.products.append(row)
             total += 1
+            if len(result.products) < self.limit:
+                result.products.append(row)
+        result.total_product_count = total
+        if len(result.products) < total:
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "feed"
+            result.coverage_reason = (
+                f"VidaXL Feed 共 {total} 个去重商品，"
+                f"本次只计划抓取 {len(result.products)} 个"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = (
+                "移除 VIDAXL_LIMIT / max_products 后重跑。"
+            )
         result.notes.append(
             f"路径2 官方 Feed：读取 {len(items)} 行，产出 {total} 个去重商品")
         return result
@@ -428,29 +460,88 @@ class VidaxlCrawler(BaseCrawler):
             except Exception:
                 continue
         _persist_sitemap_total(self.site.site, len(urls))
-        # Resume：按 product_url 跳过 DB 里已抓，让多轮 run 推进 sitemap
-        already = _already_crawled_urls(self.site.site)
-        fresh = [u for u in urls if u not in already]
-        # 随机洗牌：sitemap 把同一 parent 的 variant URL 聚集在一起，
-        # 顺序切片会让每个 run 只命中少量 unique parent。随机采样能让
-        # 每个 run 覆盖更多 parent（vidaxl 平均每 parent ~5 变体，
-        # 期望 unique parent 数 ≈ 总 parent × (1 - (1 - limit/总URL)^5)）
-        import random
-        random.shuffle(fresh)
+        # 每轮都必须按 sitemap 重新刷新商品详情。价格趋势、库存变化、促销
+        # 变化都依赖重复抓同一商品，历史 crawl_urls 只能用于诊断，不参与跳过。
         run_limit = min(self.limit, RUN_TARGET_LIMIT) if RUN_TARGET_LIMIT > 0 else self.limit
-        targets = fresh[: run_limit]
-        _register_frontier_targets(self.site.site, targets)
+        targets = urls[: run_limit]
+        result.total_product_count = len(urls)
+        _persist_job_progress(self.job_id, products_count=0,
+                              total_product_count=len(urls))
+        if len(targets) <= FRONTIER_REGISTER_MAX_URLS:
+            _register_frontier_targets(self.site.site, targets)
+        else:
+            result.notes.append(
+                f"跳过 frontier 预注册：{len(targets)} 个 URL 超过 "
+                f"VIDAXL_FRONTIER_REGISTER_MAX_URLS={FRONTIER_REGISTER_MAX_URLS}；"
+                "PDP 抓取时逐条写入 crawl_urls。")
+        if len(targets) < len(urls):
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "sitemap"
+            result.coverage_reason = (
+                f"VidaXL sitemap 共 {len(urls)} 个商品 URL，"
+                f"本次只计划抓取 {len(targets)} 个"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = (
+                "移除 VIDAXL_LIMIT / VIDAXL_RUN_TARGET_LIMIT 后重跑。"
+            )
+        limit_note = (
+            f"显式截断 {run_limit}" if RUN_TARGET_LIMIT > 0 or self.limit < len(urls)
+            else f"全量待抓 {len(targets)}"
+        )
         result.notes.append(
             f"路径2 storefront：{len(prod_sitemaps)} 个 sitemap · "
-            f"sitemap 总 URL {len(urls)} · 已抓 URL {len(already)} · "
-            f"本次目标 {len(targets)}（VIDAXL_RUN_TARGET_LIMIT={RUN_TARGET_LIMIT}）")
+            f"sitemap 总 URL {len(urls)} · 本次全量分母 {len(urls)} · "
+            f"实际计划抓取 {len(targets)} · "
+            f"{limit_note}")
 
-        # 走代理池：并发 N 线程（默认 10，与 residential 池容量匹配）
-        from .. import proxy_pool
-        max_workers = int(os.environ.get("VIDAXL_CONCURRENCY", "10"))
-        retries = int(os.environ.get("VIDAXL_RETRIES", "2"))
+        pdp_result = self._crawl_storefront_targets(
+            targets,
+            source="vidaxl_sitemap",
+            retry_mode=False,
+            progress_total=len(urls),
+        )
+        result.products.extend(pdp_result.products)
+        result.notes.extend(pdp_result.notes)
+        latest_note = pdp_result.notes[-1] if pdp_result.notes else ""
+        print(f"[vidaxl/{self.site.site}] {latest_note}", flush=True)
+        for n in result.notes:
+            print(f"[vidaxl/{self.site.site}] note: {n}", flush=True)
+        return result
+
+    def crawl_failed_products(self, urls: list[str]) -> CrawlResult:
+        targets = [u for u in urls if u]
+        result = self._crawl_storefront_targets(
+            targets,
+            source="vidaxl_failed_product_retry",
+            retry_mode=True,
+        )
+        if not targets:
+            result.notes.append("没有可重抓的 Vidaxl 商品 URL")
+        return result
+
+    def _crawl_storefront_targets(
+        self,
+        targets: list[str],
+        *,
+        source: str,
+        retry_mode: bool,
+        progress_total: int | None = None,
+    ) -> CrawlResult:
+        result = CrawlResult()
+        result.total_product_count = len(targets)
+        display_total = progress_total if progress_total is not None else len(targets)
+        _persist_job_progress(self.job_id, products_count=0,
+                              total_product_count=display_total)
+        if not targets:
+            result.notes.append("Vidaxl PDP 目标为空")
+            return result
+        max_workers = self._storefront_concurrency(retry_mode=retry_mode)
+        retries = self._storefront_retries()
         counters = {"ok": 0, "http_4xx": 0, "http_5xx": 0,
-                    "timeout": 0, "parse_none": 0, "exception": 0}
+                    "timeout": 0, "parse_none": 0, "proxy_unavailable": 0,
+                    "redirected_non_product": 0, "exception": 0}
         counters_lock = threading.Lock()
         products_lock = threading.Lock()
 
@@ -458,79 +549,196 @@ class VidaxlCrawler(BaseCrawler):
             with counters_lock:
                 counters[key] = counters.get(key, 0) + 1
 
-        def _try_fetch(url: str) -> tuple[int, str]:
-            """返回 (status_code, html)；status -1 表示 timeout/连接错误。"""
-            cur_proxy = proxy_pool.get_proxy(self.site.proxy_tier or "residential",
-                                             site=self.site.site)
-            local_sess = creq.Session(impersonate="chrome")
-            if cur_proxy:
-                local_sess.proxies = {"http": cur_proxy, "https": cur_proxy}
-            try:
-                resp = local_sess.get(url, timeout=30)
-                if resp.status_code in (429, 403):
-                    proxy_pool.report_failure(cur_proxy, hard=True)
-                elif 500 <= resp.status_code < 600:
-                    proxy_pool.report_failure(cur_proxy)
-                else:
-                    proxy_pool.report_success(cur_proxy)
-                return resp.status_code, resp.text
-            except Exception:
-                proxy_pool.report_failure(cur_proxy)
-                return -1, ""
-
         def _fetch_one(url: str) -> None:
-            last_status = 0
-            for attempt in range(retries + 1):
-                status, html = _try_fetch(url)
-                last_status = status
-                if status == 200 and html:
-                    self.snapshot(url.rstrip("/").split("/")[-1], html)
-                    row = self._parse_jsonld(html, url)
+            last = _PdpFetchResult(status=0)
+            for _attempt in range(retries + 1):
+                last = self._try_fetch_storefront_pdp(url)
+                status = last.status
+                if status == 200 and last.html:
+                    self.snapshot(url.rstrip("/").split("/")[-1], last.html)
+                    row = self._parse_jsonld(last.html, url)
                     if row:
                         _log_fetched(self.site.site, url, 200,
-                                     parsed=True, job_id=self.job_id)
+                                     parsed=True, job_id=self.job_id,
+                                     source=source)
                         with products_lock:
                             result.products.append(row)
                         with counters_lock:
                             self.counter.api_calls += 1
                         _inc("ok")
                         return
+                    if self._is_redirected_non_product_page(last.html):
+                        _log_fetched(self.site.site, url, 200,
+                                     skipped=True, job_id=self.job_id,
+                                     source=source)
+                        _inc("redirected_non_product")
+                        return
                     _log_fetched(self.site.site, url, 200,
-                                 parse_failed=True, job_id=self.job_id)
+                                 parse_failed=True, job_id=self.job_id,
+                                 source=source)
                     _inc("parse_none")
-                    return  # 解析失败不重试（页面就那样）
+                    return
+                if last.failure and last.failure.code == PROXY_UNAVAILABLE:
+                    _log_fetched(self.site.site, url, 0,
+                                 job_id=self.job_id, source=source,
+                                 failure=last.failure)
+                    _inc("proxy_unavailable")
+                    return
                 if status == -1 or status >= 500:
-                    continue  # 临时错误，重试
+                    continue
                 if 400 <= status < 500:
                     _log_fetched(self.site.site, url, status,
-                                 job_id=self.job_id)
+                                 job_id=self.job_id, source=source)
                     _inc("http_4xx")
-                    return  # 4xx 不重试（除 429 已在内部 ban 代理）
-            # 重试用尽 —— 即使失败也记录已尝试，避免下轮再抓
-            _log_fetched(self.site.site, url, last_status if last_status > 0 else 0,
-                         job_id=self.job_id)
-            if last_status == -1:
+                    return
+            _log_fetched(
+                self.site.site,
+                url,
+                last.status if last.status > 0 else 0,
+                job_id=self.job_id,
+                source=source,
+                failure=last.failure,
+            )
+            if last.status == -1:
                 _inc("timeout")
-            elif last_status >= 500:
+            elif last.status >= 500:
                 _inc("http_5xx")
             else:
                 _inc("exception")
 
+        completed = 0
+        progress_every = max(1, int(os.environ.get(
+            "VIDAXL_PROGRESS_UPDATE_EVERY", "200")))
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futures = [ex.submit(_fetch_one, u) for u in targets]
             for _ in as_completed(futures):
-                pass
-        msg = (f"并发 {max_workers}·重试 {retries} · "
-               f"成功 {counters['ok']}/{len(targets)} · "
-               f"4xx={counters['http_4xx']} 5xx={counters['http_5xx']} "
-               f"timeout={counters['timeout']} "
-               f"parse_none={counters['parse_none']} exc={counters['exception']}")
-        result.notes.append(msg)
-        # 同时输出到 stdout 让 docker logs 可见
-        print(f"[vidaxl/{self.site.site}] {msg}", flush=True)
-        for n in result.notes:
-            print(f"[vidaxl/{self.site.site}] note: {n}", flush=True)
+                completed += 1
+                if completed % progress_every == 0 or completed == len(targets):
+                    with products_lock:
+                        parsed = len(result.products)
+                    _persist_job_progress(
+                        self.job_id,
+                        products_count=parsed,
+                        total_product_count=display_total,
+                    )
+        mode = "失败商品重抓" if retry_mode else "全站PDP"
+        result.notes.append(
+            f"{mode} 并发 {max_workers}·重试 {retries} · "
+            f"成功 {counters['ok']}/{len(targets)} · "
+            f"4xx={counters['http_4xx']} 5xx={counters['http_5xx']} "
+            f"timeout={counters['timeout']} proxy_unavailable={counters['proxy_unavailable']} "
+            f"redirected_non_product={counters['redirected_non_product']} "
+            f"parse_none={counters['parse_none']} exc={counters['exception']}")
         return result
+
+    def _try_fetch_storefront_pdp(self, url: str) -> _PdpFetchResult:
+        from .. import proxy_pool
+
+        tier = self._storefront_proxy_tier()
+        handle = None
+        proxy_url = None
+        if tier not in (None, "", "none"):
+            deadline = time.monotonic() + self._proxy_lease_wait_sec()
+            while time.monotonic() <= deadline:
+                handle = proxy_pool.lease_proxy(
+                    tier,
+                    site=self.site.site,
+                    job_id=self.job_id,
+                    ttl_sec=self._proxy_lease_ttl_sec(),
+                )
+                if handle:
+                    break
+                time.sleep(0.5)
+            if not handle:
+                return _PdpFetchResult(
+                    status=0,
+                    failure=FailureInfo(
+                        PROXY_UNAVAILABLE,
+                        STAGE_FETCH,
+                        f"Vidaxl {self.site.site} 无可用 {tier} 代理租约",
+                        True,
+                        "检查代理池可用出口、max_concurrency 和健康状态后重跑",
+                    ),
+                )
+            proxy_url = handle.url
+        local_sess = creq.Session(impersonate="chrome")
+        if proxy_url:
+            local_sess.proxies = {"http": proxy_url, "https": proxy_url}
+        failure = None
+        try:
+            resp = local_sess.get(url, timeout=self._pdp_timeout_sec())
+            failure = classify_http_status(resp.status_code)
+            if resp.status_code in (429, 403):
+                proxy_pool.report_failure(proxy_url, hard=True)
+            elif 500 <= resp.status_code < 600:
+                proxy_pool.report_failure(proxy_url)
+            else:
+                proxy_pool.report_success(proxy_url)
+            return _PdpFetchResult(resp.status_code, resp.text or "", failure)
+        except Exception as exc:
+            failure = classify_exception(exc, stage=STAGE_FETCH)
+            proxy_pool.report_failure(proxy_url)
+            return _PdpFetchResult(-1, "", failure)
+        finally:
+            if handle and handle.lease_token:
+                proxy_pool.release_proxy(
+                    handle.lease_token,
+                    success=failure is None,
+                    failure_code=failure.code if failure else None,
+                )
+
+    def _storefront_proxy_tier(self) -> str | None:
+        return self.site.proxy_tier or "residential"
+
+    def _storefront_concurrency(self, *, retry_mode: bool) -> int:
+        config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
+        if retry_mode:
+            raw = (config.get("failed_product_retry_concurrency")
+                   or config.get("detail_concurrency")
+                   or os.environ.get("VIDAXL_FAILED_RETRY_CONCURRENCY")
+                   or 3)
+            base = _bounded_int(raw, 1, 30, 3)
+            return self._cap_by_available_proxies(base)
+        raw = (config.get("storefront_concurrency")
+               or config.get("detail_concurrency")
+               or os.environ.get("VIDAXL_CONCURRENCY")
+               or 20)
+        base = _bounded_int(raw, 1, 50, 20)
+        return self._cap_by_available_proxies(base)
+
+    def _cap_by_available_proxies(self, requested: int) -> int:
+        tier = self._storefront_proxy_tier()
+        if tier in (None, "", "none"):
+            return requested
+        try:
+            from .. import proxy_pool
+
+            available = proxy_pool.available_count(tier, site=self.site.site)
+        except Exception:
+            available = 0
+        if available <= 0:
+            return requested
+        return max(1, min(requested, available))
+
+    def _storefront_retries(self) -> int:
+        config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
+        raw = config.get("storefront_retries") or os.environ.get("VIDAXL_RETRIES") or 2
+        return _bounded_int(raw, 0, 5, 2)
+
+    def _proxy_lease_ttl_sec(self) -> int:
+        config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
+        raw = config.get("proxy_lease_ttl_sec") or os.environ.get("VIDAXL_PROXY_LEASE_TTL_SEC") or 300
+        return _bounded_int(raw, 30, 1800, 300)
+
+    def _proxy_lease_wait_sec(self) -> int:
+        config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
+        raw = config.get("proxy_lease_wait_sec") or os.environ.get("VIDAXL_PROXY_LEASE_WAIT_SEC") or 20
+        return _bounded_int(raw, 1, 120, 20)
+
+    def _pdp_timeout_sec(self) -> int:
+        config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
+        raw = config.get("pdp_timeout_sec") or os.environ.get("VIDAXL_PDP_TIMEOUT_SEC") or 30
+        return _bounded_int(raw, 5, 120, 30)
 
     def _parse_jsonld(self, html: str, url: str) -> dict | None:
         for block in _LD_RE.findall(html):
@@ -586,6 +794,39 @@ class VidaxlCrawler(BaseCrawler):
                 }
         return None
 
+    @staticmethod
+    def _is_redirected_non_product_page(html: str) -> bool:
+        """Old PDP URLs can resolve to a category/collection page.
+
+        Those URLs are no longer current products, so they should not become
+        parser failures or inflate failed-product retry queues.
+        """
+        saw_non_product_page = False
+        for block in _LD_RE.findall(html or ""):
+            try:
+                doc = json.loads(block.strip())
+            except json.JSONDecodeError:
+                continue
+            nodes = (doc if isinstance(doc, list)
+                     else doc.get("@graph", [doc]) if isinstance(doc, dict)
+                     else [])
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                node_type = node.get("@type")
+                types = node_type if isinstance(node_type, list) else [node_type]
+                if "Product" in types:
+                    return False
+                if any(t in types for t in ("CollectionPage", "SearchResultsPage")):
+                    saw_non_product_page = True
+                main = node.get("mainEntity")
+                if isinstance(main, dict):
+                    main_type = main.get("@type")
+                    main_types = main_type if isinstance(main_type, list) else [main_type]
+                    if "Product" in main_types:
+                        return False
+        return saw_non_product_page
+
     def _fetch_via_stealth(self, url: str) -> str | None:
         """curl_cffi 被封时（401/403/451）走 Scrapling StealthyFetcher 兜底。
 
@@ -639,69 +880,100 @@ def _persist_sitemap_total(site: str, total: int) -> None:
         pass
 
 
-def _already_crawled_urls(site: str) -> set[str]:
-    """读取该 site 已处理过的 URL —— 100% 推进 sitemap 的关键。
+def _persist_job_total_product_count(job_id: int | None, total: int) -> None:
+    """让运行中的任务也能展示本次全量分母。"""
+    if total < 0:
+        return
+    _persist_job_progress(job_id, total_product_count=total)
 
-    统一使用 crawl_urls frontier。已解析 / 已阻断 / 有抓取尝试次数的 URL
-    都不再进入本轮随机目标；Product.product_url 作为旧数据回填兜底。
-    """
+
+def _persist_job_progress(
+    job_id: int | None,
+    *,
+    products_count: int | None = None,
+    total_product_count: int | None = None,
+) -> None:
+    """Persist lightweight running progress without touching crawl results."""
+    if not job_id:
+        return
     try:
         from ..db import SessionLocal
-        from ..models import CrawlUrl, Product
+        from ..models import CrawlJob
     except Exception:
-        return set()
+        return
     db = SessionLocal()
     try:
-        frontier = {
-            r.url for r in (
-                db.query(CrawlUrl.url)
-                .filter(CrawlUrl.site == site)
-                .filter(CrawlUrl.url.isnot(None))
-                .filter((CrawlUrl.status.in_(("parsed", "blocked")))
-                        | (CrawlUrl.attempts > 0))
-                .all()
-            )
-            if r.url
-        }
-        products = {
-            r.product_url for r in (
-                db.query(Product.product_url)
-                .filter(Product.site == site)
-                .filter(Product.product_url.isnot(None))
-                .all()
-            )
-            if r.product_url
-        }
-        return frontier | products
+        job = db.get(CrawlJob, job_id)
+        if job is not None:
+            if products_count is not None:
+                job.products_count = max(0, int(products_count))
+            if total_product_count is not None and total_product_count >= 0:
+                job.total_product_count = int(total_product_count)
+            db.commit()
+    except Exception:
+        db.rollback()
     finally:
         db.close()
 
 
 def _register_frontier_targets(site: str, urls: list[str]) -> None:
-    """Mirror this run's target URLs into the durable frontier.
-
-    Vidaxl sitemaps can contain hundreds of thousands of URLs, so we register
-    only the sampled targets for the current run here. The sidecar total still
-    records the full sitemap size for coverage math.
-    """
+    """Mirror this run's full target URLs into the durable frontier."""
     if not urls:
         return
     try:
         from ..db import SessionLocal
+        from ..crawl_diagnostics import hash_url
         from ..frontier import register_urls
+        from ..models import CrawlUrl
     except Exception:
         return
     db = SessionLocal()
     try:
-        register_urls(
-            db,
-            site=site,
-            urls=urls,
-            kind="product",
-            source="vidaxl_sitemap",
-            priority=40,
-        )
-        db.commit()
+        if db.bind and db.bind.dialect.name == "postgresql":
+            from datetime import datetime
+            from sqlalchemy.dialects.postgresql import insert
+
+            now = datetime.utcnow()
+            batch_size = int(os.environ.get(
+                "VIDAXL_FRONTIER_BATCH_SIZE", "1000"))
+            for start in range(0, len(urls), batch_size):
+                values = [
+                    {
+                        "site": site,
+                        "url_hash": hash_url(url),
+                        "url": url,
+                        "kind": "product",
+                        "source": "vidaxl_sitemap",
+                        "status": "pending",
+                        "priority": 40,
+                        "first_seen_at": now,
+                        "last_seen_at": now,
+                    }
+                    for url in urls[start:start + batch_size]
+                    if url
+                ]
+                if not values:
+                    continue
+                stmt = insert(CrawlUrl).values(values)
+                # Full sitemap targets are always crawled from the in-memory
+                # target list; the frontier mirror is diagnostic. Avoid
+                # rewriting hundreds of thousands of existing rows before PDP
+                # fetches can begin.
+                stmt = stmt.on_conflict_do_nothing(
+                    index_elements=["site", "url_hash"],
+                )
+                db.execute(stmt)
+                db.commit()
+        else:
+            register_urls(
+                db,
+                site=site,
+                urls=urls,
+                kind="product",
+                source="vidaxl_sitemap",
+                priority=40,
+            )
+            db.commit()
     except Exception:
         db.rollback()
     finally:
@@ -711,21 +983,27 @@ def _register_frontier_targets(site: str, urls: list[str]) -> None:
 def _log_fetched(site: str, url: str, status_code: int, *,
                  parsed: bool = False,
                  parse_failed: bool = False,
-                 job_id: int | None = None) -> None:
+                 skipped: bool = False,
+                 job_id: int | None = None,
+                 source: str = "vidaxl_sitemap",
+                 failure: FailureInfo | None = None) -> None:
     """记录每次 URL fetch 到 crawl_urls frontier 和 crawl_failures。"""
     _record_frontier_fetch(site, url, status_code, parsed=parsed,
-                           parse_failed=parse_failed, job_id=job_id)
+                           parse_failed=parse_failed, skipped=skipped,
+                           job_id=job_id, source=source, failure=failure)
 
 
 def _record_frontier_fetch(site: str, url: str, status_code: int, *,
                            parsed: bool = False,
                            parse_failed: bool = False,
-                           job_id: int | None = None) -> None:
+                           skipped: bool = False,
+                           job_id: int | None = None,
+                           source: str = "vidaxl_sitemap",
+                           failure: FailureInfo | None = None) -> None:
     try:
         from ..crawl_diagnostics import (
             PARSE_NO_JSONLD,
             STAGE_PARSE,
-            FailureInfo,
             classify_exception,
             classify_http_status,
             record_failure,
@@ -734,9 +1012,12 @@ def _record_frontier_fetch(site: str, url: str, status_code: int, *,
         from ..db import SessionLocal
     except Exception:
         return
-    failure = None
     status = "parsed" if parsed else "fetched"
-    if parse_failed:
+    if failure is not None:
+        status = "blocked" if failure.code in ("http_401", "http_403", "http_429") else "failed"
+    elif skipped:
+        status = "skipped"
+    elif parse_failed:
         failure = FailureInfo(
             PARSE_NO_JSONLD,
             STAGE_PARSE,
@@ -759,7 +1040,7 @@ def _record_frontier_fetch(site: str, url: str, status_code: int, *,
             site=site,
             url=url,
             kind="product",
-            source="vidaxl_sitemap",
+            source=source,
             status=status,
             http_status=status_code if status_code > 0 else None,
             failure=failure,
@@ -774,6 +1055,7 @@ def _record_frontier_fetch(site: str, url: str, status_code: int, *,
                 info=failure,
                 fetcher="curl_cffi",
                 proxy_tier="residential",
+                apply_to_job=False,
             )
         db.commit()
     except Exception:
@@ -845,24 +1127,6 @@ def _record_site_status_failure(site: str, job_id: int | None, url: str,
     _record_site_failure(site, job_id, url, failure, http_status=status_code)
 
 
-def _already_crawled_skus(site: str) -> set[str]:
-    """读取该 site 已落库的 SKU 集合 —— resume 推荐用 SKU 去重（不是 URL）。"""
-    try:
-        from ..db import SessionLocal
-        from ..models import Product
-    except Exception:
-        return set()
-    db = SessionLocal()
-    try:
-        rows = (db.query(Product.sku)
-                .filter(Product.site == site)
-                .filter(Product.sku.isnot(None))
-                .all())
-        return {r[0] for r in rows if r[0]}
-    finally:
-        db.close()
-
-
 def _first(data: dict, *keys: str):
     lowered = {str(k).lower(): v for k, v in (data or {}).items()}
     for key in keys:
@@ -880,6 +1144,14 @@ def _split_values(value) -> list[str]:
     text = str(value)
     parts = re.split(r"\s*[|,]\s*", text)
     return [p for p in (part.strip() for part in parts) if p]
+
+
+def _bounded_int(value, low: int, high: int, default: int) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = default
+    return max(low, min(n, high))
 
 
 def _num(v):

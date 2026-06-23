@@ -59,6 +59,7 @@ from .routes import (
     require_user,
     _ANTI_BOT_FAILURE_CODES,
     _build_data_quality_payload,
+    _crawl_job_live_progress,
     _require_super_admin,
 )
 
@@ -75,10 +76,10 @@ def _env_int(name: str, default: int) -> int:
 _STUCK_SEC = 600
 _CRAWL_STUCK_SEC = _env_int(
     "ADMIN_CRAWL_STUCK_SEC",
-    _env_int("CRAWL_JOB_STUCK_SEC", 14400),
+    _env_int("CRAWL_JOB_STUCK_SEC", 3600),
 )
 _CRAWL_PENDING_STALE_SEC = 7200
-_ONDEMAND_STUCK_SEC = 1800
+_ONDEMAND_STUCK_SEC = _env_int("ADMIN_ONDEMAND_STUCK_SEC", 1800)
 _INVENTORY_CACHE_TTL = 30
 _INVENTORY_CACHE: dict | None = None
 _INVENTORY_CACHE_TS = 0.0
@@ -707,7 +708,8 @@ def _spine_job_dict(j: SpineJob, *, now: datetime | None = None) -> dict:
     }
 
 
-def _crawl_job_dict(j: CrawlJob, *, now: datetime | None = None) -> dict:
+def _crawl_job_dict(j: CrawlJob, *, now: datetime | None = None,
+                    db: Session | None = None) -> dict:
     now = now or datetime.utcnow()
     cutoff = now - timedelta(seconds=_CRAWL_STUCK_SEC)
     pending_cutoff = now - timedelta(seconds=_CRAWL_PENDING_STALE_SEC)
@@ -718,18 +720,14 @@ def _crawl_job_dict(j: CrawlJob, *, now: datetime | None = None) -> dict:
         j.status == "pending" and j.created_at is not None
         and j.created_at < pending_cutoff
     )
-    fetched_count = int(j.products_count or 0)
-    stored_total_product_count = int(getattr(j, "total_product_count", None) or 0)
-    success_rate = float(j.success_rate or 0)
-    if stored_total_product_count > 0:
-        total_product_count = stored_total_product_count
-        total_product_count_source = "crawl_stats_total"
-    elif fetched_count > 0 and success_rate > 0:
-        total_product_count = max(fetched_count, round(fetched_count * 100 / success_rate))
-        total_product_count_source = "crawl_success_rate"
+    if db is not None:
+        fetched_count, total_product_count, total_product_count_source = (
+            _crawl_job_live_progress(db, j)
+        )
     else:
-        total_product_count = None
-        total_product_count_source = None
+        fetched_count = int(j.products_count or 0)
+        total_product_count = int(getattr(j, "total_product_count", None) or 0) or None
+        total_product_count_source = "crawl_stats_total" if total_product_count else None
     return {
         "id": j.id,
         "source": "crawl",
@@ -847,14 +845,14 @@ def _queue_jobs_list(db: Session, *, status: str | None, dataset: str | None,
             return q
         return q.filter(or_(*filters)) if filters else q.filter(False)
 
-    def append_page(query, mapper, model):
+    def append_page(query, mapper, model, **mapper_kwargs):
         nonlocal total
         total += int(query.count() or 0)
         for job in (query.order_by(model.created_at.desc().nullslast(),
                                    model.id.desc())
                     .limit(fetch_limit)
                     .all()):
-            rows.append(mapper(job, now=now))
+            rows.append(mapper(job, now=now, **mapper_kwargs))
 
     if source in ("all", "spine"):
         q = db.query(SpineJob)
@@ -918,7 +916,7 @@ def _queue_jobs_list(db: Session, *, status: str | None, dataset: str | None,
         if raw:
             filters.append(CrawlJob.status.in_(tuple(raw)))
         q = apply_status_filter(q, filters)
-        append_page(q, _crawl_job_dict, CrawlJob)
+        append_page(q, _crawl_job_dict, CrawlJob, db=db)
 
     if source in ("all", "ondemand"):
         q = db.query(OnDemandJob)
@@ -992,7 +990,7 @@ def _queue_maintenance(db: Session, *, apply: bool = False,
         if source == "spine":
             return [_spine_job_dict(row, now=now) for row in rows[:sample_limit]]
         if source == "crawl":
-            return [_crawl_job_dict(row, now=now) for row in rows[:sample_limit]]
+            return [_crawl_job_dict(row, db=db, now=now) for row in rows[:sample_limit]]
         return [_ondemand_job_dict(row, now=now) for row in rows[:sample_limit]]
 
     samples = {
@@ -1310,7 +1308,7 @@ def admin_data_quality_products(
                 "all": product_issue_total,
                 **issue_counts,
             },
-            "items": [_crawl_job_dict(row) for row in rows],
+            "items": [_crawl_job_dict(row, db=db) for row in rows],
         }
 
     if issue_value in {"traffic_missing", "conversion_missing"}:
@@ -1820,7 +1818,7 @@ def job_detail(job_id: int, source: str = "spine",
         if j is None:
             raise HTTPException(404, {"error": "job_not_found", "job_id": job_id,
                                       "source": source})
-        return _crawl_job_dict(j)
+        return _crawl_job_dict(j, db=db)
     if source == "ondemand":
         j = db.get(OnDemandJob, job_id)
         if j is None:

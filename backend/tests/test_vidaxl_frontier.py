@@ -5,13 +5,12 @@ import uuid
 import pytest
 
 from app.crawlers.vidaxl import (
-    _already_crawled_urls,
     _log_fetched,
     _record_site_exception,
     _register_frontier_targets,
 )
 from app.db import SessionLocal, init_db
-from app.models import CrawlFailure, CrawlJob, CrawlUrl, Product
+from app.models import CrawlFailure, CrawlJob, CrawlUrl
 
 pytestmark = pytest.mark.unit
 
@@ -81,27 +80,27 @@ def test_vidaxl_logs_parse_none_as_parse_failure():
         s.close()
 
 
-def test_vidaxl_already_crawled_urls_uses_frontier_and_products():
+def test_vidaxl_logs_redirected_non_product_as_skipped():
     init_db()
     site = _site()
-    parsed = "https://example.com/p/parsed.html"
-    blocked = "https://example.com/p/blocked.html"
-    failed = "https://example.com/p/failed.html"
-    product = "https://example.com/p/product.html"
+    url = "https://example.com/p/old-product.html"
 
-    _log_fetched(site, parsed, 200, parsed=True)
-    _log_fetched(site, blocked, 403)
-    _log_fetched(site, failed, 200, parse_failed=True)
+    _log_fetched(site, url, 200, skipped=True)
 
     s = SessionLocal()
     try:
-        s.add(Product(site=site, sku="SKU-1", title="Product",
-                      product_url=product))
-        s.commit()
+        row = s.query(CrawlUrl).filter(CrawlUrl.site == site,
+                                       CrawlUrl.url == url).first()
+        failures = (s.query(CrawlFailure)
+                    .filter(CrawlFailure.site == site,
+                            CrawlFailure.url == url)
+                    .all())
+        assert row is not None
+        assert row.status == "skipped"
+        assert row.failure_code is None
+        assert failures == []
     finally:
         s.close()
-
-    assert _already_crawled_urls(site) >= {parsed, blocked, failed, product}
 
 
 def test_vidaxl_records_sitemap_timeout_as_job_failure():

@@ -221,6 +221,44 @@ def test_jobs_list_reports_total_and_summary_beyond_current_limit():
     assert [item["products_count"] for item in second_page["items"]] == [3, 2]
 
 
+def test_jobs_list_skips_live_progress_by_default():
+    from app.api.routes import list_jobs
+
+    db = _threadsafe_session()
+    ws_a, _ws_b, _alice, _bob, _admin = _seed_two_workspaces(db)
+    created_at = datetime(2026, 6, 22, 10, 0)
+    job = CrawlJob(site="site_a", status="running", products_count=2,
+                   total_product_count=3,
+                   requested_by_workspace_id=ws_a.id,
+                   created_at=created_at)
+    db.add(job)
+    for idx in range(5):
+        db.add(CrawlUrl(
+            site="site_a",
+            url=f"https://site-a.example.com/p/{idx}",
+            url_hash=f"job-live-{idx}",
+            kind="product",
+            status="success" if idx < 4 else "pending",
+            attempts=1 if idx < 4 else 0,
+            last_seen_at=created_at + timedelta(minutes=idx),
+        ))
+    db.commit()
+
+    payload = list_jobs(limit=20, user="alice", x_workspace_id=str(ws_a.id),
+                        db=db)
+    row = payload["items"][0]
+    assert row["products_count"] == 2
+    assert row["total_product_count"] == 3
+    assert row["total_product_count_source"] == "crawl_stats_total"
+
+    live_payload = list_jobs(limit=20, include_live_progress=True, user="alice",
+                             x_workspace_id=str(ws_a.id), db=db)
+    live_row = live_payload["items"][0]
+    assert live_row["products_count"] == 4
+    assert live_row["total_product_count"] == 5
+    assert live_row["total_product_count_source"] == "crawl_frontier_live"
+
+
 def test_members_can_switch_only_to_joined_workspaces():
     from app.api.routes import list_sites
 
@@ -236,6 +274,35 @@ def test_members_can_switch_only_to_joined_workspaces():
     with pytest.raises(HTTPException) as exc:
         list_sites(user="bob", x_workspace_id=str(ws_a.id), db=db)
     assert exc.value.status_code == 403
+
+
+def test_admin_users_respect_workspace_scope_for_super_admin():
+    from app.api.routes import admin_list_users, admin_reset_password, admin_update_user
+
+    db = _session()
+    ws_a, ws_b, alice, bob, admin = _seed_two_workspaces(db)
+
+    ws_a_users = admin_list_users(user="admin", x_workspace_id=str(ws_a.id), db=db)
+    assert {u["username"] for u in ws_a_users} == {"alice", "admin"}
+    assert all(u["workspace_ids"] == [ws_a.id] for u in ws_a_users)
+
+    ws_b_users = admin_list_users(user="admin", x_workspace_id=str(ws_b.id), db=db)
+    assert [u["username"] for u in ws_b_users] == ["bob"]
+    assert ws_b_users[0]["workspace_ids"] == [ws_b.id]
+
+    global_users = admin_list_users(user="admin", db=db)
+    assert {u["username"] for u in global_users} == {"alice", "bob", "admin"}
+
+    with pytest.raises(HTTPException) as exc:
+        admin_update_user(bob.id, {"status": "disabled"},
+                          user="admin", x_workspace_id=str(ws_a.id), db=db)
+    assert exc.value.status_code == 404
+    assert db.get(User, bob.id).status == "active"
+
+    with pytest.raises(HTTPException) as exc:
+        admin_reset_password(bob.id, {}, user="admin",
+                             x_workspace_id=str(ws_a.id), db=db)
+    assert exc.value.status_code == 404
 
 
 def test_disabled_membership_cannot_fall_back_to_default_workspace():
@@ -787,7 +854,7 @@ def test_coverage_actual_product_count_can_use_discovered_urls_without_details()
     assert row["product_detail_count"] == 0
 
 
-def test_acceptance_target_sku_is_default_coverage_baseline():
+def test_coverage_has_no_implicit_static_target():
     from app.api.routes import data_coverage, data_quality
 
     db = _session()
@@ -807,20 +874,50 @@ def test_acceptance_target_sku_is_default_coverage_baseline():
                            x_workspace_id=str(ws_a.id), db=db)
     quality_row = next(item for item in quality["items"] if item["site"] == "costway_us")
 
-    assert row["target_sku_count"] == 13162
-    assert row["target_sku_source"] == "acceptance"
-    assert row["sku_deviation_pct"] == -99.99
-    assert quality_row["target_sku_count"] == 13162
-    assert quality_row["target_sku_source"] == "acceptance"
-    assert "sku_deviation_high" in quality_row["issues"]
+    assert row["target_sku_count"] is None
+    assert row["target_sku_source"] is None
+    assert row["sku_deviation_pct"] is None
+    assert quality_row["target_sku_count"] is None
+    assert quality_row["target_sku_source"] is None
+    assert "sku_deviation_high" not in quality_row["issues"]
     vidaxl_row = next(item for item in coverage["sites"]
                       if item["site"] == "vidaxl_es")
     vidaxl_quality = next(item for item in quality["items"]
                           if item["site"] == "vidaxl_es")
-    assert vidaxl_row["target_sku_count"] == 138819
-    assert vidaxl_row["target_sku_source"] == "acceptance"
-    assert vidaxl_quality["target_sku_count"] == 138819
-    assert "sku_deviation_high" in vidaxl_quality["issues"]
+    assert vidaxl_row["target_sku_count"] is None
+    assert vidaxl_row["target_sku_source"] is None
+    assert vidaxl_quality["target_sku_count"] is None
+    assert "sku_deviation_high" not in vidaxl_quality["issues"]
+
+
+def test_vidaxl_live_sitemap_total_is_estimate_without_target(monkeypatch):
+    from app.api import routes
+    from app.api.routes import data_coverage, data_quality
+
+    db = _session()
+    ws_a, _ws_b, _alice, _bob, admin = _seed_two_workspaces(db)
+    _site(db, "vidaxl_es", "VidaXL")
+    _workspace_site(db, ws_a, "vidaxl_es")
+    _product(db, "vidaxl_es", "VX-ES-1")
+    db.commit()
+    monkeypatch.setattr(routes, "_load_sitemap_totals",
+                        lambda: {"vidaxl_es": 339702})
+
+    coverage = data_coverage(user=admin.username,
+                             x_workspace_id=str(ws_a.id), db=db)
+    quality = data_quality(user=admin.username,
+                           x_workspace_id=str(ws_a.id), db=db)
+    row = next(item for item in coverage["sites"] if item["site"] == "vidaxl_es")
+    quality_row = next(item for item in quality["items"] if item["site"] == "vidaxl_es")
+
+    assert row["estimated_full"] == 339702
+    assert row["sitemap_product_count"] == 339702
+    assert row["actual_product_count"] == 1
+    assert row["actual_product_count_source"] == "product_listing"
+    assert row["target_sku_count"] is None
+    assert row["target_sku_source"] is None
+    assert quality_row["estimated_full"] == 339702
+    assert quality_row["target_sku_count"] is None
 
 
 def test_product_filters_and_export_rows_share_same_scope():
@@ -1206,7 +1303,7 @@ def test_promotions_api_returns_product_url_for_clickable_sku():
     assert row["variant_count"] == 2
 
 
-def test_data_quality_surfaces_site_level_acceptance_gaps():
+def test_data_quality_surfaces_site_level_quality_gaps():
     from app.api.routes import data_quality
 
     db = _session()

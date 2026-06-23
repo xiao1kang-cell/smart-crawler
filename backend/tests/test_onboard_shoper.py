@@ -182,3 +182,98 @@ def test_shoper_counter_api_calls_minimum(monkeypatch):
     monkeypatch.setattr(crawler, "make_fetcher", lambda **kw: _F())
     crawler.crawl()
     assert crawler.counter.api_calls >= 1
+
+
+def test_shoper_discovery_cap_marks_coverage_incomplete(monkeypatch):
+    """Discovery caps must not make a short URL list look complete."""
+    from app.crawlers.shoper import ShoperCrawler
+
+    crawler = ShoperCrawler(_site())
+    crawler.candidate_cap = 1
+    crawler.sleep = lambda: None
+
+    category_html = (
+        "<html><body>"
+        f'<a href="/{_PRODUCT_SLUG}">Product 1</a>'
+        '<a href="/drugi-produkt-testowy">Product 2</a>'
+        "</body></html>"
+    )
+
+    def fake_get(url: str, **kw) -> FetchResult:
+        crawler.counter.api_calls += 1
+        if url in (f"{_BASE}/", _BASE):
+            html = _HOME_HTML
+        elif url == _CATEGORY_URL:
+            html = category_html
+        elif url == _PRODUCT_URL:
+            html = _PRODUCT_HTML
+        else:
+            html = ""
+        return FetchResult(
+            ok=True, url=url, status=200, text=html,
+            content=html.encode(), final_url=url, fetcher="curl_cffi",
+        )
+
+    class _F:
+        def get(self, url, **kw):
+            return fake_get(url, **kw)
+
+    monkeypatch.setattr(crawler, "make_fetcher", lambda **kw: _F())
+
+    result = crawler.crawl()
+
+    assert len(result.products) == 1
+    assert result.coverage_complete is False
+    assert result.coverage_code == "incomplete_discovery"
+    assert "候选 URL 上限" in (result.coverage_reason or "")
+
+
+def test_shoper_collect_budget_uses_full_elapsed_budget(monkeypatch):
+    """The discovery phase should not be hard-capped to 60s for full crawls."""
+    from app.crawlers.shoper import ShoperCrawler
+
+    crawler = ShoperCrawler(_site())
+    crawler.max_elapsed_sec = 3600
+    captured: dict[str, int | None] = {}
+
+    def fake_collect(fetcher, category_urls, started, collect_budget_sec):
+        captured["budget"] = collect_budget_sec
+        crawler._last_collect_stats = {
+            "visited_pages": 1,
+            "queued_pages": 0,
+            "stopped_reason": None,
+        }
+        return [_PRODUCT_URL]
+
+    monkeypatch.setattr(crawler, "_collect_product_urls", fake_collect)
+
+    class _F:
+        def get(self, url, **kw):
+            html = _HOME_HTML if url in (f"{_BASE}/", _BASE) else _PRODUCT_HTML
+            crawler.counter.api_calls += 1
+            return FetchResult(
+                ok=True, url=url, status=200, text=html,
+                content=html.encode(), final_url=url, fetcher="curl_cffi",
+            )
+
+    monkeypatch.setattr(crawler, "make_fetcher", lambda **kw: _F())
+
+    crawler.crawl()
+
+    assert captured["budget"] == 3600
+
+
+def test_shoper_filters_costway_marketing_slugs_from_fallback():
+    """Costway.pl marketing pages are root-level SEO slugs, not products."""
+    from app.crawlers.shoper import ShoperCrawler
+
+    crawler = ShoperCrawler(_site())
+    hrefs = [
+        "/boze-narodzenie",
+        "/home-office",
+        "/prawo-do-odstapienia-od-umowy",
+        "/wyspy-kuchenne",
+        f"/{_PRODUCT_SLUG}",
+    ]
+
+    assert crawler._fallback_product_paths(hrefs, set()) == [f"/{_PRODUCT_SLUG}"]

@@ -15,7 +15,7 @@ const sortedRows = computed(() => rows.value.slice().sort((a, b) => actualProduc
 const jobTrigger = useJobTrigger({ onDone: () => load() })
 
 function actualProductCount(row: Record<string, any>) {
-  return Number(row.actual_product_count ?? row.product_listing_count ?? row.sku_count ?? row.products ?? row.count ?? 0)
+  return Number(row.product_listing_count ?? row.actual_product_count ?? row.sku_count ?? row.products ?? row.count ?? 0)
 }
 
 function detailCount(row: Record<string, any>) {
@@ -27,7 +27,7 @@ function productCountSource(row: Record<string, any>) {
 }
 
 function productCountSourceTip(row: Record<string, any>) {
-  return `商品总数来源：${productCountSource(row)}`
+  return `商品总数来源：${productCountSource(row)}；sitemap 原始 URL 数仅用于覆盖率估算`
 }
 
 async function load() {

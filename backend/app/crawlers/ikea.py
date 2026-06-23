@@ -53,8 +53,10 @@ from selectolax.parser import HTMLParser
 from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
 
-DEFAULT_LIMIT = int(os.environ.get("IKEA_LIMIT", "1000"))
-MAX_ELAPSED_SEC = float(os.environ.get("IKEA_MAX_ELAPSED_SEC", "240"))
+DEFAULT_LIMIT = int(os.environ.get("IKEA_LIMIT", "999999"))
+if DEFAULT_LIMIT <= 0 or DEFAULT_LIMIT in (200, 1000):
+    DEFAULT_LIMIT = 999999
+MAX_ELAPSED_SEC = float(os.environ.get("IKEA_MAX_ELAPSED_SEC", "0"))
 SITEMAP_INDEX = "https://www.ikea.com/sitemaps/sitemap.xml"
 
 # country code → sitemap 分片前缀（lang 部分按 IKEA 主语种走）
@@ -96,7 +98,8 @@ class IkeaCrawler(BaseCrawler):
     def __init__(self, site, limit: int | None = None):
         super().__init__(site)
         self.base = site.url.rstrip("/")
-        self.limit = self._resolve_limit(DEFAULT_LIMIT, limit)
+        self.limit = self._resolve_limit(DEFAULT_LIMIT, limit,
+                                         honor_persisted=False)
         self.country = (site.country or "US").upper()
         # IKEA Cloudflare 中级：1.5s 间隔实测稳定，保守 2s
         self.delay = float(os.environ.get("IKEA_DELAY", "2.0"))
@@ -152,9 +155,9 @@ class IkeaCrawler(BaseCrawler):
         fetcher = self.make_fetcher(
             kind="product",
             source="ikea",
-            fail_fast_blocked=True,
+            fail_fast_blocked=False,
             retries=0,
-            max_blocked_events=1,
+            max_blocked_events=0,
         )
         started = time.monotonic()
 
@@ -174,8 +177,18 @@ class IkeaCrawler(BaseCrawler):
             return result
 
         targets = urls[: self.limit]
+        result.total_product_count = len(urls)
         result.notes.append(
             f"sitemap 累计 {len(urls)} PDP URL，本次抓取 {len(targets)}")
+        if len(targets) < len(urls):
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "sitemap"
+            result.coverage_reason = (
+                f"IKEA sitemap 共 {len(urls)} 个商品，本次只计划抓取 {len(targets)} 个"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = "移除 IKEA_LIMIT 后重跑。"
 
         import time as _t
 
@@ -188,10 +201,21 @@ class IkeaCrawler(BaseCrawler):
         STEALTH_BUDGET = 5
 
         for i, entry in enumerate(targets):
-            if time.monotonic() - started >= MAX_ELAPSED_SEC:
+            if MAX_ELAPSED_SEC > 0 and time.monotonic() - started >= MAX_ELAPSED_SEC:
                 result.notes.append(
                     f"达到 IKEA_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
                     f"提前返回已解析结果（ok={ok}, fail={fail}, blocked={blocked}）")
+                result.coverage_complete = False
+                result.coverage_code = "incomplete_detail_parse"
+                result.coverage_stage = "fetch"
+                result.coverage_reason = (
+                    f"达到 IKEA_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
+                    f"本次只解析 {ok}/{len(targets)} 个商品"
+                )
+                result.coverage_retryable = True
+                result.coverage_suggested_action = (
+                    "放宽 IKEA_MAX_ELAPSED_SEC 或拆分失败商品重抓。"
+                )
                 break
             url = entry["url"]
             sitemap_images: list[str] = entry.get("images") or []
@@ -201,9 +225,9 @@ class IkeaCrawler(BaseCrawler):
                 fetcher = self.make_fetcher(
                     kind="product",
                     source="ikea",
-                    fail_fast_blocked=True,
+                    fail_fast_blocked=False,
                     retries=0,
-                    max_blocked_events=1,
+                    max_blocked_events=0,
                 )
                 result.notes.append(
                     f"… 第 {i} 条，主动 rotate fetcher（已抓 {ok}）")
@@ -233,9 +257,9 @@ class IkeaCrawler(BaseCrawler):
                         fetcher = self.make_fetcher(
                             kind="product",
                             source="ikea",
-                            fail_fast_blocked=True,
+                            fail_fast_blocked=False,
                             retries=0,
-                            max_blocked_events=1,
+                            max_blocked_events=0,
                         )
                         fail += 1
                         continue
@@ -246,9 +270,9 @@ class IkeaCrawler(BaseCrawler):
                         fetcher = self.make_fetcher(
                             kind="product",
                             source="ikea",
-                            fail_fast_blocked=True,
+                            fail_fast_blocked=False,
                             retries=0,
-                            max_blocked_events=1,
+                            max_blocked_events=0,
                         )
                         fail += 1
                         continue
@@ -276,9 +300,9 @@ class IkeaCrawler(BaseCrawler):
                         fetcher = self.make_fetcher(
                             kind="product",
                             source="ikea",
-                            fail_fast_blocked=True,
+                            fail_fast_blocked=False,
                             retries=0,
-                            max_blocked_events=1,
+                            max_blocked_events=0,
                         )
                         continue
                 elif code == 200:
@@ -317,7 +341,7 @@ class IkeaCrawler(BaseCrawler):
     # ------------------------------------------------------------------
     def _collect_pdp_urls(self, fetcher,
                           result: CrawlResult) -> list[dict]:
-        """读 sitemap_index → 筛 country 分片 → 累积 (url, images) 字典直到 limit。"""
+        """读 sitemap_index → 筛 country 分片 → 累积全量 (url, images) 字典。"""
         try:
             res = fetcher.get(
                 SITEMAP_INDEX,
@@ -346,8 +370,6 @@ class IkeaCrawler(BaseCrawler):
         out: list[dict] = []
         seen: set[str] = set()
         for sm in subs:
-            if len(out) >= self.limit:
-                break
             try:
                 # 子 sitemap 体积大（US shard 1 ~ 50MB），加大超时
                 r = fetcher.get(sm, headers=self._headers(), timeout=120)
@@ -364,8 +386,6 @@ class IkeaCrawler(BaseCrawler):
 
             picked = 0
             for blk in _URL_BLOCK_RE.finditer(r.text):
-                if len(out) >= self.limit:
-                    break
                 body = blk.group(1)
                 m_loc = re.search(r"<loc>\s*(.*?)\s*</loc>", body)
                 if not m_loc:
@@ -394,6 +414,8 @@ class IkeaCrawler(BaseCrawler):
             res = fetcher.get(url, headers=self._headers(), timeout=30)
         except Exception:
             return None, 0
+        if res.failure and res.failure.code == "anti_bot_challenge":
+            return res.text, 403
         if (res.status or 0) == 200:
             return res.text, 200
         return None, res.status or 0

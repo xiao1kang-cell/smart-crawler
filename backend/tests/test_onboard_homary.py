@@ -222,6 +222,36 @@ def test_homary_product_parsed_correctly(monkeypatch):
     assert p["product_url"] == _PRODUCT_URL
 
 
+def test_homary_failed_product_retry_only_uses_given_urls(monkeypatch):
+    site = _site()
+    crawler = _make_crawler(site, limit=999)
+
+    url_map = {
+        _PRODUCT_URL: FetchResult(
+            ok=True, url=_PRODUCT_URL, status=200,
+            text=_PRODUCT_HTML, content=_PRODUCT_HTML.encode("utf-8"),
+            final_url=_PRODUCT_URL, fetcher="curl_cffi",
+        ),
+    }
+    sitemap_kinds: list[str] = []
+
+    def fake_sitemap(_fetcher, kind: str) -> list[str]:
+        sitemap_kinds.append(kind)
+        return [_PRODUCT_URL] if kind == "best_sellers" else []
+
+    monkeypatch.setattr(crawler, "make_fetcher",
+                        lambda **kw: _make_fake_fetcher(crawler, url_map))
+    monkeypatch.setattr(crawler, "_sitemap_urls", fake_sitemap)
+    monkeypatch.setattr(crawler, "sleep", lambda: None)
+    monkeypatch.setattr(crawler, "snapshot", lambda name, content: None)
+
+    result = crawler.crawl_failed_products([_PRODUCT_URL])
+
+    assert [p["sku"] for p in result.products] == ["12345"]
+    assert result.total_product_count == 1
+    assert sitemap_kinds == ["best_sellers"]
+
+
 def test_homary_bad_gzip_falls_back_to_text(monkeypatch):
     """When content is not valid gzip, sitemap should fall back to raw text decode."""
     site = _site()

@@ -18,6 +18,7 @@ from ..db import get_db
 from ..models import CrawlJob, Product, Site, Workspace, WorkspaceMember, WorkspaceSite
 from ..crawlers.detect import detect_platform
 from ..runner import enqueue
+from ..site_metrics import load_site_metrics
 from .routes import (require_user, _current_workspace, _require_dashboard_user,
                      _is_super_admin, _workspace_site_names, public_router,
                      _user_from_token, _currency_for_site)
@@ -51,28 +52,19 @@ def _metrics_for_sites(db: Session, sites: list[str]) -> dict[str, dict]:
     site_codes = sorted(set(sites))
     if not site_codes:
         return {}
-    rows = db.query(
-        Product.site,
-        func.count(Product.id),
-        func.count(func.distinct(func.coalesce(Product.spu, Product.sku))),
-        func.coalesce(func.sum(Product.thirty_day_sales), 0),
-        func.coalesce(func.sum(Product.thirty_day_revenue), 0.0),
-        func.count(Product.id).filter(func.coalesce(Product.thirty_day_sales, 0) > 0),
-        func.count(Product.id).filter(func.coalesce(Product.thirty_day_revenue, 0) > 0),
-        func.max(Product.updated_time),
-    ).filter(Product.site.in_(site_codes)).group_by(Product.site).all()
     out = {site: _empty_metrics() for site in site_codes}
-    for (site, sku_count, products, sales, revenue, sales_signal_count,
-         revenue_signal_count, last_updated) in rows:
+    rows = load_site_metrics(db, site_codes)
+    for site, row in rows.items():
+        last_updated = row.get("last_product_updated")
         out[site] = {
-            "products": int(products or 0),
-            "sku_count": int(sku_count or 0),
-            "thirty_day_sales": int(sales or 0),
-            "thirty_day_revenue": round(revenue or 0, 2),
-            "sales_signal_count": int(sales_signal_count or 0),
-            "revenue_signal_count": int(revenue_signal_count or 0),
-            "sales_available": bool(sales_signal_count),
-            "revenue_available": bool(revenue_signal_count),
+            "products": int(row.get("product_listing_count") or 0),
+            "sku_count": int(row.get("sku_count") or 0),
+            "thirty_day_sales": int(row.get("thirty_day_sales") or 0),
+            "thirty_day_revenue": round(float(row.get("thirty_day_revenue") or 0), 2),
+            "sales_signal_count": int(row.get("sales_signal_count") or 0),
+            "revenue_signal_count": int(row.get("revenue_signal_count") or 0),
+            "sales_available": bool(row.get("sales_signal_count")),
+            "revenue_available": bool(row.get("revenue_signal_count")),
             "last_product_updated": last_updated.isoformat() if last_updated else None,
         }
     return out

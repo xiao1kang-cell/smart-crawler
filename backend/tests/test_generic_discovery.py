@@ -4,7 +4,9 @@ import pytest
 
 from app.crawlers.base import CrawlResult
 from app.crawlers.generic import GenericCrawler
-from app.models import Site
+from app.crawl_diagnostics import PARSE_NO_PRODUCT
+from app.db import SessionLocal, init_db
+from app.models import CrawlUrl, Site
 
 pytestmark = pytest.mark.unit
 
@@ -52,6 +54,45 @@ def test_generic_discovers_sitemap_from_robots(monkeypatch):
     assert urls == ["https://x.com/products/widget"]
 
 
+def test_generic_expands_all_sitemap_index_children(monkeypatch):
+    crawler = _crawler(monkeypatch)
+    child_urls = [f"https://x.com/sitemap-{i}.xml" for i in range(1, 14)]
+    index_xml = "<sitemapindex>" + "".join(
+        f"<sitemap><loc>{url}</loc></sitemap>" for url in child_urls
+    ) + "</sitemapindex>"
+    pages = {"https://x.com/sitemap.xml": _Resp(text=index_xml)}
+    for child in child_urls[:-1]:
+        pages[child] = _Resp(text="<urlset></urlset>")
+    pages[child_urls[-1]] = _Resp(
+        text="<urlset><url><loc>https://x.com/products/from-child-13</loc></url></urlset>"
+    )
+    sess = _FakeSession(pages)
+
+    urls = crawler._discover_product_urls(sess, CrawlResult())
+
+    assert urls == ["https://x.com/products/from-child-13"]
+
+
+def test_generic_reads_all_discovered_sitemap_entries(monkeypatch):
+    crawler = _crawler(monkeypatch)
+    robots_sitemaps = [f"https://x.com/robots-sitemap-{i}.xml" for i in range(1, 18)]
+    pages = {
+        "https://x.com/robots.txt": _Resp(
+            text="\n".join(f"Sitemap: {url}" for url in robots_sitemaps)
+        ),
+    }
+    for url in robots_sitemaps[:-1]:
+        pages[url] = _Resp(text="<urlset></urlset>")
+    pages[robots_sitemaps[-1]] = _Resp(
+        text="<urlset><url><loc>https://x.com/products/from-sitemap-17</loc></url></urlset>"
+    )
+    sess = _FakeSession(pages)
+
+    urls = crawler._discover_product_urls(sess, CrawlResult())
+
+    assert urls == ["https://x.com/products/from-sitemap-17"]
+
+
 def test_generic_falls_back_to_entry_page_links(monkeypatch):
     crawler = _crawler(monkeypatch)
     sess = _FakeSession({
@@ -62,6 +103,138 @@ def test_generic_falls_back_to_entry_page_links(monkeypatch):
     urls = crawler._discover_product_urls(sess, CrawlResult())
 
     assert urls == ["https://x.com/products/widget"]
+
+
+def test_generic_homepage_fallback_not_shrunk_by_limit(monkeypatch):
+    crawler = _crawler(monkeypatch)
+    crawler.limit = 1
+    sess = _FakeSession({
+        "https://x.com": _Resp(
+            text=(
+                '<html><a href="/products/widget">Widget</a>'
+                '<a href="/products/table">Table</a></html>'
+            )),
+    })
+
+    urls = crawler._discover_product_urls(sess, CrawlResult())
+
+    assert urls == [
+        "https://x.com/products/widget",
+        "https://x.com/products/table",
+    ]
+
+
+def test_generic_marks_partial_when_limit_truncates_discovered_urls(monkeypatch):
+    crawler = _crawler(monkeypatch)
+    crawler.limit = 1
+    monkeypatch.setattr(
+        crawler,
+        "_discover_product_urls",
+        lambda sess, result: [
+            "https://x.com/products/widget",
+            "https://x.com/products/table",
+        ],
+    )
+    monkeypatch.setattr(
+        crawler,
+        "_parse",
+        lambda sess, url: {
+            "sku": url.rsplit("/", 1)[-1],
+            "title": "Product",
+            "product_url": url,
+            "site": crawler.site.site,
+        },
+    )
+    monkeypatch.setattr(crawler, "sleep", lambda: None)
+
+    result = crawler.crawl()
+
+    assert len(result.products) == 1
+    assert result.total_product_count == 2
+    assert result.coverage_complete is False
+    assert result.coverage_code == "incomplete_detail_parse"
+
+
+def test_generic_failed_product_retry_only_parses_given_urls(monkeypatch):
+    crawler = _crawler(monkeypatch)
+    seen: list[tuple[str, str]] = []
+
+    def fake_parse(sess, url, *, source="candidate"):
+        seen.append((url, source))
+        return {
+            "sku": url.rsplit("/", 1)[-1],
+            "title": "Retried Product",
+            "product_url": url,
+            "site": crawler.site.site,
+        }
+
+    monkeypatch.setattr(crawler, "_parse", fake_parse)
+    monkeypatch.setattr(crawler, "sleep", lambda: None)
+
+    result = crawler.crawl_failed_products([
+        "https://x.com/products/failed-1",
+        "https://x.com/products/failed-1",
+        "https://x.com/products/failed-2",
+    ])
+
+    assert [row["sku"] for row in result.products] == ["failed-1", "failed-2"]
+    assert result.total_product_count == 2
+    assert seen == [
+        ("https://x.com/products/failed-1", "generic_failed_product_retry"),
+        ("https://x.com/products/failed-2", "generic_failed_product_retry"),
+    ]
+
+
+def test_generic_records_parse_no_product_for_unparsed_page(monkeypatch):
+    init_db()
+    crawler = _crawler(monkeypatch)
+    crawler.job_id = 123
+    monkeypatch.setattr(crawler, "snapshot", lambda *args, **kwargs: None)
+    url = "https://x.com/products/no-structured-product"
+    sess = _FakeSession({
+        url: _Resp(text="<html><head></head><body></body></html>"),
+    })
+
+    row = crawler._parse(sess, url)
+
+    assert row is None
+    s = SessionLocal()
+    try:
+        state = s.query(CrawlUrl).filter_by(site="x", url=url).one()
+        assert state.status == "failed"
+        assert state.failure_code == PARSE_NO_PRODUCT
+        assert state.failure_stage == "parse"
+        assert state.retryable is True
+    finally:
+        s.close()
+
+
+def test_generic_marks_gone_product_page_as_skipped(monkeypatch):
+    init_db()
+    crawler = _crawler(monkeypatch)
+    crawler.job_id = 124
+    url = "https://x.com/products/gone"
+    sess = _FakeSession({
+        url: _Resp(
+            status_code=404,
+            text=(
+                "<html><head><title>Example</title></head>"
+                "<body><h1>Dieser Artikel ist leider nicht mehr verfügbar!</h1></body></html>"
+            ),
+        ),
+    })
+
+    row = crawler._parse(sess, url)
+
+    assert row is None
+    s = SessionLocal()
+    try:
+        state = s.query(CrawlUrl).filter_by(site="x", url=url).one()
+        assert state.status == "skipped"
+        assert state.http_status == 404
+        assert state.failure_code is None
+    finally:
+        s.close()
 
 
 def test_generic_keeps_product_without_price(monkeypatch):

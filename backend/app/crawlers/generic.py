@@ -8,7 +8,7 @@
 sites.yaml 中该站点可选字段：
   sitemap:        sitemap 入口（默认 {url}/sitemap.xml）
   product_match:  商品 URL 必含子串（如 "/p/"）
-  max_products:   单次抓取上限（默认 GENERIC_LIMIT）
+  max_products:   单次抓取上限（默认近似不截断；显式配置才缩小）
 """
 from __future__ import annotations
 
@@ -24,14 +24,23 @@ from curl_cffi import requests as creq
 from selectolax.parser import HTMLParser
 
 from ..config import get_sites
+from ..crawl_diagnostics import (
+    ANTI_BOT_CHALLENGE,
+    FailureInfo,
+    PARSE_NO_PRODUCT,
+    STAGE_FETCH,
+    STAGE_PARSE,
+    record_url_state,
+)
 from ..currency import SITE_CURRENCY_BY_COUNTRY, currency_for_site
+from ..db import SessionLocal
 from ..fetching import CrawlerFetcher, FetchContext
 from ..pipeline import to_price
 from .base import BaseCrawler, CrawlResult
 
-DEFAULT_LIMIT = int(os.environ.get("GENERIC_LIMIT", "200"))
+DEFAULT_LIMIT = int(os.environ.get("GENERIC_LIMIT", "999999"))
 REQUEST_TIMEOUT = int(os.environ.get("GENERIC_REQUEST_TIMEOUT", "12"))
-MAX_ELAPSED_SEC = float(os.environ.get("GENERIC_MAX_ELAPSED_SEC", "180"))
+MAX_ELAPSED_SEC = float(os.environ.get("GENERIC_MAX_ELAPSED_SEC", "0"))
 _LD_RE = re.compile(
     r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', re.S)
 _SITEMAP_RE = re.compile(r"(?im)^\s*sitemap:\s*(\S+)\s*$")
@@ -67,6 +76,16 @@ _PROMO_TEXT_RE = re.compile(
     r"满减|优惠|折扣|券)",
     re.I,
 )
+_GONE_PRODUCT_RE = re.compile(
+    r"(product|item|article|artikel).{0,40}(no longer available|"
+    r"not available|unavailable|not found)|"
+    r"(no longer available|not available|unavailable|not found).{0,40}"
+    r"(product|item|article|artikel)|"
+    r"dieser artikel ist leider nicht mehr verf[uü]gbar|"
+    r"artikel.+nicht mehr verf[uü]gbar|"
+    r"produkt.+nicht mehr verf[uü]gbar",
+    re.I,
+)
 
 
 class GenericCrawler(BaseCrawler):
@@ -80,7 +99,7 @@ class GenericCrawler(BaseCrawler):
         self.sitemap = self.sitemap_hint or (self.base + "/sitemap.xml")
         self.product_match = hints.get("product_match", "")
         self.exclude_match = hints.get("exclude_match", "")
-        self.limit = self._resolve_limit(DEFAULT_LIMIT)
+        self.limit = self._resolve_limit(DEFAULT_LIMIT, honor_persisted=False)
 
     def _session(self) -> creq.Session:
         s = creq.Session(impersonate="chrome")
@@ -159,7 +178,7 @@ class GenericCrawler(BaseCrawler):
         sub = [l for l in locs if l.endswith(".xml") or l.endswith(".xml.gz")]
         if sub and len(sub) == len(locs):            # 纯 sitemap 索引，递归
             out: list[str] = []
-            for s in sub[:12]:
+            for s in sub:
                 out.extend(self._sitemap_locs(sess, s, depth + 1))
             return out
         return locs
@@ -168,7 +187,7 @@ class GenericCrawler(BaseCrawler):
                                result: CrawlResult) -> list[str]:
         locs: list[str] = []
         sitemap_urls = self._discover_sitemaps(sess)
-        for sm in sitemap_urls[:16]:
+        for sm in sitemap_urls:
             before = len(locs)
             locs.extend(self._sitemap_locs(sess, sm))
             if len(locs) > before:
@@ -202,8 +221,6 @@ class GenericCrawler(BaseCrawler):
                 continue
             if self._is_candidate_url(full) and self._is_product_url(full):
                 links.append(full)
-            if len(links) >= self.limit:
-                break
         return self._dedupe(links)
 
     def crawl(self) -> CrawlResult:
@@ -218,8 +235,19 @@ class GenericCrawler(BaseCrawler):
         products = self._discover_product_urls(sess, result)
         total = len(products)
         targets = products[: self.limit]
+        result.total_product_count = total
         result.notes.append(
             f"通用发现 {total} 个候选商品 URL，本次抓取 {len(targets)} 条")
+        if len(targets) < total:
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "sitemap"
+            result.coverage_reason = (
+                f"通用 sitemap/入口共发现 {total} 个候选商品 URL，"
+                f"本次只计划抓取 {len(targets)} 个"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = "移除 GENERIC_LIMIT 后重跑。"
         if not targets:
             result.notes.append("⚠ 通用发现未找到商品 URL，可为该站点配置 "
                                  "sitemap / product_match，或启用专用/浏览器策略")
@@ -228,10 +256,21 @@ class GenericCrawler(BaseCrawler):
         ok = 0
         for url in targets:
             elapsed = time.monotonic() - started
-            if elapsed >= MAX_ELAPSED_SEC:
+            if MAX_ELAPSED_SEC > 0 and elapsed >= MAX_ELAPSED_SEC:
                 result.notes.append(
                     f"达到 GENERIC_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
                     f"提前返回已解析结果（ok={ok}/{len(targets)}）")
+                result.coverage_complete = False
+                result.coverage_code = "incomplete_detail_parse"
+                result.coverage_stage = "fetch"
+                result.coverage_reason = (
+                    f"达到 GENERIC_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
+                    f"本次只解析 {ok}/{len(targets)} 个商品"
+                )
+                result.coverage_retryable = True
+                result.coverage_suggested_action = (
+                    "放宽 GENERIC_MAX_ELAPSED_SEC 或拆分失败商品重抓。"
+                )
                 break
             try:
                 row = self._parse(sess, url)
@@ -242,6 +281,44 @@ class GenericCrawler(BaseCrawler):
                 result.notes.append(f"跳过 {url[:60]}: {exc}")
             self.sleep()
         result.notes.append(f"成功解析 {ok}/{len(targets)} 个商品页")
+        return result
+
+    def crawl_failed_products(self, urls: list[str]) -> CrawlResult:
+        """Retry a known set of failed product URLs without rediscovery."""
+        result = CrawlResult()
+        started = time.monotonic()
+        targets = self._dedupe([u for u in urls if u])
+        result.total_product_count = len(targets)
+        if not targets:
+            result.notes.append("没有可重试的失败商品 URL")
+            return result
+
+        ok = 0
+        for url in targets:
+            if MAX_ELAPSED_SEC > 0 and time.monotonic() - started >= MAX_ELAPSED_SEC:
+                result.coverage_complete = False
+                result.coverage_code = "incomplete_detail_parse"
+                result.coverage_stage = "fetch"
+                result.coverage_reason = (
+                    f"达到 GENERIC_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
+                    f"失败商品重试只解析 {ok}/{len(targets)} 个商品"
+                )
+                result.coverage_retryable = True
+                result.coverage_suggested_action = "继续失败商品重试。"
+                break
+            try:
+                row = self._parse(None, url, source="generic_failed_product_retry")
+                if row:
+                    result.products.append(row)
+                    ok += 1
+            except Exception as exc:
+                self._record_parse_failure(
+                    url,
+                    f"Generic 失败商品重试异常: {exc}",
+                )
+                result.notes.append(f"跳过 {url[:60]}: {exc}")
+            self.sleep()
+        result.notes.append(f"失败商品重试成功解析 {ok}/{len(targets)} 个商品页")
         return result
 
     def _is_candidate_url(self, url: str) -> bool:
@@ -262,14 +339,28 @@ class GenericCrawler(BaseCrawler):
         path = urlparse(url).path.lower()
         return bool(_PRODUCT_HINT_RE.search(path))
 
-    def _parse(self, sess: creq.Session | None, url: str) -> dict | None:
+    def _parse(self, sess: creq.Session | None, url: str,
+               *, source: str = "candidate") -> dict | None:
         status, html, _ = self._fetch_text(
-            sess, url, kind="product", source="candidate")
+            sess, url, kind="product", source=source)
+        tree = HTMLParser(html or "")
+        if self._looks_gone_product_page(tree, html):
+            self._record_url_skipped(
+                url,
+                status,
+                source=source,
+            )
+            return None
         if status is None or status >= 400:
             return None
         self.snapshot(self._slug(url), html)       # 原始商品页归档
-        tree = HTMLParser(html)
         if self._looks_blocked_page(tree, html):
+            self._record_fetch_failure(
+                url,
+                ANTI_BOT_CHALLENGE,
+                "Generic 商品页疑似反爬挑战或人机验证页面",
+                source=source,
+            )
             return None
         data = self._merge_product_data(
             self._from_jsonld(html) or {},
@@ -284,6 +375,11 @@ class GenericCrawler(BaseCrawler):
             sku=data.get("sku") or self._slug(url),
         )
         if not title:
+            self._record_parse_failure(
+                url,
+                "Generic 商品页未能从 JSON-LD、hydration、meta、h1/title 中解析出有效商品标题",
+                source=source,
+            )
             return None
         sale = data.get("price") or self._meta_price(tree) or self._dom_price(tree)
         # Pipeline 已允许 price 缺失。通用抓取应优先保留 SKU/title/URL，
@@ -319,6 +415,76 @@ class GenericCrawler(BaseCrawler):
             "product_url": url,
             "site": self.site.site,
         }
+
+    def _record_parse_failure(self, url: str, detail: str,
+                              *, source: str = "candidate") -> None:
+        self._record_url_failure(
+            url,
+            FailureInfo(
+                PARSE_NO_PRODUCT,
+                STAGE_PARSE,
+                detail,
+                True,
+                "补充该站点解析器覆盖后，只重试失败商品 URL。",
+            ),
+            source=source,
+        )
+
+    def _record_fetch_failure(self, url: str, code: str, detail: str,
+                              *, source: str = "candidate") -> None:
+        self._record_url_failure(
+            url,
+            FailureInfo(
+                code,
+                STAGE_FETCH,
+                detail,
+                True,
+                "检查目标页是否为反爬/跳转页面，必要时换代理或启用专用解析器。",
+            ),
+            source=source,
+        )
+
+    def _record_url_skipped(self, url: str, http_status: int | None,
+                            *, source: str) -> None:
+        if not self.job_id:
+            return
+        db = SessionLocal()
+        try:
+            record_url_state(
+                db,
+                site=self.site.site,
+                url=url,
+                kind="product",
+                source=source,
+                status="skipped",
+                http_status=http_status,
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
+
+    def _record_url_failure(self, url: str, failure: FailureInfo,
+                            *, source: str) -> None:
+        if not self.job_id:
+            return
+        db = SessionLocal()
+        try:
+            record_url_state(
+                db,
+                site=self.site.site,
+                url=url,
+                kind="product",
+                source=source,
+                status="failed",
+                failure=failure,
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
 
     @staticmethod
     def _from_jsonld(html: str) -> dict | None:
@@ -578,6 +744,22 @@ class GenericCrawler(BaseCrawler):
         if any(_BLOCKED_TITLE_RE.search(text or "") for text in signals):
             return True
         return bool(_BLOCKED_BODY_RE.search((html or "")[:12000]))
+
+    @staticmethod
+    def _looks_gone_product_page(tree: HTMLParser, html: str) -> bool:
+        signals = []
+        for selector in ("h1", "title"):
+            node = tree.css_first(selector)
+            if node:
+                signals.append(node.text(separator=" ", strip=True))
+        for prop in ("og:title", "twitter:title"):
+            node = (tree.css_first(f'meta[property="{prop}"]')
+                    or tree.css_first(f'meta[name="{prop}"]'))
+            if node:
+                signals.append(node.attributes.get("content") or "")
+        head = " ".join(text for text in signals if text)
+        body = (html or "")[:20000]
+        return bool(_GONE_PRODUCT_RE.search(head) or _GONE_PRODUCT_RE.search(body))
 
     @staticmethod
     def _merge_product_data(primary: dict, fallback: dict) -> dict:

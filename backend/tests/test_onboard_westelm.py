@@ -47,23 +47,34 @@ _INITIAL_STATE = {
             ],
             "subsets": [
                 {
-                    "definitions": {
-                        "skus": {
-                            _SKU_ID: {
-                                "price": {
-                                    "sellingPrice": 1499.0,
+                        "definitions": {
+                            "skus": {
+                                _SKU_ID: {
+                                    "price": {
+                                        "sellingPrice": 1499.0,
                                     "retailPrice": 1899.0,
                                     "regularPrice": 1899.0,
                                 },
                                 "inventory": {"availability": "IN_STOCK"},
                                 "availability": {"available": True},
                                 "name": "Sand",
-                                "properties": {"color": "Sand"},
-                                "flags": {"top": [{"id": "bestseller"}]},
+                                    "properties": {"color": "Sand"},
+                                    "flags": {"top": [{"id": "bestseller"}]},
+                                },
+                                "619422": {
+                                    "price": {
+                                        "sellingPrice": 1599.0,
+                                        "retailPrice": 1999.0,
+                                        "regularPrice": 1999.0,
+                                    },
+                                    "inventory": {"availability": "IN_STOCK"},
+                                    "availability": {"available": True},
+                                    "name": "Charcoal",
+                                    "properties": {"color": "Charcoal"},
+                                }
                             }
                         }
                     }
-                }
             ],
         }
     }
@@ -190,6 +201,7 @@ def test_westelm_curl_path_counts_api(monkeypatch):
     assert "Andes" in p["title"]
     assert p["sale_price"] == 1499.0
     assert p["site"] == "westelm"
+    assert result.total_product_count >= len(result.products)
 
 
 def test_westelm_product_parse_not_degraded():

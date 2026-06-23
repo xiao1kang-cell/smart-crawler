@@ -20,6 +20,8 @@ import json
 import os
 import re
 import time
+from collections import deque
+from urllib.parse import urljoin, urlsplit
 
 from selectolax.parser import HTMLParser
 
@@ -28,21 +30,33 @@ from ..config import get_sites
 from ..url_filters import is_obvious_non_product_url
 from .base import BaseCrawler, CrawlResult
 
-DEFAULT_LIMIT = int(os.environ.get("SHOPER_LIMIT", "200"))
-DEFAULT_MAX_ELAPSED_SEC = int(os.environ.get("SHOPER_MAX_ELAPSED_SEC", "180"))
-DEFAULT_CANDIDATE_CAP = int(os.environ.get("SHOPER_CANDIDATE_CAP", "400"))
+DEFAULT_LIMIT = int(os.environ.get("SHOPER_LIMIT", "999999"))
+DEFAULT_MAX_ELAPSED_SEC = int(os.environ.get("SHOPER_MAX_ELAPSED_SEC", "0"))
+DEFAULT_CANDIDATE_CAP = int(os.environ.get("SHOPER_CANDIDATE_CAP", "0"))
+DEFAULT_CATEGORY_PAGE_CAP = int(os.environ.get("SHOPER_CATEGORY_PAGE_CAP", "0"))
 _LD_RE = re.compile(
     r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', re.S)
 _PRICE_RE = re.compile(r"[\d.,]+")
 
 # 顶层非商品 slug（系统页 / 帮助 / 营销）
 _NON_PRODUCT_SLUGS = {
-    "pl", "assets", "userdata", "search", "login", "register", "cart",
-    "checkout", "account", "wishlist", "favorites", "contact", "kontakt",
-    "help", "pomoc", "about", "o-nas", "shipping", "wysylka-i-dostawa",
-    "returns", "zwroty", "privacy", "polityka-prywatnosci", "terms",
-    "regulamin", "blog", "news", "promotions", "promocje",
+    "pl", "assets", "environment", "userdata", "search", "login", "register",
+    "cart", "checkout", "account", "wishlist", "favorites", "contact",
+    "kontakt", "help", "pomoc", "about", "o-nas", "shipping",
+    "wysylka-i-dostawa", "returns", "zwroty", "privacy",
+    "polityka-prywatnosci", "terms", "regulamin", "blog", "news",
+    "promotions", "promocje", "panel", "order",
     "program-lojalnosciowy", "loyalty", "newsletter", "rss", "sitemap",
+    # costway.pl marketing/help landing pages confirmed from production
+    # snapshots; they look like root-level SEO product slugs but have no PDP
+    # JSON-LD and should not inflate the crawl denominator.
+    "boze-narodzenie", "fit-w-nowym-roku", "home-office",
+    "klasyczna-biel", "majowkowe-grillowanie", "mini-bar",
+    "prawo-do-odstapienia-od-umowy", "prezenty-dla-malej-ksiezniczki",
+    "prezenty-dla-malych-fanow-motoryzacji",
+    "regulamin-program-lojalnosciowy", "styl-boho",
+    "wakacje-w-ogrodzie", "wyprawa-za-miasto", "wyspy-kuchenne",
+    "zimowy-czas",
 }
 
 
@@ -53,9 +67,15 @@ class ShoperCrawler(BaseCrawler):
         super().__init__(site)
         hints = next((c for c in get_sites() if c["site"] == site.site), {})
         self.base = site.url.rstrip("/")
-        self.limit = self._resolve_limit(DEFAULT_LIMIT)
+        self.limit = self._resolve_limit(DEFAULT_LIMIT, honor_persisted=False)
         self.max_elapsed_sec = DEFAULT_MAX_ELAPSED_SEC
-        self.candidate_cap = min(max(self.limit, 1) * 2, DEFAULT_CANDIDATE_CAP)
+        self.candidate_cap = (
+            DEFAULT_CANDIDATE_CAP if DEFAULT_CANDIDATE_CAP > 0 else 0
+        )
+        self.category_page_cap = (
+            DEFAULT_CATEGORY_PAGE_CAP if DEFAULT_CATEGORY_PAGE_CAP > 0 else 0
+        )
+        self._last_collect_stats: dict[str, object] = {}
         # 用户可在 sites.yaml 显式指定类别 URL；否则自动从主页发现
         self.category_urls: list[str] = hints.get("category_urls") or []
 
@@ -91,14 +111,43 @@ class ShoperCrawler(BaseCrawler):
                 "配置 category_urls")
 
         # 2. 从类别页抓商品 slug
-        collect_budget = max(15, min(60, int(self.max_elapsed_sec * 0.35)))
+        collect_budget = int(self.max_elapsed_sec) if self.max_elapsed_sec > 0 else None
         product_urls = self._collect_product_urls(
             fetcher, self.category_urls, started, collect_budget)
+        collect_stats = self._last_collect_stats or {}
         result.notes.append(
             f"从类别页收集 {len(product_urls)} 个商品候选 URL"
-            f"（收集预算 {collect_budget}s / 上限 {self.candidate_cap}）")
+            f"（收集预算 {collect_budget or '不限'}s / "
+            f"候选上限 {self.candidate_cap or '不限'} / "
+            f"页面上限 {self.category_page_cap or '不限'} / "
+            f"已访问页 {collect_stats.get('visited_pages', 0)} / "
+            f"剩余队列 {collect_stats.get('queued_pages', 0)}）")
+        if collect_stats.get("stopped_reason"):
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_discovery"
+            result.coverage_stage = "discovery"
+            result.coverage_reason = (
+                f"Shoper 商品 URL 发现提前停止："
+                f"{collect_stats.get('stopped_reason')}"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = (
+                "放宽 SHOPER_MAX_ELAPSED_SEC / SHOPER_CANDIDATE_CAP / "
+                "SHOPER_CATEGORY_PAGE_CAP 后重跑。"
+            )
 
         targets = product_urls[: self.limit]
+        result.total_product_count = len(product_urls)
+        if len(targets) < len(product_urls):
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "fetch"
+            result.coverage_reason = (
+                f"Shoper 本次全量分母 {len(product_urls)}，"
+                f"实际计划抓取 {len(targets)}，已被 limit 截断"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = "移除 SHOPER_LIMIT 后重跑。"
         if not targets:
             raise RuntimeError(
                 "类别页未发现任何商品 slug —— 检查 _NON_PRODUCT_SLUGS 是否需扩充")
@@ -106,10 +155,21 @@ class ShoperCrawler(BaseCrawler):
         # 3. 抓商品页
         ok = 0
         for url in targets:
-            if self._elapsed(started) >= self.max_elapsed_sec:
+            if (self.max_elapsed_sec > 0
+                    and self._elapsed(started) >= self.max_elapsed_sec):
                 result.notes.append(
                     f"达到 Shoper 总耗时上限 {self.max_elapsed_sec}s，"
                     f"提前停止，已解析 {ok}/{len(targets)}")
+                result.coverage_complete = False
+                result.coverage_code = "incomplete_detail_parse"
+                result.coverage_stage = "fetch"
+                result.coverage_reason = (
+                    f"Shoper 商品详情解析达到耗时上限，已解析 {ok}/{len(targets)}"
+                )
+                result.coverage_retryable = True
+                result.coverage_suggested_action = (
+                    "放宽 SHOPER_MAX_ELAPSED_SEC 或拆分失败商品重抓。"
+                )
                 break
             try:
                 row = self._parse_product(fetcher, url)
@@ -134,20 +194,18 @@ class ShoperCrawler(BaseCrawler):
             return []
         if (res.status or 0) != 200:
             return []
-        # 找主菜单 ul 里的链接 —— Shoper 模板通常有 .menu / nav
+        # costway.pl 首页会把完整类目树直接渲染出来。只看第一层 menu 会漏掉
+        # 大量末级类目，进而只能拿到第一页的少量商品。
         candidates: list[str] = []
-        for menu_pat in (
-            r'<ul[^>]*class="[^"]*menu[^"]*"[^>]*>(.*?)</ul>',
-            r'<nav[^>]*>(.*?)</nav>',
-        ):
-            for m in re.finditer(menu_pat, res.text, re.S | re.I):
-                hrefs = re.findall(r'href=["\'](/[^"\']+)["\']', m.group(1))
-                candidates.extend(hrefs)
-        # 过滤：顶层 slug、非 _NON_PRODUCT_SLUGS、非资源
+        for path in self._href_paths(res.text):
+            if path.count("/") == 1:
+                candidates.append(path)
+
+        # 过滤：顶层 slug、非 _NON_PRODUCT_SLUGS、非资源。
         seen: set[str] = set()
         out: list[str] = []
         for h in candidates:
-            slug = h.lstrip("/").split("/")[0].split("?")[0]
+            slug = h.lstrip("/").split("/")[0]
             path = "/" + slug
             full = self.base + path
             if (not slug or slug in _NON_PRODUCT_SLUGS
@@ -162,13 +220,37 @@ class ShoperCrawler(BaseCrawler):
     def _collect_product_urls(self, fetcher,
                                cat_urls: list[str],
                                started: float,
-                               collect_budget_sec: int) -> list[str]:
+                               collect_budget_sec: int | None) -> list[str]:
         seen: set[str] = set()
         out: list[str] = []
-        known_categories = {u.replace(self.base, "") for u in cat_urls}
-        for cat_url in cat_urls:
-            if self._elapsed(started) >= collect_budget_sec:
+        known_categories = {
+            self._category_base_path(u.replace(self.base, ""))
+            for u in cat_urls
+        }
+        queue: deque[str] = deque(cat_urls)
+        queued_page_keys = {
+            self._pagination_key(self._normalize_path(u))
+            for u in cat_urls
+        }
+        visited_page_keys: set[str] = set()
+        stopped_reason: str | None = None
+        while queue:
+            cat_url = queue.popleft()
+            if (collect_budget_sec is not None
+                    and self._elapsed(started) >= collect_budget_sec):
+                stopped_reason = f"达到收集预算 {collect_budget_sec}s"
                 break
+            page_path = self._normalize_path(cat_url)
+            page_key = self._pagination_key(page_path)
+            if not page_path or page_key in visited_page_keys:
+                continue
+            if (
+                self.category_page_cap
+                and len(visited_page_keys) >= self.category_page_cap
+            ):
+                stopped_reason = f"达到类别页上限 {self.category_page_cap}"
+                break
+            visited_page_keys.add(page_key)
             try:
                 res = fetcher.get(cat_url, headers=self._headers(), timeout=12)
             except BlockedError:
@@ -177,29 +259,151 @@ class ShoperCrawler(BaseCrawler):
                 continue
             if (res.status or 0) != 200:
                 continue
-            hrefs = re.findall(r'href=["\'](/[^"\']+)["\']', res.text)
-            for h in hrefs:
-                slug = h.lstrip("/").split("/")[0].split("?")[0]
-                path = "/" + slug
+            hrefs = self._href_paths(res.text)
+            for path in hrefs:
+                if self._is_pagination_path(path, known_categories):
+                    full = self.base + path
+                    key = self._pagination_key(path)
+                    if (
+                        key not in visited_page_keys
+                        and key not in queued_page_keys
+                    ):
+                        queued_page_keys.add(key)
+                        queue.append(full)
+
+            product_paths = self._listing_product_paths(res.text)
+            if not product_paths:
+                product_paths = self._fallback_product_paths(hrefs, known_categories)
+            for path in product_paths:
                 full = self.base + path
-                if (not slug or slug in _NON_PRODUCT_SLUGS
-                        or is_obvious_non_product_url(full)):
-                    continue
-                if slug.startswith("assets") or "." in slug:
-                    continue
-                if path in known_categories:
-                    continue
-                # 商品 slug 一般含连字符（描述性 SEO slug）
-                if "-" not in slug:
-                    continue
                 if full in seen:
                     continue
                 seen.add(full)
                 out.append(full)
-                if len(out) >= self.candidate_cap:        # 留点缓冲
+                if self.candidate_cap and len(out) >= self.candidate_cap:
+                    self._last_collect_stats = {
+                        "visited_pages": len(visited_page_keys),
+                        "queued_pages": len(queue),
+                        "stopped_reason": f"达到候选 URL 上限 {self.candidate_cap}",
+                    }
                     return out
             self.sleep()
+        self._last_collect_stats = {
+            "visited_pages": len(visited_page_keys),
+            "queued_pages": len(queue),
+            "stopped_reason": stopped_reason,
+        }
         return out
+
+    def _listing_product_paths(self, html: str) -> list[str]:
+        paths: list[str] = []
+        for block in _LD_RE.findall(html):
+            try:
+                doc = json.loads(block.strip())
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(doc, dict) or doc.get("@type") != "ItemList":
+                continue
+            for item in doc.get("itemListElement") or []:
+                product = item.get("item") if isinstance(item, dict) else None
+                offers = product.get("offers") if isinstance(product, dict) else None
+                url = offers.get("url") if isinstance(offers, dict) else None
+                path = self._product_path_from_url(url)
+                if path:
+                    paths.append(path)
+
+        for match in re.finditer(r"<product-link\b.*?</product-link>", html, re.S):
+            for href in re.findall(r'href=["\']([^"\']+)["\']', match.group(0)):
+                path = self._product_path_from_url(href)
+                if path:
+                    paths.append(path)
+        return list(dict.fromkeys(paths))
+
+    def _product_path_from_url(self, url: str | None) -> str | None:
+        if not url:
+            return None
+        path = self._normalize_path(urljoin(self.base + "/", url))
+        if path.count("/") != 1:
+            return None
+        slug = path.lstrip("/")
+        full = self.base + path
+        if (not slug or slug in _NON_PRODUCT_SLUGS
+                or is_obvious_non_product_url(full)):
+            return None
+        if slug.startswith("assets") or "." in slug or "-" not in slug:
+            return None
+        return path
+
+    def _fallback_product_paths(
+        self,
+        hrefs: list[str],
+        known_categories: set[str],
+    ) -> list[str]:
+        out: list[str] = []
+        for path in hrefs:
+            path = self._product_path_from_url(path)
+            if not path or path in known_categories:
+                continue
+            out.append(path)
+        return list(dict.fromkeys(out))
+
+    def _href_paths(self, html: str) -> list[str]:
+        out: list[str] = []
+        base_host = urlsplit(self.base).netloc
+        for href in re.findall(r'href=["\']([^"\']+)["\']', html):
+            if href.startswith(("mailto:", "tel:", "javascript:", "#")):
+                continue
+            url = urljoin(self.base + "/", href)
+            parsed = urlsplit(url)
+            if parsed.netloc and parsed.netloc != base_host:
+                continue
+            path = parsed.path.rstrip("/") or "/"
+            if not path.startswith("/"):
+                continue
+            out.append(path)
+        return out
+
+    def _normalize_path(self, url_or_path: str) -> str:
+        if url_or_path.startswith("http"):
+            return urlsplit(url_or_path).path.rstrip("/") or "/"
+        return url_or_path.rstrip("/") or "/"
+
+    @staticmethod
+    def _category_base_path(path: str) -> str:
+        parts = path.strip("/").split("/")
+        return "/" + parts[0] if parts and parts[0] else "/"
+
+    def _is_pagination_path(
+        self,
+        path: str,
+        known_categories: set[str],
+    ) -> bool:
+        parts = path.strip("/").split("/")
+        if len(parts) < 2:
+            return False
+        base = "/" + parts[0]
+        if base not in known_categories:
+            return False
+        if len(parts) == 2 and parts[1].isdigit():
+            return True
+        return (
+            len(parts) == 4
+            and parts[1].isdigit()
+            and parts[2]
+            and parts[3].isdigit()
+        )
+
+    @staticmethod
+    def _pagination_key(path: str) -> str:
+        parts = path.strip("/").split("/")
+        if not parts or not parts[0]:
+            return "/:1"
+        base = "/" + parts[0]
+        if len(parts) == 2 and parts[1].isdigit():
+            return f"{base}:{int(parts[1])}"
+        if len(parts) == 4 and parts[1].isdigit() and parts[3].isdigit():
+            return f"{base}:{int(parts[3])}"
+        return f"{base}:1"
 
     # ---------- 商品解析 ----------
     def _parse_product(self, fetcher, url: str) -> dict | None:

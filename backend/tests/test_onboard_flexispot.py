@@ -118,6 +118,9 @@ def test_flexispot_counts_browser_and_api(monkeypatch):
     assert len(result.products) >= 1, (
         f"expected >=1 SKU rows, got {len(result.products)}"
     )
+    assert result.total_product_count == 2
+    assert result.coverage_complete is False
+    assert result.coverage_code == "incomplete_detail_parse"
     # 具体字段
     row = result.products[0]
     assert row["sku"] == "EF1PRO-BLK"

@@ -25,7 +25,7 @@
   4. status：JSON-LD 含 offers.availability 时优先；无 offers 时基于价格存在性
      判断（有价格 → on_sale）；终态 /browse → discontinued 不入库
 
-env：ARTICLE_LIMIT 默认 1000
+env：ARTICLE_LIMIT 默认近似不截断；ARTICLE_MAX_ELAPSED_SEC=0 表示不在 crawler 内部提前停止
 """
 from __future__ import annotations
 
@@ -39,9 +39,9 @@ from selectolax.parser import HTMLParser
 
 from .base import BaseCrawler, CrawlResult
 
-DEFAULT_LIMIT = int(os.environ.get("ARTICLE_LIMIT", "1000"))
+DEFAULT_LIMIT = int(os.environ.get("ARTICLE_LIMIT", "999999"))
 PDP_TIMEOUT = int(os.environ.get("ARTICLE_PDP_TIMEOUT", "12"))
-MAX_ELAPSED_SEC = float(os.environ.get("ARTICLE_MAX_ELAPSED_SEC", "240"))
+MAX_ELAPSED_SEC = float(os.environ.get("ARTICLE_MAX_ELAPSED_SEC", "0"))
 SITEMAP_URL = "https://www.article.com/product_sitemap.xml"
 BROWSE_URL = "https://www.article.com/browse"
 
@@ -58,7 +58,7 @@ class ArticleCrawler(BaseCrawler):
     def __init__(self, site):
         super().__init__(site)
         self.base = site.url.rstrip("/")
-        self.limit = self._resolve_limit(DEFAULT_LIMIT)
+        self.limit = self._resolve_limit(DEFAULT_LIMIT, honor_persisted=False)
         # US=1 / CA=2，默认 US
         self._cur_cookie = "2" if (site.country or "").upper() == "CA" else "1"
 
@@ -101,12 +101,21 @@ class ArticleCrawler(BaseCrawler):
         urls = re.findall(r"<loc>\s*(.*?)\s*</loc>", res.text)
         product_urls = [u for u in urls if "/product/" in u]
         all_urls = self._dedupe(live_urls + product_urls)
-        total = len(all_urls)
+        discovered_total = len(all_urls)
         targets = all_urls[: self.limit]
         result.notes.append(
             f"browse 当前 {len(live_urls)} 个 PDP，sitemap {len(product_urls)} 个"
-            f" /product/ URL，去重后 {total} 个，本次抓取 {len(targets)} 条"
+            f" /product/ URL，去重后 {discovered_total} 个，本次抓取 {len(targets)} 条"
             f"（ARTICLE_LIMIT={self.limit}）")
+        if len(targets) < discovered_total:
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "sitemap"
+            result.coverage_reason = (
+                f"Article 发现 {discovered_total} 个商品 URL，本次只计划抓取 {len(targets)} 个"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = "移除 ARTICLE_LIMIT 后重跑。"
 
         # ---- Step 3：逐 URL 抓取 ----
         ok = 0
@@ -114,10 +123,21 @@ class ArticleCrawler(BaseCrawler):
         skipped = 0
         for url in targets:
             elapsed = time.monotonic() - started
-            if elapsed >= MAX_ELAPSED_SEC:
+            if MAX_ELAPSED_SEC > 0 and elapsed >= MAX_ELAPSED_SEC:
                 result.notes.append(
                     f"达到 ARTICLE_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
                     f"提前返回已解析结果（ok={ok}, 停售={discontinued}, 跳过={skipped}）")
+                result.coverage_complete = False
+                result.coverage_code = "incomplete_detail_parse"
+                result.coverage_stage = "fetch"
+                result.coverage_reason = (
+                    f"达到 ARTICLE_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
+                    f"本次只处理 {ok + discontinued + skipped}/{len(targets)} 个 URL"
+                )
+                result.coverage_retryable = True
+                result.coverage_suggested_action = (
+                    "放宽 ARTICLE_MAX_ELAPSED_SEC 或拆分失败商品重抓。"
+                )
                 break
             try:
                 row, status = self._fetch_and_parse(fetcher, url)
@@ -136,6 +156,18 @@ class ArticleCrawler(BaseCrawler):
 
         result.notes.append(
             f"成功解析 {ok}/{len(targets)} | 停售 {discontinued} | 跳过 {skipped}")
+        # Article 的 sitemap 长期滞后，很多旧 PDP 会重定向到 /browse。
+        # 本次商品总量按仍然落在 PDP 的当前商品计，停售旧 URL 不进入分母。
+        result.total_product_count = ok + skipped
+        if skipped:
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "pdp"
+            result.coverage_reason = (
+                f"Article 有 {skipped} 个当前 PDP 未能解析成商品。"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = "修复 Article PDP parser 后按失败商品重抓。"
         return result
 
     def _discover_browse_urls(self, fetcher, result: CrawlResult) -> list[str]:

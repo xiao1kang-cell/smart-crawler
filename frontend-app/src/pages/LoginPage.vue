@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 const busy = ref('')
 const error = ref('')
@@ -11,12 +12,20 @@ const mode = ref<'login' | 'register'>('login')
 const loginForm = ref({ identifier: '', password: '' })
 const registerForm = ref({ invite_code: '', username: '', email: '', display_name: '', password: '', confirm_password: '' })
 
+function redirectAfterAuth() {
+  const redirect = route.query.redirect
+  if (typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')) {
+    return redirect
+  }
+  return '/app/overview'
+}
+
 async function submitLogin() {
   busy.value = 'login'
   error.value = ''
   try {
     await auth.login({ username: loginForm.value.identifier, password: loginForm.value.password })
-    router.push('/app/overview')
+    router.push(redirectAfterAuth())
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -29,7 +38,7 @@ async function submitRegister() {
   error.value = ''
   try {
     await auth.register(registerForm.value)
-    router.push('/app/overview')
+    router.push(redirectAfterAuth())
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {

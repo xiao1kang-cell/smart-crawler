@@ -46,7 +46,9 @@ from urllib.parse import unquote
 from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
 
-DEFAULT_LIMIT = int(os.environ.get("BOL_LIMIT", "1000"))
+DEFAULT_LIMIT = int(os.environ.get("BOL_LIMIT", "999999"))
+if DEFAULT_LIMIT <= 0 or DEFAULT_LIMIT == 1000:
+    DEFAULT_LIMIT = 999999
 TRY_PDP_ENRICH = os.environ.get("BOL_TRY_PDP", "0") == "1"
 
 # 每个站点对应的 sitemap_index 入口（来自 robots.txt 实测）
@@ -75,7 +77,7 @@ class BolCrawler(BaseCrawler):
     def __init__(self, site):
         super().__init__(site)
         self.base = site.url.rstrip("/")
-        self.limit = self._resolve_limit(DEFAULT_LIMIT)
+        self.limit = self._resolve_limit(DEFAULT_LIMIT, honor_persisted=False)
         # 按站点 country 选 sitemap root：NL → nl-nl，BE → nl-be
         cc = (site.country or "NL").upper()
         self.sitemap_root = _SITEMAP_ROOT.get(cc, _SITEMAP_ROOT["NL"])
@@ -122,6 +124,8 @@ class BolCrawler(BaseCrawler):
 
         sub_sitemaps = [u for u in _SITEMAP_LOC_RE.findall(idx_text)
                         if _SUB_SITEMAP_RE.search(u)]
+        result.total_product_count = self._estimate_sitemap_total(
+            fetcher, sub_sitemaps, result)
         result.notes.append(
             f"sitemap_index 命中 {len(sub_sitemaps)} 个 product 子 sitemap"
             f"（{self.sitemap_root}）")
@@ -156,12 +160,12 @@ class BolCrawler(BaseCrawler):
 
             parsed_in_file = 0
             for blk in _URL_BLOCK_RE.finditer(sm_text):
-                if len(result.products) >= self.limit:
-                    break
                 row = self._parse_sitemap_entry(blk.group(1))
                 if not row or row["sku"] in seen:
                     continue
                 seen.add(row["sku"])
+                if len(result.products) >= self.limit:
+                    continue
                 result.products.append(row)
                 parsed_in_file += 1
 
@@ -178,8 +182,47 @@ class BolCrawler(BaseCrawler):
             result.notes.append(
                 f"PDP 兜底尝试 {n_try}, 成功 {enriched}")
 
+        if result.total_product_count and len(result.products) < result.total_product_count:
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "sitemap"
+            result.coverage_reason = (
+                f"Bol 官方 sitemap 全量约 {result.total_product_count} 个商品，"
+                f"本次只产出 {len(result.products)} 个"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = (
+                "继续分批重跑或配置更高 BOL_LIMIT，直到 sitemap 全量入库"
+            )
         result.notes.append(f"采集 {len(result.products)} 个去重 SKU")
         return result
+
+    def _estimate_sitemap_total(
+        self,
+        fetcher,
+        sub_sitemaps: list[str],
+        result: CrawlResult,
+    ) -> int | None:
+        """Bol product sitemap 分片固定按 50k URL 切分，读首尾即可算全量。"""
+        if not sub_sitemaps:
+            return None
+        try:
+            first = fetcher.get(
+                sub_sitemaps[0], headers=self._headers(), timeout=60)
+            last = fetcher.get(
+                sub_sitemaps[-1], headers=self._headers(), timeout=60)
+        except Exception as exc:
+            result.notes.append(f"⚠ Bol sitemap total 估算失败: {exc}")
+            return None
+        first_count = len(_URL_BLOCK_RE.findall(first.text or ""))
+        last_count = len(_URL_BLOCK_RE.findall(last.text or ""))
+        if not first_count:
+            return None
+        total = (len(sub_sitemaps) - 1) * first_count + last_count
+        result.notes.append(
+            f"Bol 官方 sitemap 全量估算：{len(sub_sitemaps)} 分片 · "
+            f"首片 {first_count} · 尾片 {last_count} · total={total}")
+        return total
 
     # ------------------------------------------------------------------
     # 单条 sitemap url 节点 → product dict

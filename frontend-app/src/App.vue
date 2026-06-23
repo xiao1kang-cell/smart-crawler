@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import AppToasts from './components/common/AppToasts.vue'
 
 const isDark = ref(false)
 
@@ -25,6 +26,7 @@ onMounted(syncThemeState)
 <template>
   <UApp>
     <RouterView />
+    <AppToasts />
     <button id="theme-toggle" type="button" aria-label="切换主题" @click="toggleTheme">
       <span class="ico">{{ isDark ? '☀️' : '🌙' }}</span>
       <span class="txt">{{ isDark ? '浅色' : '暗色' }}</span>

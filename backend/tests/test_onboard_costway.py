@@ -254,3 +254,72 @@ def test_costway_bestseller_label_set(monkeypatch):
     assert rows["CW0002"]["is_bestseller"] is True
     # CW0001 is not in bestseller list
     assert rows["CW0001"]["is_bestseller"] is False
+
+
+def test_costway_total_counts_discovered_items_not_only_parsed_rows(monkeypatch):
+    """A malformed API item still belongs in the run total if it has a stable URL."""
+    from app.crawlers.costway import CostwayCrawler
+
+    crawler = CostwayCrawler(_site())
+    malformed = dict(_PRODUCT_B)
+    malformed.pop("sku")
+
+    def fake_get(url: str, **kw) -> FetchResult:
+        crawler.counter.api_calls += 1
+        path = url.split("costway.com", 1)[-1].split("?")[0]
+
+        if path in ("/api/home-newarrivals", "/api/home-bestseller"):
+            return _ok_result(url, {"result": []})
+        if path == "/api/category":
+            return _ok_result(url, _CATEGORY_RESP)
+        if path == "/api/products":
+            if not hasattr(fake_get, "_hit"):
+                fake_get._hit = 0
+            fake_get._hit += 1
+            if fake_get._hit == 1:
+                return _ok_result(url, {
+                    "result": {"data": [_PRODUCT_A, malformed], "total": 2}
+                })
+            return _ok_result(url, _PRODUCTS_EMPTY)
+
+        return _ok_result(url, {})
+
+    class _F:
+        def get(self, url, **kw):
+            return fake_get(url, **kw)
+
+    monkeypatch.setattr(crawler, "make_fetcher", lambda **kw: _F())
+
+    result = crawler.crawl()
+
+    assert len(result.products) == 1
+    assert result.total_product_count == 2
+
+
+def test_costway_concurrency_stays_serial_without_proxy_lease(monkeypatch):
+    """Costway must not parallelize from the server IP without proxy leases."""
+    from app.crawlers.costway import CostwayCrawler
+
+    crawler = CostwayCrawler(_site())
+    crawler.site.crawler_config = {"detail_concurrency": 8, "listing_concurrency": 8}
+    monkeypatch.setenv("COSTWAY_CONCURRENCY", "8")
+
+    assert crawler._listing_concurrency() == 1
+    assert crawler._detail_concurrency() == 1
+    assert crawler._proxy_lease_ttl_sec(default=0) == 0
+
+
+def test_costway_concurrency_enabled_by_proxy_lease_config(monkeypatch):
+    """Configured proxy lease TTL is the switch that allows Costway concurrency."""
+    from app.crawlers.costway import CostwayCrawler
+
+    crawler = CostwayCrawler(_site())
+    crawler.site.crawler_config = {
+        "proxy_lease_ttl_sec": 300,
+        "detail_concurrency": 6,
+        "listing_concurrency": 10,
+    }
+    monkeypatch.delenv("COSTWAY_CONCURRENCY", raising=False)
+
+    assert crawler._listing_concurrency() == 10
+    assert crawler._detail_concurrency() == 6

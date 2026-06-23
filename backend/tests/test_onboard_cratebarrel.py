@@ -27,6 +27,8 @@ pytestmark = pytest.mark.unit
 _SKU = "507728"
 _SLUG = "lowell-upholstered-bed"
 _PDP_URL = f"https://www.crateandbarrel.com/{_SLUG}/s{_SKU}/"
+_SKU_2 = "507729"
+_PDP_URL_2 = "https://www.crateandbarrel.com/wood-storage-bench/s507729/"
 
 # Minimal sitemap_index pointing at one PDP sitemap
 _SITEMAP_INDEX_XML = (
@@ -46,6 +48,26 @@ _SITEMAP_PDP_XML = (
     f"<image:image>"
     f"<image:loc>https://cb.scene7.com/is/image/Crate/LowellBed</image:loc>"
     f"<image:title>Lowell Upholstered King Bed - image 0 of 6</image:title>"
+    f"</image:image>"
+    f"</url>"
+    "</urlset>"
+)
+
+_SITEMAP_PDP_TWO_XML = (
+    "<?xml version='1.0' encoding='UTF-8'?>"
+    "<urlset xmlns:image='http://www.google.com/schemas/sitemap-image/1.1'>"
+    f"<url>"
+    f"<loc>{_PDP_URL}</loc>"
+    f"<image:image>"
+    f"<image:loc>https://cb.scene7.com/is/image/Crate/LowellBed</image:loc>"
+    f"<image:title>Lowell Upholstered King Bed - image 0 of 6</image:title>"
+    f"</image:image>"
+    f"</url>"
+    f"<url>"
+    f"<loc>{_PDP_URL_2}</loc>"
+    f"<image:image>"
+    f"<image:loc>https://cb.scene7.com/is/image/Crate/WoodBench</image:loc>"
+    f"<image:title>Wood Storage Bench - image 0 of 4</image:title>"
     f"</image:image>"
     f"</url>"
     "</urlset>"
@@ -136,6 +158,104 @@ def test_cratebarrel_curl_path_counts_api(monkeypatch):
     assert p["product_url"] == _PDP_URL
     assert p["site"] == "cratebarrel"
     assert p["currency"] == "USD"
+
+
+def test_cratebarrel_counts_full_sitemap_total_even_when_limited(monkeypatch):
+    """limit controls emitted rows only; total_product_count must still count the full sitemap."""
+    from app.crawlers.cratebarrel import CrateBarrelCrawler
+
+    crawler = CrateBarrelCrawler(_site())
+    crawler.limit = 1
+
+    url_map = {
+        "https://www.crateandbarrel.com/assets/sitemap-index.xml": FetchResult(
+            ok=True,
+            url="https://www.crateandbarrel.com/assets/sitemap-index.xml",
+            status=200,
+            text=_SITEMAP_INDEX_XML,
+            content=_SITEMAP_INDEX_XML.encode(),
+            final_url="https://www.crateandbarrel.com/assets/sitemap-index.xml",
+            fetcher="curl_cffi",
+        ),
+        "https://www.crateandbarrel.com/assets/sitemap-pdp.xml": FetchResult(
+            ok=True,
+            url="https://www.crateandbarrel.com/assets/sitemap-pdp.xml",
+            status=200,
+            text=_SITEMAP_PDP_TWO_XML,
+            content=_SITEMAP_PDP_TWO_XML.encode(),
+            final_url="https://www.crateandbarrel.com/assets/sitemap-pdp.xml",
+            fetcher="curl_cffi",
+        ),
+    }
+
+    monkeypatch.setattr(crawler, "make_fetcher",
+                        lambda **kw: _make_fake_fetcher(crawler, url_map))
+    monkeypatch.setattr(crawler, "sleep", lambda: None)
+    monkeypatch.setattr(crawler, "snapshot", lambda name, content: None)
+
+    result = crawler.crawl()
+
+    assert len(result.products) == 1
+    assert result.total_product_count == 2
+    assert result.coverage_complete is False
+    assert result.coverage_code == "incomplete_detail_parse"
+
+
+def test_cratebarrel_marks_partial_when_sub_sitemap_fails(monkeypatch):
+    """A failed PDP sitemap shard means the discovered denominator is incomplete."""
+    from app.crawlers.cratebarrel import CrateBarrelCrawler
+
+    crawler = CrateBarrelCrawler(_site())
+    crawler.limit = 5
+    index_xml = (
+        "<?xml version='1.0' encoding='UTF-8'?>"
+        "<sitemapindex>"
+        "<sitemap><loc>https://www.crateandbarrel.com/assets/sitemap-pdp.xml</loc></sitemap>"
+        "<sitemap><loc>https://www.crateandbarrel.com/assets/sitemap-pdp1.xml</loc></sitemap>"
+        "</sitemapindex>"
+    )
+
+    url_map = {
+        "https://www.crateandbarrel.com/assets/sitemap-index.xml": FetchResult(
+            ok=True,
+            url="https://www.crateandbarrel.com/assets/sitemap-index.xml",
+            status=200,
+            text=index_xml,
+            content=index_xml.encode(),
+            final_url="https://www.crateandbarrel.com/assets/sitemap-index.xml",
+            fetcher="curl_cffi",
+        ),
+        "https://www.crateandbarrel.com/assets/sitemap-pdp.xml": FetchResult(
+            ok=True,
+            url="https://www.crateandbarrel.com/assets/sitemap-pdp.xml",
+            status=200,
+            text=_SITEMAP_PDP_XML,
+            content=_SITEMAP_PDP_XML.encode(),
+            final_url="https://www.crateandbarrel.com/assets/sitemap-pdp.xml",
+            fetcher="curl_cffi",
+        ),
+        "https://www.crateandbarrel.com/assets/sitemap-pdp1.xml": FetchResult(
+            ok=False,
+            url="https://www.crateandbarrel.com/assets/sitemap-pdp1.xml",
+            status=503,
+            text="",
+            content=b"",
+            final_url="https://www.crateandbarrel.com/assets/sitemap-pdp1.xml",
+            fetcher="curl_cffi",
+        ),
+    }
+
+    monkeypatch.setattr(crawler, "make_fetcher",
+                        lambda **kw: _make_fake_fetcher(crawler, url_map))
+    monkeypatch.setattr(crawler, "sleep", lambda: None)
+    monkeypatch.setattr(crawler, "snapshot", lambda name, content: None)
+
+    result = crawler.crawl()
+
+    assert len(result.products) == 1
+    assert result.coverage_complete is False
+    assert result.coverage_code == "incomplete_discovery"
+    assert "1/2" in result.coverage_reason
 
 
 def test_cratebarrel_parse_sitemap_entry_not_degraded():

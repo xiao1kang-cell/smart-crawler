@@ -27,6 +27,13 @@ class CrawlResult:
         self.api_calls: int = 0
         self.browser_opens: int = 0
         self.pages_fetched: int = 0
+        self.total_product_count: int | None = None
+        self.coverage_complete: bool = True
+        self.coverage_code: str | None = None
+        self.coverage_stage: str | None = None
+        self.coverage_reason: str | None = None
+        self.coverage_retryable: bool | None = None
+        self.coverage_suggested_action: str | None = None
 
 
 class BaseCrawler(ABC):
@@ -44,10 +51,18 @@ class BaseCrawler(ABC):
         self.proxy = get_proxy(site.proxy_tier, site=site.site)
         self.counter = CrawlCounter()
 
-    def _resolve_limit(self, default: int, explicit: int | None = None) -> int:
-        """limit 优先级：显式参数 > DB crawler_config > sites.yaml > env 默认。"""
+    def _resolve_limit(self, default: int, explicit: int | None = None,
+                       *, honor_persisted: bool = True) -> int:
+        """Resolve crawl item limits.
+
+        Explicit limits are kept for smoke tests and one-off debug runs. Some
+        production crawlers need true full-store crawls, so they can opt out of
+        persisted DB/YAML caps that were originally added as sampling guards.
+        """
         if explicit is not None:
             return explicit
+        if not honor_persisted:
+            return int(default)
         config = self.site.crawler_config or {}
         if isinstance(config, dict) and config.get("max_products") not in (None, ""):
             return int(config["max_products"])

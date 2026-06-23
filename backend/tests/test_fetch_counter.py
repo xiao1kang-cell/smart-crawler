@@ -62,7 +62,7 @@ def test_fail_fast_blocked_raises_on_anti_bot_challenge(monkeypatch):
         status_code = 200
         text = "<html>Cloudflare verify you are human</html>"
         content = text.encode()
-        url = "https://example.com/challenge"
+        url = "https://example.com/p/1"
 
     class FakeSession:
         def __init__(self, **kwargs):
@@ -77,7 +77,7 @@ def test_fail_fast_blocked_raises_on_anti_bot_challenge(monkeypatch):
     monkeypatch.setattr("app.fetching._record_fetch", lambda *args, **kwargs: None)
 
     with pytest.raises(BlockedError) as exc:
-        fetcher.get("https://example.com/challenge")
+        fetcher.get("https://example.com/p/1")
 
     assert "anti_bot_challenge" in str(exc.value)
 
@@ -240,7 +240,7 @@ def test_retry_failure_event_does_not_mark_job_when_later_success(monkeypatch):
         s.close()
 
 
-def test_terminal_retry_failure_marks_job(monkeypatch):
+def test_terminal_retry_failure_does_not_mark_running_job(monkeypatch):
     init_db()
     site = Site(site="retry_failed_site", url="https://example.com",
                 country="US", proxy_tier="none", platform="generic")
@@ -273,6 +273,6 @@ def test_terminal_retry_failure_marks_job(monkeypatch):
         job = s.get(CrawlJob, job_id)
         assert result.ok is False
         assert result.failure and result.failure.code == "network_timeout"
-        assert job.failure_code == "network_timeout"
+        assert job.failure_code is None
     finally:
         s.close()

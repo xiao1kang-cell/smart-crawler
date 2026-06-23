@@ -51,8 +51,8 @@ import time
 from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
 
-DEFAULT_LIMIT = int(os.environ.get("WESTELM_LIMIT", "1000"))
-MAX_ELAPSED_SEC = float(os.environ.get("WESTELM_MAX_ELAPSED_SEC", "240"))
+DEFAULT_LIMIT = int(os.environ.get("WESTELM_LIMIT", "999999"))
+MAX_ELAPSED_SEC = float(os.environ.get("WESTELM_MAX_ELAPSED_SEC", "0"))
 SITEMAP_INDEX = ("https://www.westelm.com/netstorage/sitemaps/"
                  "product-sitemap-index.xml")
 ASSETS_CDN = "https://assets.weimgs.com/weimgs/ab/images/wcm/"
@@ -76,7 +76,8 @@ class WestElmCrawler(BaseCrawler):
     def __init__(self, site, limit: int | None = None):
         super().__init__(site)
         self.base = site.url.rstrip("/")
-        self.limit = self._resolve_limit(DEFAULT_LIMIT, limit)
+        self.limit = self._resolve_limit(DEFAULT_LIMIT, limit,
+                                         honor_persisted=False)
         # 实测 1.2s 间隔连发 10 个全 200，留点余量保守 1.5s（含 jitter ~2.4s）
         self.delay = float(os.environ.get("WESTELM_DELAY", "1.5"))
 
@@ -119,8 +120,19 @@ class WestElmCrawler(BaseCrawler):
             return result
 
         targets = urls[: self.limit]
+        result.total_product_count = len(urls)
+        _persist_job_total_product_count(self.job_id, len(urls))
         result.notes.append(
             f"sitemap 累计 {len(urls)} PDP URL，本次抓取 {len(targets)}")
+        if len(targets) < len(urls):
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "sitemap"
+            result.coverage_reason = (
+                f"WestElm sitemap 共 {len(urls)} 个商品，本次只计划抓取 {len(targets)} 个"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = "移除 WESTELM_LIMIT 后重跑。"
 
         import time as _t
 
@@ -133,10 +145,21 @@ class WestElmCrawler(BaseCrawler):
         STEALTH_BUDGET = 5
 
         for i, url in enumerate(targets):
-            if time.monotonic() - started >= MAX_ELAPSED_SEC:
+            if MAX_ELAPSED_SEC > 0 and time.monotonic() - started >= MAX_ELAPSED_SEC:
                 result.notes.append(
                     f"达到 WESTELM_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
                     f"提前返回已解析结果（ok={ok}, fail={fail}, blocked={blocked}）")
+                result.coverage_complete = False
+                result.coverage_code = "incomplete_detail_parse"
+                result.coverage_stage = "fetch"
+                result.coverage_reason = (
+                    f"达到 WESTELM_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
+                    f"本次只解析 {ok}/{len(targets)} 个商品"
+                )
+                result.coverage_retryable = True
+                result.coverage_suggested_action = (
+                    "放宽 WESTELM_MAX_ELAPSED_SEC 或拆分失败商品重抓。"
+                )
                 break
             if i > 0 and i % SESSION_ROTATE == 0:
                 fetcher = self.make_fetcher(kind="product", source="westelm")
@@ -233,12 +256,16 @@ class WestElmCrawler(BaseCrawler):
         result.notes.append(
             f"成功 {ok}/{len(targets)} · 失败 {fail} · 反爬命中 {blocked} · "
             f"stealth fallback {stealth_used}")
+        result.total_product_count = max(
+            int(result.total_product_count or 0),
+            len(result.products),
+        )
         return result
 
     # ---------- sitemap ----------
     def _collect_pdp_urls(self, fetcher,
                           result: CrawlResult) -> list[str]:
-        """读 product-sitemap-index → 子 sitemap (.gz) → 列出 product URL。"""
+        """读 product-sitemap-index → 子 sitemap (.gz) → 列出全量 product URL。"""
         try:
             res = fetcher.get(
                 SITEMAP_INDEX,
@@ -263,8 +290,6 @@ class WestElmCrawler(BaseCrawler):
         urls: list[str] = []
         seen: set[str] = set()
         for sm in subs:
-            if len(urls) >= self.limit:
-                break
             try:
                 r = fetcher.get(sm, headers=self._headers(), timeout=60)
                 if (r.status or 0) != 200:
@@ -291,8 +316,6 @@ class WestElmCrawler(BaseCrawler):
                         continue
                     seen.add(u)
                     urls.append(u)
-                    if len(urls) >= self.limit:
-                        break
                 result.notes.append(
                     f"{sm.rsplit('/',1)[-1]}: +{len(urls)-count_before} URL "
                     f"（累计 {len(urls)}）")
@@ -625,3 +648,24 @@ class WestElmCrawler(BaseCrawler):
             return float(m.group()) if m else None
         except ValueError:
             return None
+
+
+def _persist_job_total_product_count(job_id: int | None, total: int) -> None:
+    """让运行中的任务也能展示本次全量分母。"""
+    if not job_id or total < 0:
+        return
+    try:
+        from ..db import SessionLocal
+        from ..models import CrawlJob
+    except Exception:
+        return
+    db = SessionLocal()
+    try:
+        job = db.get(CrawlJob, job_id)
+        if job is not None:
+            job.total_product_count = int(total)
+            db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()

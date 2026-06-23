@@ -1,8 +1,37 @@
 import { useAuthStore } from '../stores/auth'
+import { useToastStore } from '../stores/toast'
 
 export type Dict<T = unknown> = Record<string, T>
 
-export async function apiJson<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
+export type ApiRequestInit = RequestInit & {
+  suppressToast?: boolean
+  suppressAuthRedirect?: boolean
+}
+
+let authRedirecting = false
+let lastToast = { message: '', at: 0 }
+
+function errorMessageFrom(data: any, fallback: string) {
+  const message = data?.detail || data?.error || data?.message || fallback
+  return typeof message === 'string' ? message : JSON.stringify(message)
+}
+
+function notifyError(message: string, description?: string) {
+  const now = Date.now()
+  if (lastToast.message === message && now - lastToast.at < 1600) return
+  lastToast = { message, at: now }
+  useToastStore().error(message, description)
+}
+
+function redirectToLogin() {
+  if (typeof window === 'undefined' || authRedirecting) return
+  if (window.location.pathname === '/login') return
+  authRedirecting = true
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  window.location.replace(`/login?redirect=${encodeURIComponent(current)}`)
+}
+
+export async function apiJson<T = any>(path: string, opts: ApiRequestInit = {}): Promise<T> {
   const auth = useAuthStore()
   const headers = new Headers(opts.headers || {})
   if (!headers.has('Content-Type') && opts.body && !(opts.body instanceof FormData)) {
@@ -11,16 +40,36 @@ export async function apiJson<T = any>(path: string, opts: RequestInit = {}): Pr
   if (auth.token) headers.set('Authorization', `Bearer ${auth.token}`)
   if (auth.workspaceId) headers.set('X-Workspace-Id', auth.workspaceId)
 
-  const res = await fetch(path, { ...opts, headers })
+  let res: Response
+  try {
+    res = await fetch(path, { ...opts, headers })
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    if (!opts.suppressToast) notifyError('网络请求失败', detail)
+    throw err
+  }
+
   if (res.status === 401) {
     auth.clear()
-    throw new Error('登录已过期，请重新登录')
+    const message = '登录已过期，请重新登录'
+    if (!opts.suppressToast) notifyError(message)
+    if (!opts.suppressAuthRedirect) redirectToLogin()
+    throw new Error(message)
   }
+
   const text = await res.text()
-  const data = text ? JSON.parse(text) : null
+  let data: any = null
+  if (text) {
+    try {
+      data = JSON.parse(text)
+    } catch {
+      data = { message: text }
+    }
+  }
   if (!res.ok) {
-    const message = data?.detail || data?.error || data?.message || `${res.status} ${res.statusText}`
-    throw new Error(typeof message === 'string' ? message : JSON.stringify(message))
+    const message = errorMessageFrom(data, `${res.status} ${res.statusText}`)
+    if (!opts.suppressToast) notifyError(message)
+    throw new Error(message)
   }
   return data as T
 }

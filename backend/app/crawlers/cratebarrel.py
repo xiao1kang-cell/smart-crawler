@@ -28,11 +28,11 @@
 
 策略（与 overstock.py 对齐）：
   1. 顺序读 sitemap-pdp.xml → sitemap-pdp1.xml（跳过 nla-pdp），累积去重
-     直到 limit（默认 1000）。
+     直到 sitemap 耗尽（环境变量/站点配置仍可显式缩小做 smoke test）。
   2. 单条 sitemap 节点即产出一行 product dict —— 字段够齐用于「商品标杆库」。
   3. CRATEBARREL_TRY_PDP=1 时尝试 PDP 兜底丰富（价格 / 评分 / 描述 /
      完整图组），用 StealthyFetcher 解 JSON-LD。默认关。
-  4. CRATEBARREL_LIMIT=N 控制目标 SKU 数（默认 1000）。
+  4. CRATEBARREL_LIMIT=N 控制目标 SKU 数（默认近似不截断）。
 
 可拿字段（sitemap-only 路径）：
   sku / spu       → URL 末段 'sNNNNN' 去前缀
@@ -59,7 +59,7 @@ import re
 from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
 
-DEFAULT_LIMIT = int(os.environ.get("CRATEBARREL_LIMIT", "1000"))
+DEFAULT_LIMIT = int(os.environ.get("CRATEBARREL_LIMIT", "999999"))
 SITEMAP_INDEX = "https://www.crateandbarrel.com/assets/sitemap-index.xml"
 TRY_PDP_ENRICH = os.environ.get("CRATEBARREL_TRY_PDP", "0") == "1"
 PDP_ENRICH_BUDGET = int(os.environ.get("CRATEBARREL_PDP_BUDGET", "50"))
@@ -93,7 +93,8 @@ class CrateBarrelCrawler(BaseCrawler):
     def __init__(self, site, limit: int | None = None):
         super().__init__(site)
         self.base = site.url.rstrip("/")
-        self.limit = self._resolve_limit(DEFAULT_LIMIT, limit)
+        self.limit = self._resolve_limit(
+            DEFAULT_LIMIT, limit, honor_persisted=False)
 
     # ------------------------------------------------------------------
     # headers  (replaces old _session — proxy handled by CrawlerFetcher)
@@ -155,9 +156,8 @@ class CrateBarrelCrawler(BaseCrawler):
 
         # ---- Step 2：扫子 sitemap → 商品 dict ----
         seen: set[str] = set()
+        failed_sitemaps = 0
         for sm_url in sub_sitemaps:
-            if len(result.products) >= self.limit:
-                break
             try:
                 sm = fetcher.get(
                     sm_url,
@@ -166,12 +166,14 @@ class CrateBarrelCrawler(BaseCrawler):
                 )
                 self.guard(sm.status or 0, f"sub:{sm_url}")
                 if (sm.status or 0) != 200:
+                    failed_sitemaps += 1
                     result.notes.append(
                         f"⚠ {sm_url.rsplit('/',1)[-1]} {sm.status}")
                     continue
             except BlockedError:
                 raise
             except Exception as exc:
+                failed_sitemaps += 1
                 result.notes.append(
                     f"⚠ {sm_url.rsplit('/',1)[-1]} 异常: {exc}")
                 continue
@@ -180,18 +182,17 @@ class CrateBarrelCrawler(BaseCrawler):
 
             parsed = 0
             for blk in _URL_BLOCK_RE.finditer(sm.text):
-                if len(result.products) >= self.limit:
-                    break
                 row = self._parse_sitemap_entry(blk.group(1))
                 if not row or row["sku"] in seen:
                     continue
                 seen.add(row["sku"])
-                result.products.append(row)
-                parsed += 1
+                if len(result.products) < self.limit:
+                    result.products.append(row)
+                    parsed += 1
 
             result.notes.append(
                 f"{sm_url.rsplit('/',1)[-1]}: +{parsed} SKU "
-                f"（累计 {len(result.products)}）")
+                f"（累计入库 {len(result.products)} / sitemap 去重 {len(seen)}）")
             self.sleep()
 
         # ---- Step 3（可选）：PDP 兜底丰富 ----
@@ -204,6 +205,27 @@ class CrateBarrelCrawler(BaseCrawler):
         result.notes.append(
             f"采集 {len(result.products)} 个去重 SKU（sitemap-only 路径，"
             f"价格/描述/分类需 CRATEBARREL_TRY_PDP=1 + 住宅代理）")
+        result.total_product_count = len(seen)
+        if failed_sitemaps:
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_discovery"
+            result.coverage_stage = "sitemap"
+            result.coverage_reason = (
+                f"Crate&Barrel 有 {failed_sitemaps}/{len(sub_sitemaps)} 个 PDP sitemap "
+                "未成功读取，本次分母只包含成功读取的分片。"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = "修复 sitemap 访问失败后重跑该站点。"
+        if len(result.products) < len(seen):
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "sitemap"
+            result.coverage_reason = (
+                f"Crate&Barrel sitemap 共 {len(seen)} 个在售 SKU，"
+                f"本次只产出 {len(result.products)} 个"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = "移除 CRATEBARREL_LIMIT 后重跑。"
         return result
 
     # ------------------------------------------------------------------

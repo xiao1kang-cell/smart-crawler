@@ -61,17 +61,51 @@ class ShopifyCrawler(BaseCrawler):
                              f"热销 collection {len(best_handles)} 款")
 
         # ---- 全量商品 ----
+        seen_skus: set[str] = set()
+        duplicate_skus = 0
+        hit_page_cap = False
+        fetched_raw_products = 0
         for page in range(1, MAX_PAGES + 1):
             data = self._get_json(fetcher, f"/products.json?limit={PAGE_SIZE}&page={page}")
             products = data.get("products", [])
             if not products:
                 break
+            fetched_raw_products += len(products)
+            if page == MAX_PAGES:
+                hit_page_cap = True
             for prod in products:
-                result.products.extend(self._expand(prod, new_handles, best_handles))
+                for row in self._expand(prod, new_handles, best_handles):
+                    sku = str(row.get("sku") or "").strip()
+                    if sku and sku in seen_skus:
+                        duplicate_skus += 1
+                        continue
+                    if sku:
+                        seen_skus.add(sku)
+                    result.products.append(row)
             self.sleep()
 
         # ---- 分类树 ----
         result.categories = self._crawl_categories(fetcher)
+        result.total_product_count = len(result.products)
+        if hit_page_cap:
+            result.total_product_count = max(
+                result.total_product_count,
+                fetched_raw_products + 1,
+            )
+        if duplicate_skus:
+            result.notes.append(f"Shopify feed 去重重复 SKU {duplicate_skus} 条")
+        if hit_page_cap:
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_discovery"
+            result.coverage_stage = "products_json"
+            result.coverage_reason = (
+                f"Shopify /products.json 已打满 MAX_PAGES={MAX_PAGES}，"
+                "未看到空页终止，无法证明已覆盖全量商品。"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = (
+                "提高 Shopify MAX_PAGES 或按 collection/feed 分片后重跑。"
+            )
         return result
 
     def _expand(self, prod: dict, new_handles: set, best_handles: set) -> list[dict]:

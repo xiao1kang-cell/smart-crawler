@@ -220,6 +220,38 @@ def test_shopify_products_json_pagination_terminates(monkeypatch):
     assert len(result.products) >= 1
 
 
+def test_shopify_marks_partial_when_products_json_hits_page_cap(monkeypatch):
+    """If products.json never returns an empty page before MAX_PAGES, coverage is not proven."""
+    import app.crawlers.shopify as shopify_mod
+    from app.crawlers.shopify import ShopifyCrawler
+
+    monkeypatch.setattr(shopify_mod, "MAX_PAGES", 2)
+    crawler = ShopifyCrawler(_site())
+
+    def fake_get(url: str, **kw) -> FetchResult:
+        crawler.counter.api_calls += 1
+
+        if "/collections/" in url and "/products.json" in url:
+            return _ok_result(url, _EMPTY_PRODUCTS)
+        if "/products.json" in url:
+            return _ok_result(url, {"products": [_PRODUCT]})
+        if "/collections.json" in url:
+            return _ok_result(url, _EMPTY_COLLECTIONS)
+        return _ok_result(url, {})
+
+    class _F:
+        def get(self, url, **kw):
+            return fake_get(url, **kw)
+
+    monkeypatch.setattr(crawler, "make_fetcher", lambda **kw: _F())
+    result = crawler.crawl()
+
+    assert result.coverage_complete is False
+    assert result.coverage_code == "incomplete_discovery"
+    assert "MAX_PAGES=2" in result.coverage_reason
+    assert result.total_product_count > len(result.products)
+
+
 def test_shopify_new_handle_label(monkeypatch):
     """Products whose handle appears in new collection get is_new=True label."""
     from app.crawlers.shopify import ShopifyCrawler

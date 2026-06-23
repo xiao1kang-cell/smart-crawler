@@ -15,8 +15,8 @@ import time
 
 from .base import BaseCrawler, CrawlResult
 
-DEFAULT_LIMIT = int(os.environ.get("FLEXISPOT_LIMIT", "120"))
-MAX_ELAPSED_SEC = float(os.environ.get("FLEXISPOT_MAX_ELAPSED_SEC", "180"))
+DEFAULT_LIMIT = int(os.environ.get("FLEXISPOT_LIMIT", "999999"))
+MAX_ELAPSED_SEC = float(os.environ.get("FLEXISPOT_MAX_ELAPSED_SEC", "0"))
 REQUEST_TIMEOUT = int(os.environ.get("FLEXISPOT_REQUEST_TIMEOUT", "12"))
 _CURRENCY = {"US": "USD", "UK": "GBP", "CA": "CAD", "DE": "EUR", "IT": "EUR",
              "ES": "EUR", "FR": "EUR", "NL": "EUR", "PL": "PLN"}
@@ -30,7 +30,7 @@ class FlexispotCrawler(BaseCrawler):
     def __init__(self, site):
         super().__init__(site)
         self.base = site.url.rstrip("/")
-        self.limit = self._resolve_limit(DEFAULT_LIMIT)
+        self.limit = self._resolve_limit(DEFAULT_LIMIT, honor_persisted=False)
         self.currency = _CURRENCY.get(site.country, "USD")
 
     def _product_slugs(self) -> list[str]:
@@ -93,8 +93,19 @@ class FlexispotCrawler(BaseCrawler):
         started = time.monotonic()
         slugs = self._product_slugs()
         targets = slugs[: self.limit]
+        result.total_product_count = len(slugs)
         result.notes.append(
             f"sitemap 发现 {len(slugs)} 个商品 slug，本次抓取 {len(targets)} 个")
+        if len(targets) < len(slugs):
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "fetch"
+            result.coverage_reason = (
+                f"Flexispot 本次全量分母 {len(slugs)}，"
+                f"实际计划抓取 {len(targets)}，已被 limit 截断"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = "移除 FLEXISPOT_LIMIT 后重跑。"
         if not targets:
             result.notes.append("⚠ 未发现商品 slug")
             return result
@@ -120,10 +131,20 @@ class FlexispotCrawler(BaseCrawler):
         api = self.base + "/sapi/mall-item/item/detail"
         ok = 0
         for slug in targets:
-            if time.monotonic() - started >= MAX_ELAPSED_SEC:
+            if MAX_ELAPSED_SEC > 0 and time.monotonic() - started >= MAX_ELAPSED_SEC:
                 result.notes.append(
                     f"达到 FLEXISPOT_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
                     f"提前返回已解析结果（ok={ok}/{len(targets)}）")
+                result.coverage_complete = False
+                result.coverage_code = "incomplete_detail_parse"
+                result.coverage_stage = "fetch"
+                result.coverage_reason = (
+                    f"Flexispot 商品详情解析达到耗时上限，已解析 {ok}/{len(targets)}"
+                )
+                result.coverage_retryable = True
+                result.coverage_suggested_action = (
+                    "放宽 FLEXISPOT_MAX_ELAPSED_SEC 或拆分失败商品重抓。"
+                )
                 break
             try:
                 res = fetcher.post(api, data=json.dumps({"urlKey": slug}),

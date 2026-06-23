@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import re
 import traceback
+import logging
 from datetime import datetime
 
-from sqlalchemy import case, or_, update
+from sqlalchemy import and_, case, exists, or_, update
 
 from .antiban import BlockedError, in_cooldown, set_cooldown
 from .billing import record_usage
@@ -29,9 +30,12 @@ from .crawl_diagnostics import (
 )
 from .crawlers.registry import get_crawler
 from .db import session_scope
-from .models import Category, CrawlJob, Product, Promotion, Site
+from .models import Category, CrawlJob, CrawlUrl, Product, Promotion, Site
 from .pipeline import parse_dt, to_price
 from .price_sources import enrich_products_from_site_config
+from .site_metrics import refresh_site_metrics
+
+logger = logging.getLogger(__name__)
 
 _PROMO_KEYWORDS = re.compile(
     r"\b("
@@ -75,7 +79,9 @@ _PROMO_END_KEYS = (
     "valid_through", "validthrough", "to_date",
 )
 
-HIGH_PRIORITY_TRIGGERS = ("manual", "admin_quality_rerun", "admin_retry")
+FAILED_PRODUCT_RETRY_TRIGGER = "failed_product_retry"
+HIGH_PRIORITY_TRIGGERS = ("manual", "admin_quality_rerun", "admin_retry",
+                          FAILED_PRODUCT_RETRY_TRIGGER)
 AUTO_DEDUP_TRIGGERS = ("scheduled", "daily_refresh", "daily_delta")
 NON_FATAL_PARTIAL_FAILURE_CODES = {
     "anti_bot_challenge",
@@ -88,6 +94,13 @@ NON_FATAL_PARTIAL_SITE_MIN_PRODUCTS = {
     "cdiscount_fr": 40,
 }
 NON_FATAL_PARTIAL_MIN_SUCCESS_RATE = 95.0
+
+
+class FailedProductRetryError(RuntimeError):
+    def __init__(self, info: FailureInfo, *, status: str = "failed"):
+        super().__init__(info.detail)
+        self.info = info
+        self.status = status
 
 
 def enqueue(site_name: str, trigger: str = "manual",
@@ -203,6 +216,10 @@ def claim_job(worker_id: str,
                 else_=2,
             )
             query = s.query(CrawlJob).filter(CrawlJob.status == "pending")
+            running_alias = CrawlJob.__table__.alias("running_jobs")
+            query = query.filter(~exists().where(
+                running_alias.c.status == "running"
+            ).where(running_alias.c.site == CrawlJob.site))
             if trigger_allowlist:
                 query = query.filter(CrawlJob.trigger.in_(trigger_allowlist))
             high_priority_touched_at = case(
@@ -230,6 +247,71 @@ def claim_job(worker_id: str,
                 .values(status="running", worker=worker_id,
                         started_at=now, heartbeat_at=now))
             return job.id if res.rowcount == 1 else None
+
+
+def _failed_product_retry_limit(crawler) -> int:
+    config = getattr(getattr(crawler, "site", None), "crawler_config", None) or {}
+    if isinstance(config, dict):
+        try:
+            return max(1, min(int(config.get("failed_product_retry_limit") or 500), 2000))
+        except (TypeError, ValueError):
+            return 500
+    return 500
+
+
+def _failed_product_retry_max_attempts(crawler) -> int:
+    config = getattr(getattr(crawler, "site", None), "crawler_config", None) or {}
+    if isinstance(config, dict):
+        try:
+            return max(1, min(int(config.get("failed_product_retry_max_attempts") or 5), 20))
+        except (TypeError, ValueError):
+            return 5
+    return 5
+
+
+def _crawl_failed_product_retry(crawler, job_id: int, site_name: str):
+    """Run a URL-level retry without rediscovering the whole site."""
+    if not hasattr(crawler, "crawl_failed_products"):
+        info = FailureInfo(
+            "unsupported_failed_product_retry",
+            STAGE_JOB,
+            f"{site_name} 暂不支持失败商品级重抓",
+            False,
+            "先使用整站重跑，或为该站点适配 crawl_failed_products",
+        )
+        raise FailedProductRetryError(info, status="failed")
+
+    with session_scope() as s:
+        now = datetime.utcnow()
+        limit = _failed_product_retry_limit(crawler)
+        max_attempts = _failed_product_retry_max_attempts(crawler)
+        rows = (s.query(CrawlUrl)
+                .filter(CrawlUrl.site == site_name,
+                        CrawlUrl.kind == "product",
+                        CrawlUrl.attempts < max_attempts,
+                        or_(CrawlUrl.next_retry_at.is_(None),
+                            CrawlUrl.next_retry_at <= now))
+                .filter(or_(
+                    and_(CrawlUrl.status == "pending",
+                         CrawlUrl.priority <= 10),
+                    CrawlUrl.status == "failed",
+                ))
+                .order_by(CrawlUrl.priority.asc(),
+                          CrawlUrl.attempts.asc(),
+                          CrawlUrl.id.asc())
+                .limit(limit)
+                .all())
+        urls = [row.url for row in rows if row.url]
+    if not urls:
+        info = FailureInfo(
+            "no_failed_product_urls",
+            STAGE_JOB,
+            f"{site_name} 没有可重抓的失败商品 URL",
+            False,
+            "检查失败商品筛选条件，或先运行一次整站抓取生成 URL 明细",
+        )
+        raise FailedProductRetryError(info, status="skipped")
+    return crawler.crawl_failed_products(urls)
 
 
 def _record_crawl_usage(*, workspace_id, products_count, duration_sec,
@@ -287,7 +369,22 @@ def execute_job(job_id: int) -> dict:
 
     started = datetime.utcnow()
     try:
-        result = crawler.crawl()
+        if job.trigger == FAILED_PRODUCT_RETRY_TRIGGER:
+            result = _crawl_failed_product_retry(crawler, job_id, site_name)
+        else:
+            result = crawler.crawl()
+    except FailedProductRetryError as exc:
+        with session_scope() as s:
+            job = s.get(CrawlJob, job_id)
+            job.status = exc.status
+            job.finished_at = datetime.utcnow()
+            job.duration_sec = (datetime.utcnow() - started).total_seconds()
+            job.error = exc.info.detail
+            record_failure(s, site=site_name, job_id=job_id, info=exc.info)
+        return {"job_id": job_id, "site": site_name, "status": exc.status,
+                "failure_code": exc.info.code,
+                "error": exc.info.detail,
+                "suggested_action": exc.info.suggested_action}
     except BlockedError as exc:                  # 熔断 —— 站点封锁
         set_cooldown(site_name)
         info = classify_exception(exc)
@@ -334,23 +431,34 @@ def execute_job(job_id: int) -> dict:
         _save_categories(s, site_name, result.categories)
         s.flush()
         promo_count = _detect_promotions(s, site_name)
+        produced = len(products)
+        crawl_total = _crawl_total_from_result(result, fallback_count=stats["total"])
+        if produced > crawl_total:
+            crawl_total = produced
+        if (
+            produced > 0
+            and not getattr(result, "coverage_complete", True)
+            and crawl_total <= produced
+        ):
+            crawl_total = produced + 1
 
         job = s.get(CrawlJob, job_id)
         job.status = "success"
         job.finished_at = datetime.utcnow()
         job.duration_sec = (datetime.utcnow() - started).total_seconds()
-        job.products_count = stats["inserted"] + stats["updated"]
-        job.total_product_count = stats["total"]
+        job.products_count = produced
+        job.total_product_count = crawl_total
         job.new_count = stats["new"]
         job.promotion_count = promo_count
-        total = stats["total"] or 1
-        job.success_rate = round(
-            (stats["inserted"] + stats["updated"]) / total * 100, 1)
+        total = crawl_total or 1
+        job.success_rate = _coverage_rate(
+            produced,
+            total,
+        )
         duration = job.duration_sec
 
         site.last_crawled = datetime.utcnow()
         site.updated_at = datetime.utcnow()
-        produced = stats["inserted"] + stats["updated"]
         if site.track_status != "paused":
             site.track_status = "error" if produced == 0 else "tracking"
         if produced == 0:
@@ -378,19 +486,61 @@ def execute_job(job_id: int) -> dict:
                 job.suggested_action = None
             else:
                 job.status = "partial"
+        if produced > 0 and not getattr(result, "coverage_complete", True):
+            job.status = "partial"
+            if not job.failure_code:
+                job.failure_code = (
+                    getattr(result, "coverage_code", None)
+                    or "incomplete_discovery"
+                )
+                job.failure_stage = (
+                    getattr(result, "coverage_stage", None)
+                    or "discovery"
+                )
+                job.failure_detail = (
+                    getattr(result, "coverage_reason", None)
+                    or "本次采集未能证明商品全量覆盖"
+                )
+                retryable = getattr(result, "coverage_retryable", None)
+                job.retryable = True if retryable is None else bool(retryable)
+                job.suggested_action = (
+                    getattr(result, "coverage_suggested_action", None)
+                    or "补充官方 sitemap/feed 或配置明确的全量发现入口后重跑"
+                )
+        if (
+            produced > 0
+            and crawl_total > produced
+            and job.status == "success"
+        ):
+            job.status = "partial"
+            job.failure_code = "incomplete_detail_parse"
+            job.failure_stage = "coverage"
+            job.failure_detail = (
+                f"本次产出 {produced} 个商品，当前全量分母为 {crawl_total}，"
+                "未覆盖全量商品。"
+            )
+            job.retryable = True
+            job.suggested_action = "继续分批重跑或移除采集上限，直到本次分母全量覆盖。"
         ws_id = job.requested_by_workspace_id
+
+    try:
+        with session_scope() as metric_session:
+            refresh_site_metrics(metric_session, [site_name])
+    except Exception as exc:
+        logger.warning("refresh site metrics failed site=%s: %s", site_name, exc)
+        result.notes.append(f"site_metrics_refresh_failed: {exc}")
 
     counter = getattr(crawler, "counter", None)
     _record_crawl_usage(
         workspace_id=ws_id,
-        products_count=stats["inserted"] + stats["updated"],
+        products_count=produced,
         duration_sec=duration,
         api_calls=getattr(counter, "api_calls", 0),
         browser_opens=getattr(counter, "browser_opens", 0),
     )
     payload = {
         "job_id": job_id, "site": site_name, "status": job.status,
-        "products": stats["inserted"] + stats["updated"], "new": stats["new"],
+        "products": produced, "new": stats["new"],
         "promotions": promo_count, "notes": result.notes,
         "duration_sec": round(duration, 1),
     }
@@ -421,6 +571,22 @@ def _is_non_fatal_partial(job: CrawlJob, produced: int) -> bool:
     except (TypeError, ValueError):
         success_rate = 0
     return success_rate >= NON_FATAL_PARTIAL_MIN_SUCCESS_RATE
+
+
+def _coverage_rate(produced: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    rate = round(produced / total * 100, 1)
+    if 0 < produced < total and rate >= 100.0:
+        return 99.9
+    return rate
+
+
+def _crawl_total_from_result(result, *, fallback_count: int) -> int:
+    raw = getattr(result, "total_product_count", None)
+    if raw is None:
+        return int(fallback_count)
+    return int(raw)
 
 
 def run_site(site_name: str) -> dict:

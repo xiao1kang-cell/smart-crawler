@@ -107,13 +107,18 @@ class IdealoCrawler(BaseCrawler):
         home_rows = self._parse_home_tiles(home_html)
         if home_rows:
             result.products.extend(home_rows[: self.limit])
+            result.total_product_count = len(result.products)
             result.notes.append(
                 f"首页商品卡片解析 {len(home_rows)} 个，已先写入 {len(result.products)} 个基础商品")
         if not TRY_PDP_ENRICH and result.products:
             result.notes.append("IDEALO_TRY_PDP=0，跳过 Akamai 更重的 PDP 深度补充")
+            self._mark_incomplete_coverage(result, "当前仅首页发现池，未证明全站全量")
             return result
         if not seeds:
             result.notes.append("⚠ 首页未抽到任何商品 URL —— 页面结构可能变了")
+            if result.products:
+                self._mark_incomplete_coverage(
+                    result, "首页有商品卡片，但没有可继续扩展的商品 URL")
             return result
 
         # 2) BFS 抓取
@@ -180,7 +185,24 @@ class IdealoCrawler(BaseCrawler):
             f"Akamai 挑战页 {challenge_hits} 次"
             + (f"，stealth 兜底 {stealth_used} 次" if stealth_used else "")
         )
+        result.total_product_count = len(result.products)
+        if result.products:
+            self._mark_incomplete_coverage(
+                result,
+                "Idealo 没有公开 sitemap；当前结果来自首页/PDP 关系图发现池，未证明全站全量",
+            )
         return result
+
+    @staticmethod
+    def _mark_incomplete_coverage(result: CrawlResult, reason: str) -> None:
+        result.coverage_complete = False
+        result.coverage_code = "incomplete_discovery"
+        result.coverage_stage = "discovery"
+        result.coverage_reason = reason
+        result.coverage_retryable = True
+        result.coverage_suggested_action = (
+            "需要配置 Idealo 的明确类目/feed 或启用可稳定跑完的深度发现后重跑"
+        )
 
     # ---------- HTTP 兜底层 ----------
     def _fetch(self, fetcher, url: str,

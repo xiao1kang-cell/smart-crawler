@@ -30,6 +30,7 @@ WORKSPACE_HIDDEN = "workspace_hidden"
 EMPTY_SITEMAP = "empty_sitemap"
 NO_PRODUCT_URLS = "no_product_urls"
 PARSE_NO_JSONLD = "parse_no_jsonld"
+PARSE_NO_PRODUCT = "parse_no_product"
 PARSE_NO_PRICE = "parse_no_price"
 VALIDATION_FAILED = "validation_failed"
 ZERO_PRODUCTS = "zero_products"
@@ -295,6 +296,11 @@ def record_url_state(
         row.failure_stage = failure.stage
         row.failure_detail = failure.detail[:2000] if failure.detail else None
         row.retryable = failure.retryable
+    elif status in ("pending", "fetched", "parsed", "skipped"):
+        row.failure_code = None
+        row.failure_stage = None
+        row.failure_detail = None
+        row.retryable = None
     return row
 
 

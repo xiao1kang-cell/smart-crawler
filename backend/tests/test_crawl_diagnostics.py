@@ -18,7 +18,10 @@ from app.crawl_diagnostics import (
     classify_exception,
     classify_http_status,
     job_timeout_failure,
+    record_url_state,
 )
+from app.db import SessionLocal, init_db
+from app.models import CrawlUrl
 
 pytestmark = pytest.mark.unit
 
@@ -138,3 +141,39 @@ def test_classifies_unsupported_crawler_platform_note():
 
     assert info.code == UNSUPPORTED_PLATFORM
     assert info.retryable is False
+
+
+def test_successful_url_state_clears_prior_failure():
+    init_db()
+    s = SessionLocal()
+    try:
+        failure = classify_exception(TimeoutError("connection timed out"))
+        record_url_state(
+            s,
+            site="demo_site",
+            url="https://example.com/p/1",
+            status="failed",
+            failure=failure,
+        )
+        s.commit()
+
+        record_url_state(
+            s,
+            site="demo_site",
+            url="https://example.com/p/1",
+            status="parsed",
+            http_status=200,
+        )
+        s.commit()
+
+        row = s.query(CrawlUrl).filter_by(
+            site="demo_site",
+            url="https://example.com/p/1",
+        ).one()
+        assert row.status == "parsed"
+        assert row.failure_code is None
+        assert row.failure_stage is None
+        assert row.failure_detail is None
+        assert row.retryable is None
+    finally:
+        s.close()

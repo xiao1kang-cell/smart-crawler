@@ -13,11 +13,11 @@ def _site():
                 platform="overstock", proxy_tier="dc")
 
 
-def test_resolve_limit_uses_sites_yaml_max_products(monkeypatch):
+def test_overstock_ignores_sites_yaml_max_products_for_full_crawl(monkeypatch):
     monkeypatch.setattr("app.crawlers.base.get_sites",
                         lambda: [{"site": "x", "max_products": 5}])
     c = OverstockCrawler(_site())
-    assert c.limit == 5
+    assert c.limit == DEFAULT_LIMIT
 
 
 def test_resolve_limit_falls_back_to_default(monkeypatch):
@@ -26,13 +26,13 @@ def test_resolve_limit_falls_back_to_default(monkeypatch):
     assert c.limit == DEFAULT_LIMIT
 
 
-def test_bol_reads_max_products(monkeypatch):
+def test_bol_ignores_max_products_for_full_sitemap_crawl(monkeypatch):
     monkeypatch.setattr("app.crawlers.base.get_sites",
                         lambda: [{"site": "x", "max_products": 7}])
-    from app.crawlers.bol import BolCrawler
+    from app.crawlers.bol import BolCrawler, DEFAULT_LIMIT
     c = BolCrawler(Site(site="x", url="https://x.com", country="NL",
                         platform="bol", proxy_tier="dc"))
-    assert c.limit == 7
+    assert c.limit == DEFAULT_LIMIT
 
 
 def test_idealo_reads_max_products(monkeypatch):
@@ -44,13 +44,30 @@ def test_idealo_reads_max_products(monkeypatch):
     assert c.limit == 9
 
 
-def test_vidaxl_reads_max_products(monkeypatch):
+def test_vidaxl_ignores_max_products_for_full_feed_crawl(monkeypatch):
     monkeypatch.setattr("app.crawlers.base.get_sites",
                         lambda: [{"site": "x", "max_products": 11}])
     from app.crawlers.vidaxl import VidaxlCrawler
     c = VidaxlCrawler(Site(site="x", url="https://x.com", country="US",
                            platform="vidaxl", proxy_tier="dc"))
-    assert c.limit == 11
+    assert c.limit > 11
+
+
+def test_vidaxl_zero_max_products_means_full_storefront(monkeypatch):
+    monkeypatch.setattr("app.crawlers.base.get_sites",
+                        lambda: [{"site": "x", "max_products": 0}])
+    from app.crawlers.vidaxl import STOREFRONT_LIMIT, VidaxlCrawler
+    c = VidaxlCrawler(Site(site="x", url="https://x.com", country="US",
+                           platform="vidaxl", proxy_tier="dc"))
+    assert c.limit == STOREFRONT_LIMIT
+
+
+def test_vidaxl_default_limit_is_full_storefront(monkeypatch):
+    monkeypatch.setattr("app.crawlers.base.get_sites", lambda: [{"site": "x"}])
+    from app.crawlers.vidaxl import STOREFRONT_LIMIT, VidaxlCrawler
+    c = VidaxlCrawler(Site(site="x", url="https://x.com", country="US",
+                           platform="vidaxl", proxy_tier="dc"))
+    assert c.limit == STOREFRONT_LIMIT
 
 
 def test_explicit_limit_param_beats_hints(monkeypatch):
@@ -62,23 +79,23 @@ def test_explicit_limit_param_beats_hints(monkeypatch):
     assert c.limit == 3
 
 
-def test_cratebarrel_reads_hints_when_no_param(monkeypatch):
+def test_cratebarrel_ignores_hints_when_no_param(monkeypatch):
     monkeypatch.setattr("app.crawlers.base.get_sites",
                         lambda: [{"site": "x", "max_products": 5}])
     from app.crawlers.cratebarrel import CrateBarrelCrawler
     c = CrateBarrelCrawler(Site(site="x", url="https://x.com", country="US",
                                 platform="cratebarrel", proxy_tier="dc"))
-    assert c.limit == 5
+    assert c.limit > 5
 
 
-def test_generic_still_reads_max_products(monkeypatch):
+def test_generic_ignores_max_products_for_full_crawl(monkeypatch):
     monkeypatch.setattr("app.crawlers.base.get_sites",
                         lambda: [{"site": "x", "max_products": 8,
                                   "sitemap": "https://x.com/sitemap.xml"}])
     from app.crawlers.generic import GenericCrawler
     c = GenericCrawler(Site(site="x", url="https://x.com", country="US",
                             platform="generic", proxy_tier="dc"))
-    assert c.limit == 8
+    assert c.limit > 8
 
 
 def test_generic_block_detection_ignores_cloudflare_marketing_copy():

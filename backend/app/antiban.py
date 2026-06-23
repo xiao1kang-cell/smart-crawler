@@ -146,3 +146,9 @@ def acquire_rate(site: str, platform: str,
     """模块级便捷入口：按 platform 的 RATE_TIERS 间隔限速该 site。"""
     interval = rate_delay(platform, default)
     _rate_limiter.acquire(site, interval=interval, max_wait=max_wait)
+
+
+def acquire_rate_interval(site: str, interval: float,
+                          max_wait: float = 30.0) -> None:
+    """按调用方显式给出的 interval 限速该 site。"""
+    _rate_limiter.acquire(site, interval=interval, max_wait=max_wait)

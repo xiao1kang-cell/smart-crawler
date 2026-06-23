@@ -10,8 +10,8 @@ Magento 站特征：sitemap 把分类页和商品页混在一起，商品页带 
 sites.yaml 可选字段：
   sitemap:        指定 sitemap 入口（跳过自动发现）
   product_match:  商品 URL 必含子串（配了能大幅减少要扫的页数）
-  max_products:   单次抓取上限（默认 200）
-  scan_cap:       最多扫描多少个候选页（默认 1500）
+  max_products:   显式调试上限（默认不截断）
+  scan_cap:       显式调试扫描上限（默认不截断）
 """
 from __future__ import annotations
 
@@ -29,9 +29,9 @@ from ..config import get_sites
 from .base import BaseCrawler, CrawlResult
 from .generic import GenericCrawler
 
-DEFAULT_LIMIT = int(os.environ.get("MAGENTO_LIMIT", "200"))
-DEFAULT_SCAN_CAP = int(os.environ.get("MAGENTO_SCAN_CAP", "2800"))
-MAX_ELAPSED_SEC = float(os.environ.get("MAGENTO_MAX_ELAPSED_SEC", "600"))
+DEFAULT_LIMIT = int(os.environ.get("MAGENTO_LIMIT", "999999"))
+DEFAULT_SCAN_CAP = int(os.environ.get("MAGENTO_SCAN_CAP", "0"))
+MAX_ELAPSED_SEC = float(os.environ.get("MAGENTO_MAX_ELAPSED_SEC", "0"))
 WORKERS = int(os.environ.get("MAGENTO_WORKERS", "8"))
 _CURRENCY = {"US": "USD", "UK": "GBP", "CA": "CAD", "IE": "EUR", "DE": "EUR",
              "IT": "EUR", "ES": "EUR", "FR": "EUR", "RO": "RON", "PT": "EUR",
@@ -54,7 +54,7 @@ class MagentoCrawler(BaseCrawler):
         self.base = site.url.rstrip("/")
         self.sitemap_hint = hints.get("sitemap")
         self.product_match = hints.get("product_match", "")
-        self.limit = self._resolve_limit(DEFAULT_LIMIT)
+        self.limit = self._resolve_limit(DEFAULT_LIMIT, honor_persisted=False)
         self.scan_cap = int(hints.get("scan_cap", DEFAULT_SCAN_CAP))
         self._sitemap_meta: dict[str, dict] = {}
 
@@ -110,7 +110,7 @@ class MagentoCrawler(BaseCrawler):
         sub = [l for l in locs if l.endswith(".xml") or l.endswith(".xml.gz")]
         if sub and len(sub) == len(locs):            # 纯 sitemap 索引，递归
             out: list[str] = []
-            for s in sub[:12]:
+            for s in sub:
                 out.extend(self._sitemap_locs(fetcher, s, depth + 1))
             return out
         self._remember_sitemap_meta(text)
@@ -144,7 +144,10 @@ class MagentoCrawler(BaseCrawler):
         cands = [u for u in cands if not (u in seen_u or seen_u.add(u))]
         total = len(cands)
         cands.sort(key=_candidate_priority)
-        cands = cands[: self.scan_cap]
+        scan_truncated = False
+        if self.scan_cap > 0 and len(cands) > self.scan_cap:
+            cands = cands[: self.scan_cap]
+            scan_truncated = True
         result.notes.append(
             f"sitemap 候选页 {total} 个，排序后扫描上限 {len(cands)}，"
             f"目标商品 {self.limit}")
@@ -153,23 +156,47 @@ class MagentoCrawler(BaseCrawler):
             return result
 
         if self._prefer_sitemap_only():
-            rows = [row for row in (self._row_from_sitemap(u) for u in cands[: self.limit])
-                    if row]
+            rows = []
+            seen_skus: set[tuple[str, str]] = set()
+            for row in (self._row_from_sitemap(u) for u in cands[: self.limit]):
+                if not row:
+                    continue
+                key = (str(row.get("site") or ""), str(row.get("sku") or ""))
+                if key in seen_skus:
+                    continue
+                seen_skus.add(key)
+                rows.append(row)
             result.products.extend(rows)
+            result.total_product_count = total
+            if len(rows) < total:
+                result.coverage_complete = False
+                result.coverage_code = "incomplete_detail_parse"
+                result.coverage_stage = "sitemap"
+                result.coverage_reason = (
+                    f"Magento sitemap-only 本次被 limit/scan_cap 截断："
+                    f"{len(rows)}/{total}"
+                )
+                result.coverage_retryable = True
+                result.coverage_suggested_action = (
+                    "移除 MAGENTO_LIMIT / MAGENTO_SCAN_CAP 后重跑。"
+                )
             result.notes.append(
                 f"Costway Magento sitemap-only 产出 {len(rows)} 个商品"
                 "（价格字段后续由 PDP/增量任务补齐）")
             return result
 
-        # 并发抓取 + 判别 —— 分批，凑够 limit 即停，不空跑剩余批次
+        # 并发抓取 + 判别。非 sitemap-only 站点的 sitemap 里常混有分类页，
+        # 因此总量必须以实际判别出的商品页为准，不能直接用候选 URL 数。
         hit = 0
         scanned = 0
+        elapsed_stop = False
         batch = WORKERS * 6
         # 把 fetcher 存为实例变量，供线程池内 _fetch_one 使用
         self._fetcher = fetcher
         with ThreadPoolExecutor(max_workers=WORKERS) as pool:
             for i in range(0, len(cands), batch):
-                if time.monotonic() - started >= MAX_ELAPSED_SEC:
+                if MAX_ELAPSED_SEC > 0 and time.monotonic() - started >= MAX_ELAPSED_SEC:
+                    elapsed_stop = True
                     result.notes.append(
                         f"达到 MAGENTO_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
                         f"提前返回（已扫描 {scanned}，命中 {hit}）")
@@ -177,11 +204,31 @@ class MagentoCrawler(BaseCrawler):
                 for row in pool.map(self._fetch_one, cands[i:i + batch]):
                     scanned += 1
                     if row:
-                        result.products.append(row)
                         hit += 1
-                if hit >= self.limit:
-                    break
-        result.notes.append(f"扫描 {scanned} 页，命中商品 {hit} 个")
+                        if len(result.products) < self.limit:
+                            result.products.append(row)
+        result.total_product_count = hit
+        if scan_truncated or elapsed_stop or len(result.products) < hit:
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "fetch"
+            reasons = []
+            if scan_truncated:
+                reasons.append(f"候选页被 MAGENTO_SCAN_CAP 截断 {len(cands)}/{total}")
+            if elapsed_stop:
+                reasons.append(
+                    f"达到 MAGENTO_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s")
+            if len(result.products) < hit:
+                reasons.append(
+                    f"发现 {hit} 个商品，实际入库 {len(result.products)} 个")
+            result.coverage_reason = "；".join(reasons)
+            result.coverage_retryable = True
+            result.coverage_suggested_action = (
+                "移除 MAGENTO_LIMIT / MAGENTO_SCAN_CAP 或放宽 "
+                "MAGENTO_MAX_ELAPSED_SEC 后重跑。"
+            )
+        result.notes.append(
+            f"扫描 {scanned} 页，命中商品 {hit} 个，本次入库 {len(result.products)} 个")
         return result
 
     def _fetch_one(self, url: str) -> dict | None:

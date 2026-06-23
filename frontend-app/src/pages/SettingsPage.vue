@@ -323,8 +323,8 @@ onMounted(load)
                 <span class="key-prefix">{{ s.brand || '—' }} · {{ s.country || '—' }}</span>
                 <span class="meta">状态={{ s.enabled === false ? '停用' : '启用' }} · 隐藏={{ s.hidden ? '是' : '否' }}</span>
                 <label class="inline-target">
-                  <span>目标 SKU</span>
-                  <input v-model.number="s.target_sku_count" class="set-inp mini" type="number" min="0" placeholder="验收目标" @keyup.enter="saveWorkspaceSiteTarget(s)" />
+                  <span>自定义全量</span>
+                  <input v-model.number="s.target_sku_count" class="set-inp mini" type="number" min="0" placeholder="可选" @keyup.enter="saveWorkspaceSiteTarget(s)" />
                   <button class="mini-btn" :disabled="busy === 'site-target'" @click="saveWorkspaceSiteTarget(s)">保存</button>
                 </label>
               </div>

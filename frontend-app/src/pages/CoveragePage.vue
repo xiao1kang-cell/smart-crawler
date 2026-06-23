@@ -135,24 +135,6 @@ function isRerunCandidate(row: Record<string, any>) {
     || issues.some((issue) => rerunnableIssueSet.has(issue))
 }
 
-function issueLabel(issue: string) {
-  return ({
-    no_products: '无商品',
-    coverage_low: '覆盖低',
-    sku_deviation_high: 'SKU偏差高',
-    title_weak: '标题弱',
-    price_missing: '价格缺失',
-    sales_missing: '销量缺失',
-    revenue_missing: '收入缺失',
-    traffic_missing: '流量缺失',
-    conversion_missing: '转化缺失',
-    promotions_missing: '促销缺失',
-    latest_job_failed: '任务失败',
-    job_in_progress: '采取中',
-    never_crawled: '未采集',
-  } as Record<string, string>)[issue] || issue
-}
-
 onMounted(load)
 </script>
 
@@ -170,14 +152,12 @@ onMounted(load)
       <div class="stat"><div class="lbl">关键</div><div class="val">{{ criticalSites }}</div><div class="delta bad">&lt; 50%</div></div>
       <div class="stat"><div class="lbl">SKU偏差</div><div class="val">{{ highDeviationCount }}</div><div class="delta bad">&gt; 50%</div></div>
       <div class="stat"><div class="lbl">需重跑</div><div class="val">{{ qualitySummary.needs_rerun || 0 }}</div><div class="delta bad">任务/覆盖风险</div></div>
-      <div class="stat"><div class="lbl">缺销量</div><div class="val">{{ qualitySummary.missing_sales || 0 }}</div><div class="delta warn">需销量估算</div></div>
-      <div class="stat"><div class="lbl">缺促销</div><div class="val">{{ qualitySummary.missing_promotions || 0 }}</div><div class="delta warn">需促销采集</div></div>
     </div>
 
     <div v-if="!loading || rows.length" class="coverage-actions">
       <div>
         <b>风险站点 {{ rerunCandidateSites.length }}</b>
-        <span>包含覆盖低、SKU 偏差高、缺商品/价格/促销、最近任务失败或反爬代理类问题。</span>
+        <span>覆盖偏低或最近采集异常的站点可批量重跑。</span>
       </div>
       <button class="batch-rerun" :disabled="loading || batchBusy || !rerunCandidateSites.length" @click="triggerRiskSites">
         {{ batchBusy ? '提交中...' : `批量重跑风险站点(${rerunCandidateSites.length})` }}
@@ -191,28 +171,12 @@ onMounted(load)
         <div class="country">{{ row.brand || '—' }} · {{ row.country || '—' }}</div>
         <div class="num">{{ fmtNumber(currentCount(row)) }}</div>
         <div class="pct">{{ coverageLabel(row) }} · 满 {{ fmtNumber(row.estimated_full || 0) }}</div>
-        <div v-if="row.target_sku_count" class="target-line">
-          目标 SKU {{ fmtNumber(row.target_sku_count) }} · 偏差 {{ row.sku_deviation_pct }}%
-          <span v-if="row.target_sku_source === 'acceptance'">验收口径</span>
-          <span v-else-if="row.target_sku_source === 'workspace'">工作区配置</span>
-        </div>
         <div class="bar"><div :style="{ width: width(row) }" /></div>
-        <div class="quality-metrics">
-          <span>SKU {{ fmtNumber(qualityFor(row).sku_count ?? row.current ?? 0) }}</span>
-          <span>SPU {{ fmtNumber(qualityFor(row).spu_count ?? 0) }}</span>
-          <span>促销 {{ fmtNumber(qualityFor(row).promotion_count ?? 0) }}</span>
-          <span>销量 {{ qualityFor(row).sales_signal_pct ?? 0 }}%</span>
-        </div>
-        <div v-if="qualityFor(row).issues?.length" class="issue-list">
-          <span v-for="issue in qualityFor(row).issues" :key="issue">{{ issueLabel(issue) }}</span>
-        </div>
-        <div v-else class="issue-list ok"><span>质量正常</span></div>
         <div class="quality-foot">
           <span>{{ qualityFor(row).latest_job ? `任务 #${qualityFor(row).latest_job.id} ${qualityFor(row).latest_job.status}` : '暂无任务' }}</span>
           <span>{{ fmtDate(qualityFor(row).latest_job?.finished_at || qualityFor(row).last_product_updated || qualityFor(row).last_crawled) }}</span>
         </div>
-        <div class="quality-action">{{ qualityFor(row).suggested_action || '—' }}</div>
-        <button :class="jobTrigger.classFor(siteKey(row))" :disabled="loading || jobTrigger.isBusy(siteKey(row))" @click="trigger(siteKey(row))">{{ jobTrigger.labelFor(siteKey(row), '触发抓取') }}</button>
+        <button class="cov-action" :class="jobTrigger.classFor(siteKey(row))" :disabled="loading || jobTrigger.isBusy(siteKey(row))" @click="trigger(siteKey(row))">{{ jobTrigger.labelFor(siteKey(row), '触发抓取') }}</button>
         <div v-if="jobTrigger.detailFor(siteKey(row))" class="trigger-note" :class="jobTrigger.classFor(siteKey(row))">{{ jobTrigger.detailFor(siteKey(row)) }}</div>
       </div>
     </DataLoadingPanel>
@@ -224,70 +188,19 @@ onMounted(load)
 </template>
 
 <style scoped>
-.quality-metrics {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 5px 8px;
-  margin: 9px 0 8px;
-  font-size: .68rem;
-  color: var(--ui-muted);
-}
-.quality-metrics span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.target-line {
-  margin-top: 4px;
-  color: var(--ui-amber, #b45309);
-  font-size: .72rem;
-  font-weight: 700;
-}
-.issue-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  min-height: 24px;
-  margin-bottom: 8px;
-}
-.issue-list span {
-  display: inline-flex;
-  align-items: center;
-  min-height: 21px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  border: 1px solid rgba(248, 113, 113, .28);
-  background: rgba(248, 113, 113, .12);
-  color: #be123c;
-  font-size: .64rem;
-  font-weight: 700;
-}
-.issue-list.ok span {
-  border-color: rgba(16, 185, 129, .28);
-  background: rgba(16, 185, 129, .12);
-  color: #047857;
-}
 .quality-foot {
   display: flex;
   justify-content: space-between;
   gap: 8px;
   color: var(--ui-muted);
   font-size: .66rem;
-  margin-bottom: 6px;
+  margin: 9px 0 0;
 }
 .quality-foot span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.quality-action {
-  min-height: 30px;
-  margin-bottom: 8px;
-  color: var(--ui-text);
-  font-size: .7rem;
-  line-height: 1.35;
 }
 .coverage-actions {
   display: flex;

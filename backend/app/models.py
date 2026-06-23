@@ -165,6 +165,38 @@ class Trend(Base):
     delta_summary = Column(Text)                     # LLM 生成的一句话总结
 
 
+class SiteMetric(Base):
+    """站点级查询汇总。
+
+    大表指标在采集完成后刷新，页面查询只读这一张小表，避免每次请求
+    对 products / crawl_urls / price_history 做全量聚合。
+    """
+
+    __tablename__ = "site_metrics"
+
+    id = Column(Integer, primary_key=True)
+    site = Column(String, unique=True, index=True)
+    sku_count = Column(Integer, default=0)
+    product_listing_count = Column(Integer, default=0)
+    fetched_count = Column(Integer, default=0)
+    discovered_product_url_count = Column(Integer, default=0)
+    price_signal_count = Column(Integer, default=0)
+    sales_signal_count = Column(Integer, default=0)
+    revenue_signal_count = Column(Integer, default=0)
+    review_signal_count = Column(Integer, default=0)
+    review_history_signal_count = Column(Integer, default=0)
+    weak_title_count = Column(Integer, default=0)
+    currency_missing_count = Column(Integer, default=0)
+    currency_mismatch_count = Column(Integer, default=0)
+    promotion_count = Column(Integer, default=0)
+    traffic_signal_count = Column(Integer, default=0)
+    conversion_signal_count = Column(Integer, default=0)
+    thirty_day_sales = Column(Integer, default=0)
+    thirty_day_revenue = Column(Float, default=0.0)
+    last_product_updated = Column(DateTime)
+    refreshed_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
 class Workspace(Base):
     """租户工作区 —— 只隔离视图、报告、API key 与用量，不复制 warehouse 数据。"""
 
@@ -521,6 +553,26 @@ class ProxyEndpoint(Base):
     source = Column(String, default="admin")         # admin/file/env
     notes = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ProxyLease(Base):
+    """单次请求代理租约，控制同一出口 IP 的并发占用。"""
+
+    __tablename__ = "proxy_leases"
+    __table_args__ = (UniqueConstraint("lease_token", name="uq_proxy_lease_token"),)
+
+    id = Column(Integer, primary_key=True)
+    endpoint_id = Column(Integer, ForeignKey("proxy_endpoints.id"), index=True)
+    site = Column(String, index=True)
+    job_id = Column(Integer, ForeignKey("crawl_jobs.id"), index=True)
+    worker = Column(String, index=True)
+    lease_token = Column(String, index=True)
+    expires_at = Column(DateTime, index=True)
+    released_at = Column(DateTime, index=True)
+    success = Column(Boolean)
+    failure_code = Column(String, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow)
 
 

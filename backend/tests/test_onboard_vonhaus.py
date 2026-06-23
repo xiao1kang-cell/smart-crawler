@@ -216,6 +216,49 @@ def test_vonhaus_sitemap_filters_category_pages(monkeypatch):
     assert crawler.counter.api_calls >= 1
 
 
+def test_vonhaus_limit_does_not_shrink_total_product_count(monkeypatch):
+    """VONHAUS_LIMIT caps emitted rows, not the crawl's discovered denominator."""
+    from app.crawlers.vonhaus import VonHausCrawler
+
+    crawler = VonHausCrawler(_site())
+    crawler.limit = 1
+    product_2 = _PRODUCT_HTML.replace("TRAY-123", "CHAIR-456").replace(
+        "Wooden Serving Tray", "Dining Chair")
+
+    def fake_get(url: str, **kw) -> FetchResult:
+        crawler.counter.api_calls += 1
+        if "sitemap.xml" in url:
+            return FetchResult(
+                ok=True, url=url, status=200,
+                text=_SITEMAP_XML, content=_SITEMAP_GZIP, final_url=url,
+                fetcher="curl_cffi",
+            )
+        if url == _PRODUCT_URL:
+            html = _PRODUCT_HTML
+        else:
+            html = product_2
+        return FetchResult(
+            ok=True, url=url, status=200,
+            text=html, content=html.encode(), final_url=url,
+            fetcher="curl_cffi",
+        )
+
+    class _FakeFetcher:
+        def get(self, url, **kw):
+            return fake_get(url, **kw)
+
+    monkeypatch.setattr(crawler, "make_fetcher", lambda **kw: _FakeFetcher())
+    monkeypatch.setattr(crawler, "snapshot", lambda name, content: None)
+    monkeypatch.setattr(crawler, "sleep", lambda: None)
+
+    result = crawler.crawl()
+
+    assert len(result.products) == 1
+    assert result.total_product_count == 2
+    assert result.coverage_complete is False
+    assert "实际入库 1 个" in (result.coverage_reason or "")
+
+
 def test_vonhaus_counter_minimum(monkeypatch):
     """Smoke: at minimum one api_call recorded after crawl (unified path)."""
     from app.crawlers.vonhaus import VonHausCrawler

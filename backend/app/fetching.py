@@ -17,7 +17,7 @@ from typing import Protocol
 from curl_cffi import requests as creq
 
 from . import proxy_pool
-from .antiban import BlockedError, acquire_rate
+from .antiban import BlockedError, acquire_rate, acquire_rate_interval
 from .crawl_diagnostics import (
     ANTI_BOT_CHALLENGE,
     FailureInfo,
@@ -97,6 +97,8 @@ class FetchContext:
     max_blocked_events: int = 0
     counter: CrawlCounter | None = None
     residential_fallback_threshold: int = 3
+    proxy_lease_ttl_sec: int = 0
+    rate_interval_sec: float | None = None
 
 
 @dataclass
@@ -113,6 +115,7 @@ class FetchResult:
     failure: FailureInfo | None = None
     attempt: int = 1
     retry_after: float | None = None
+    proxy_lease_token: str | None = None
 
     def json(self):
         """把 text 解析为 JSON；失败返回 None（不抛错）。"""
@@ -213,8 +216,14 @@ class CrawlerFetcher:
             return result
         for attempt in range(1, attempts + 1):
             request_kwargs = dict(kwargs)
-            acquire_rate(self.context.site.site,
-                         self.context.site.platform or "")
+            if self.context.rate_interval_sec is not None:
+                acquire_rate_interval(
+                    self.context.site.site,
+                    max(0.0, float(self.context.rate_interval_sec)),
+                )
+            else:
+                acquire_rate(self.context.site.site,
+                             self.context.site.platform or "")
             for mw in self.middlewares:
                 mw.before_request(self, url, request_kwargs)
             result = self._request_once(method, url, attempt=attempt, **request_kwargs)
@@ -245,8 +254,6 @@ class CrawlerFetcher:
                 break
             time.sleep(_backoff_seconds(result, attempt))
         if last is not None:
-            if last.failure:
-                _apply_fetch_failure_to_job(self.context, last)
             return last
         fallback = FetchResult(ok=False, url=url, failure=FailureInfo(
             "unknown", STAGE_FETCH, "fetch produced no result", True,
@@ -277,6 +284,7 @@ class CrawlerFetcher:
         sess = creq.Session(impersonate=kwargs.pop("impersonate", "chrome"))
         sess.headers.update(kwargs.pop("headers", {}) or {})
         proxy = kwargs.pop("_proxy", None)
+        proxy_lease_token = kwargs.pop("_proxy_lease_token", None)
         missing_proxy_tier = kwargs.pop("_proxy_unavailable_tier", None)
         if missing_proxy_tier:
             failure = FailureInfo(
@@ -293,6 +301,7 @@ class CrawlerFetcher:
                 duration_ms=0,
                 failure=failure,
                 attempt=attempt,
+                proxy_lease_token=proxy_lease_token,
             )
             return result
         if proxy:
@@ -327,6 +336,7 @@ class CrawlerFetcher:
                 retry_after=_parse_retry_after(
                     getattr(resp, "headers", None) and resp.headers.get("Retry-After")
                 ),
+                proxy_lease_token=proxy_lease_token,
             )
             if failure and ctx.fail_fast_blocked and (
                 resp.status_code in (401, 403, 429)
@@ -346,6 +356,7 @@ class CrawlerFetcher:
                 duration_ms=duration_ms,
                 failure=failure,
                 attempt=attempt,
+                proxy_lease_token=proxy_lease_token,
             )
             return result
 
@@ -418,7 +429,21 @@ class ProxyMiddleware:
         tier = fetcher.effective_tier()
         if not ctx.use_proxy or tier in (None, "", "none"):
             return
-        proxy = proxy_pool.get_proxy(tier, site=ctx.site.site)
+        lease_ttl = int(ctx.proxy_lease_ttl_sec or 0)
+        if lease_ttl > 0:
+            handle = proxy_pool.lease_proxy(
+                tier,
+                site=ctx.site.site,
+                job_id=ctx.job_id,
+                ttl_sec=lease_ttl,
+            )
+            if handle:
+                kwargs["_proxy"] = handle.url
+                kwargs["_proxy_lease_token"] = handle.lease_token
+                return
+            proxy = None
+        else:
+            proxy = proxy_pool.get_proxy(tier, site=ctx.site.site)
         if proxy:
             kwargs["_proxy"] = proxy
             return
@@ -440,6 +465,12 @@ class ProxyMiddleware:
             proxy_pool.report_success(result.proxy)
         else:
             proxy_pool.report_failure(result.proxy, hard=hard)
+        if result.proxy_lease_token:
+            proxy_pool.release_proxy(
+                result.proxy_lease_token,
+                success=result.ok or not proxy_failed,
+                failure_code=result.failure.code if result.failure else None,
+            )
         db = SessionLocal()
         try:
             record_proxy_result(

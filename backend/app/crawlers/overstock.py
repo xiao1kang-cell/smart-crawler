@@ -44,7 +44,7 @@ from urllib.parse import unquote
 from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
 
-DEFAULT_LIMIT = int(os.environ.get("OVERSTOCK_LIMIT", "1000"))
+DEFAULT_LIMIT = int(os.environ.get("OVERSTOCK_LIMIT", "999999"))
 SITEMAP_INDEX = ("https://api.overstock.com/sitemaps/overstock-v3/"
                  "us/sitemap.xml")
 TRY_PDP_ENRICH = os.environ.get("OVERSTOCK_TRY_PDP", "0") == "1"
@@ -65,7 +65,7 @@ class OverstockCrawler(BaseCrawler):
     def __init__(self, site):
         super().__init__(site)
         self.base = site.url.rstrip("/")
-        self.limit = self._resolve_limit(DEFAULT_LIMIT)
+        self.limit = self._resolve_limit(DEFAULT_LIMIT, honor_persisted=False)
 
     def _headers(self) -> dict:
         """构造请求头（proxy 由 CrawlerFetcher 托管，不在此处注入）。"""
@@ -125,9 +125,8 @@ class OverstockCrawler(BaseCrawler):
 
         # ---- Step 2：依序拉子 sitemap，逐条解析商品 ----
         seen: set[str] = set()
+        discovered_total = 0
         for sm_url in sub_sitemaps:
-            if len(result.products) >= self.limit:
-                break
             try:
                 sm = fetcher.get(sm_url, headers=self._headers(), timeout=60)
                 self.guard(sm.status or 0, f"sub:{sm_url}")
@@ -151,8 +150,9 @@ class OverstockCrawler(BaseCrawler):
 
             parsed_in_file = 0
             for blk in _URL_BLOCK_RE.finditer(sm.text):
+                discovered_total += 1
                 if len(result.products) >= self.limit:
-                    break
+                    continue
                 row = self._parse_sitemap_entry(blk.group(1))
                 if not row or row["sku"] in seen:
                     continue
@@ -172,6 +172,19 @@ class OverstockCrawler(BaseCrawler):
             result.notes.append(f"PDP 兜底尝试 {len(result.products[:50])}, "
                                 f"成功 {enriched}")
 
+        result.total_product_count = max(discovered_total, len(result.products))
+        if len(result.products) < discovered_total:
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "sitemap"
+            result.coverage_reason = (
+                f"Overstock sitemap 全量 {discovered_total} 个商品，"
+                f"本次只产出 {len(result.products)} 个"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = (
+                "移除 OVERSTOCK_LIMIT 或继续分批重跑，直到 sitemap 全量入库"
+            )
         result.notes.append(f"采集 {len(result.products)} 个去重 SKU")
         return result
 

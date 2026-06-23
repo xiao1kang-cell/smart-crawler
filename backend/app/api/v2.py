@@ -16,7 +16,6 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..agent_crawler import (
@@ -39,7 +38,7 @@ from ..access import (
 )
 from ..billing import record_usage
 from ..db import get_db
-from ..models import ApiKey, Product, RateLimitEvent, Site, SpineJob
+from ..models import ApiKey, RateLimitEvent, Site, SiteMetric, SpineJob
 from .routes import require_user
 from .. import spine, spine_queue
 
@@ -411,8 +410,10 @@ def list_sources(
     """List all configured data sources with warehouse counts."""
     _require_scope(db, authorization, x_api_key, "crawler:read")
     key = _api_key_row(db, authorization, x_api_key)
-    sku_counts = dict(db.query(Product.site, func.count(Product.id))
-                        .group_by(Product.site).all())
+    sku_counts = {
+        site: int(count or 0)
+        for site, count in db.query(SiteMetric.site, SiteMetric.sku_count).all()
+    }
     data = []
     for site in db.query(Site).all():
         sku_count = sku_counts.get(site.site, 0)
