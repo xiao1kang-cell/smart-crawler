@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random as _random
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from curl_cffi import requests as creq
@@ -97,7 +98,9 @@ class FetchContext:
     max_blocked_events: int = 0
     counter: CrawlCounter | None = None
     residential_fallback_threshold: int = 3
-    proxy_lease_ttl_sec: int = 0
+    proxy_lease_ttl_sec: int = field(
+        default_factory=lambda: int(os.environ.get("PROXY_LEASE_TTL_SEC", "300"))
+    )
     rate_interval_sec: float | None = None
 
 
@@ -479,6 +482,7 @@ class ProxyMiddleware:
                 tier=fetcher.context.site.proxy_tier,
                 success=result.ok or not proxy_failed,
                 failure=result.failure,
+                node=proxy_pool.NODE_ID,
             )
             db.commit()
         except Exception:

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from curl_cffi import requests as creq
 
 from . import proxy_pool
+from .proxy_pool import NODE_ID
 from .crawl_diagnostics import (
     FailureInfo,
     STAGE_FETCH,
@@ -152,6 +153,7 @@ def _record(proxy_url: str | None, tier: str | None,
             tier=tier,
             success=success,
             failure=failure,
+            node=NODE_ID,
         )
         db.commit()
     except Exception:
