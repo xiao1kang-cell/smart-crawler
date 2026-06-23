@@ -11,8 +11,16 @@
 多个 `worker_N` 抓取容器 + `cloudflared`。worker 与 PG 在同一容器网络内。
 
 **目标**：让 NAS 只做**任务调度 + 数据存储**，把**抓取执行**下沉到
-Mac mini（首台 `mini1`，Tailscale `100.75.94.90`，标识 `US-macmini1`），
+Mac mini（首台 `mini1`，SSH `solvea@100.75.94.90`，标识 `US-macmini1`），
 后续扩展到 N 台。
+
+> **mini1 实况（2026-06-23 探测）**：M4（T8132）/ 16GB RAM / 10 核 / arm64 /
+> macOS 26.2；SSH 免密直连免跳板；默认 `python3` 为 **3.14.3，无 3.12**
+> （装机必须 `brew install python@3.12`，与生产 Dockerfile 一致，避免 3.14
+> 的 C 扩展轮子兼容问题）；有**两个 Tailscale 接口** `utun0=100.75.94.90`
+> （SSH 走此）与 `utun5=100.95.220.89`（tailscale CLI 自报）——故 pg_hba
+> 必须放行**整段 `100.64.0.0/10`** 而非单 IP。NAS PG 当前不可达（阶段0前
+> 未暴露，符合预期）。
 
 **关键约束（用户确认）**：
 1. 出口 IP 三种都要、按任务选：住宅代理 / 数据中心代理 / mini 自身 IP。
@@ -196,10 +204,10 @@ psycopg[binary]）。Python 3.12（与 Dockerfile 一致）。
 ```xml
 <key>ProgramArguments</key>
 <array>
-  <string>/Users/<user>/smart-crawler/.venv/bin/python</string>
+  <string>/Users/solvea/smart-crawler/.venv/bin/python</string>
   <string>-m</string><string>app.worker</string>
 </array>
-<key>WorkingDirectory</key><string>/Users/<user>/smart-crawler/backend</string>
+<key>WorkingDirectory</key><string>/Users/solvea/smart-crawler/backend</string>
 <key>EnvironmentVariables</key><dict>…从 .env 注入…</dict>
 <key>KeepAlive</key><true/>        <!-- 崩溃自动拉起 = restart:unless-stopped -->
 <key>RunAtLoad</key><true/>
@@ -210,7 +218,7 @@ psycopg[binary]）。Python 3.12（与 Dockerfile 一致）。
 ### 7.3 rsync 部署脚本 `scripts/deploy_mini.sh`（本机/NAS 跑）
 
 ```bash
-MINI=<user>@100.75.94.90
+MINI=solvea@100.75.94.90
 rsync -az --delete \
   --exclude='.venv' --exclude='data' --exclude='__pycache__' --exclude='*.pyc' \
   --exclude='*.env' --exclude='proxies*.txt' \
@@ -311,8 +319,8 @@ crawl_jobs，spine 任务留 NAS。** 后续如需保留 snapshot，可改落共
 
 ## 13. 待定项（上线前确认）
 
-- mini SSH 用户名：占位 `shilong`（沿用 NAS 习惯）。
-- 每台 mini worker 进程数：默认 `2`（按 mini 内存/CPU 调）。
+- ~~mini SSH 用户名~~：已确认 `solvea@100.75.94.90`（mini1，免密直连）。
+- 每台 mini worker 进程数：默认 `2`（mini1 = 16GB/10核，跑 2 worker + Chrome 合理）。
 - snapshot：第一阶段关闭（`SNAPSHOT_ENABLED=0`）。
 - 验证租户 X 的具体 workspace_id：选非关键、低 SLA 租户。
 - 各 `proxy_endpoints.max_concurrency` 的具体值（住宅独享=1，网关=N）。
