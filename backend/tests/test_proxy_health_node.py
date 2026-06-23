@@ -73,3 +73,15 @@ def test_unhealthy_is_node_scoped(session):
     h = proxy_hash(url)
     assert h in unhealthy_proxy_hashes(session, node="nas")
     assert h not in unhealthy_proxy_hashes(session, node="US-macmini1")
+
+
+def test_node_id_env(monkeypatch):
+    """NODE_ID 从环境变量读取，默认 nas。"""
+    import importlib
+    import app.proxy_pool as pp
+    monkeypatch.setenv("NODE_ID", "US-macmini1")
+    importlib.reload(pp)
+    assert pp.NODE_ID == "US-macmini1"
+    monkeypatch.delenv("NODE_ID", raising=False)
+    importlib.reload(pp)
+    assert pp.NODE_ID == "nas"
