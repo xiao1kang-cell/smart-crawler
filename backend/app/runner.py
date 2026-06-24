@@ -254,10 +254,36 @@ def _skip_job(s, job: CrawlJob, info: FailureInfo) -> None:
 
 
 def claim_job(worker_id: str,
-              trigger_allowlist: tuple[str, ...] | None = None) -> int | None:
-    """worker 原子领取最旧的 pending 任务，返回 job_id 或 None。"""
+              trigger_allowlist: tuple[str, ...] | None = None,
+              workspace_allowlist: tuple[int, ...] | None = None,
+              workspace_blocklist: tuple[int, ...] | None = None) -> int | None:
+    """worker 原子领取最旧的 pending 任务，返回 job_id 或 None。
+
+    workspace_allowlist: 只领这些 workspace_id 的 job（mini 专用）。
+    workspace_blocklist: 不领这些 workspace_id 的 job（NAS 兜底）。
+    scheduled / daily_refresh 等系统触发的 job requested_by_workspace_id 为 NULL，
+    此时靠 workspace_sites 表映射 site → workspace 判定归属。
+    """
+    from .models import WorkspaceSite  # noqa: PLC0415  避免循环 import
+
     with session_scope() as s:
         skipped = 0
+
+        def _belongs_to(ws_ids):
+            """job 归属于给定 workspace 集合的谓词（NULL-safe，不产生 NULL 传播）。
+            字段非 NULL → 只看第一分支（isnot(None)=TRUE，in_ 返回 T/F）；
+            字段为 NULL → 第一分支 isnot(None)=FALSE，只看第二分支。
+            孤儿 job（NULL + site 无映射）→ 两分支皆 FALSE → belongs=FALSE → ~=TRUE。
+            """
+            site_subq = (s.query(WorkspaceSite.site)
+                         .filter(WorkspaceSite.workspace_id.in_(ws_ids)))
+            return or_(
+                and_(CrawlJob.requested_by_workspace_id.isnot(None),
+                     CrawlJob.requested_by_workspace_id.in_(ws_ids)),
+                and_(CrawlJob.requested_by_workspace_id.is_(None),
+                     CrawlJob.site.in_(site_subq)),
+            )
+
         while True:
             priority = case(
                 (CrawlJob.trigger.in_(HIGH_PRIORITY_TRIGGERS), 0),
@@ -271,6 +297,10 @@ def claim_job(worker_id: str,
             ).where(running_alias.c.site == CrawlJob.site))
             if trigger_allowlist:
                 query = query.filter(CrawlJob.trigger.in_(trigger_allowlist))
+            if workspace_allowlist:
+                query = query.filter(_belongs_to(workspace_allowlist))
+            if workspace_blocklist:
+                query = query.filter(~_belongs_to(workspace_blocklist))
             high_priority_touched_at = case(
                 (CrawlJob.trigger.in_(HIGH_PRIORITY_TRIGGERS), CrawlJob.created_at),
                 else_=datetime(1970, 1, 1),

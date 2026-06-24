@@ -46,6 +46,7 @@ _PROXY_FILE = _default_proxy_file()
 
 FAIL_THRESHOLD = int(os.environ.get("PROXY_FAIL_THRESHOLD", "3"))
 COOLDOWN_SEC = int(os.environ.get("PROXY_COOLDOWN_SEC", "600"))
+NODE_ID = os.environ.get("NODE_ID", "nas")
 
 
 @dataclass
@@ -524,7 +525,7 @@ def _persistent_unhealthy_hashes() -> set[str]:
         return set()
     db = SessionLocal()
     try:
-        return unhealthy_proxy_hashes(db)
+        return unhealthy_proxy_hashes(db, node=NODE_ID)
     except Exception:
         return set()
     finally:

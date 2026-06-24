@@ -507,13 +507,19 @@ class CrawlFailure(Base):
 
 
 class ProxyHealth(Base):
-    """代理健康状态 —— 持久化代理连通性和失败类型。"""
+    """代理健康状态 —— 持久化代理连通性和失败类型。
+
+    健康度是 (proxy_hash, node) 的属性：同一 IP 在不同出口节点可用性不同。
+    """
 
     __tablename__ = "proxy_health"
-    __table_args__ = (UniqueConstraint("proxy_hash", name="uq_proxy_health_hash"),)
+    __table_args__ = (
+        UniqueConstraint("proxy_hash", "node", name="uq_proxy_health_hash_node"),
+    )
 
     id = Column(Integer, primary_key=True)
     proxy_hash = Column(String, index=True)
+    node = Column(String, index=True, default="nas")   # 出口节点：nas / US-macmini1 ...
     proxy_redacted = Column(String)
     tier = Column(String, index=True)
     status = Column(String, default="unknown", index=True)  # healthy/degraded/blocked/down

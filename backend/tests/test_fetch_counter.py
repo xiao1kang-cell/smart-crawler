@@ -97,6 +97,8 @@ def test_required_proxy_missing_does_not_direct_connect(monkeypatch):
     fetcher = CrawlerFetcher(ctx)
     monkeypatch.setattr("app.fetching.proxy_pool.get_proxy",
                         lambda tier, site=None: None)
+    monkeypatch.setattr("app.fetching.proxy_pool.lease_proxy",
+                        lambda *a, **k: None)
     monkeypatch.setattr("app.fetching.creq.Session", FakeSession)
     monkeypatch.setattr("app.fetching._record_fetch", lambda *args, **kwargs: None)
 
