@@ -117,6 +117,18 @@ job 级"。一个 job 内多次请求会多次租/还，对 `max_concurrency=1` 
 仍保证同一时刻只一个 holder，但不保证同一 job 全程同一 IP。若某反爬站需要
 "整会话粘同一 IP"，用站点级 `proxy_lease_ttl_sec` 覆盖到 job 时长或设站点粘性。
 
+**残留风险 2（D2 防撞覆盖边界，2026-06-24 代码审查发现）**：代理获取有两条
+路径——① 经 `BaseCrawler.make_fetcher()` → `CrawlerFetcher`/`ProxyMiddleware`
+的抓取请求，受 lease 并发锁保护（D2 覆盖）；② `BaseCrawler.__init__` 里
+`self.proxy = get_proxy(...)`（base.py:51）以及少数 crawler（google_maps、
+influencer 系列、ondemand/runner）**直接调用 `get_proxy`**，不走 lease、无并发
+锁。**所以"默认走租约防撞"只覆盖经 ProxyMiddleware 的请求路径，不覆盖直接
+get_proxy 的路径。** 第一阶段不构成阻塞：(a) 验证期只有单台 mini1，撞 IP 是
+多节点才显著的问题；(b) 主流 HTTP 抓取走 make_fetcher（受保护）；(c) `self.proxy`
+主要用于 `ip_record` 日志与个别特殊 crawler。**扩容到多 mini 前需补救**：把直接
+`get_proxy` 的热点路径改为走 lease，或给这些 crawler 的出口也纳入 max_concurrency
+约束。列入扩容前 backlog。
+
 ## 4.5 代理健康度按节点隔离（修复 D4，方案 A）
 
 **问题本质**：住宅 IP 的可用性是 **(IP, 出口节点) 二元组的属性**，不是 IP 的
