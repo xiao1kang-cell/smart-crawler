@@ -84,6 +84,7 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
       - RUN_SCHEDULER=0
+      - MEM_GATE_THRESHOLD=${MEM_GATE_THRESHOLD:-95}
       - WORKER_ID=worker-1
       - TRIGGER_ALLOWLIST=manual,tracking_add,admin_quality_rerun,admin_retry
       - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
@@ -111,6 +112,7 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
       - RUN_SCHEDULER=0
+      - MEM_GATE_THRESHOLD=${MEM_GATE_THRESHOLD:-95}
       - WORKER_ID=worker-2
       - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
       - HOMARY_LIMIT=${HOMARY_LIMIT:-999999}
@@ -135,6 +137,7 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
       - RUN_SCHEDULER=0
+      - MEM_GATE_THRESHOLD=${MEM_GATE_THRESHOLD:-95}
       - WORKER_ID=worker-3
       - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
       - HOMARY_LIMIT=${HOMARY_LIMIT:-999999}
@@ -159,6 +162,7 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
       - RUN_SCHEDULER=0
+      - MEM_GATE_THRESHOLD=${MEM_GATE_THRESHOLD:-95}
       - WORKER_ID=worker-4
       - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
       - HOMARY_LIMIT=${HOMARY_LIMIT:-999999}
@@ -183,6 +187,7 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
       - RUN_SCHEDULER=0
+      - MEM_GATE_THRESHOLD=${MEM_GATE_THRESHOLD:-95}
       - WORKER_ID=worker-5
       - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
       - HOMARY_LIMIT=${HOMARY_LIMIT:-999999}
@@ -207,6 +212,7 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
       - RUN_SCHEDULER=0
+      - MEM_GATE_THRESHOLD=${MEM_GATE_THRESHOLD:-95}
       - WORKER_ID=worker-6
       - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
       - HOMARY_LIMIT=${HOMARY_LIMIT:-999999}
@@ -231,6 +237,7 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
       - RUN_SCHEDULER=0
+      - MEM_GATE_THRESHOLD=${MEM_GATE_THRESHOLD:-95}
       - WORKER_ID=worker-7
       - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
       - HOMARY_LIMIT=${HOMARY_LIMIT:-999999}
@@ -255,7 +262,109 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
       - RUN_SCHEDULER=0
+      - MEM_GATE_THRESHOLD=${MEM_GATE_THRESHOLD:-95}
       - WORKER_ID=worker-8
+      - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
+      - HOMARY_LIMIT=${HOMARY_LIMIT:-999999}
+      - COSTWAY_PAGES_PER_CAT=${COSTWAY_PAGES_PER_CAT:-999999}
+      - VIDAXL_LIMIT=${VIDAXL_LIMIT:-999999}
+      - IKEA_LIMIT=${IKEA_LIMIT:-999999}
+      - IKEA_USE_STEALTH=${IKEA_USE_STEALTH:-0}
+      - WAYFAIR_USE_STEALTH=${WAYFAIR_USE_STEALTH:-0}
+      - BESTBUY_LIMIT=${BESTBUY_LIMIT:-200}
+      - EBAY_LIMIT=${EBAY_LIMIT:-200}
+      - OTTO_LIMIT=${OTTO_LIMIT:-200}
+      - TARGET_LIMIT=${TARGET_LIMIT:-200}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.flatkey.ai}
+      - LLM_MODEL=${LLM_MODEL:-claude-haiku-4-5}
+
+  worker_9:
+    <<: *worker_template
+    container_name: smart-crawler-worker-9
+    profiles: ["workers"]
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
+      - RUN_SCHEDULER=0
+      - MEM_GATE_THRESHOLD=${MEM_GATE_THRESHOLD:-95}
+      - WORKER_ID=worker-9
+      - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
+      - HOMARY_LIMIT=${HOMARY_LIMIT:-999999}
+      - COSTWAY_PAGES_PER_CAT=${COSTWAY_PAGES_PER_CAT:-999999}
+      - VIDAXL_LIMIT=${VIDAXL_LIMIT:-999999}
+      - IKEA_LIMIT=${IKEA_LIMIT:-999999}
+      - IKEA_USE_STEALTH=${IKEA_USE_STEALTH:-0}
+      - WAYFAIR_USE_STEALTH=${WAYFAIR_USE_STEALTH:-0}
+      - BESTBUY_LIMIT=${BESTBUY_LIMIT:-200}
+      - EBAY_LIMIT=${EBAY_LIMIT:-200}
+      - OTTO_LIMIT=${OTTO_LIMIT:-200}
+      - TARGET_LIMIT=${TARGET_LIMIT:-200}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.flatkey.ai}
+      - LLM_MODEL=${LLM_MODEL:-claude-haiku-4-5}
+
+  worker_10:
+    <<: *worker_template
+    container_name: smart-crawler-worker-10
+    profiles: ["workers"]
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
+      - RUN_SCHEDULER=0
+      - MEM_GATE_THRESHOLD=${MEM_GATE_THRESHOLD:-95}
+      - WORKER_ID=worker-10
+      - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
+      - HOMARY_LIMIT=${HOMARY_LIMIT:-999999}
+      - COSTWAY_PAGES_PER_CAT=${COSTWAY_PAGES_PER_CAT:-999999}
+      - VIDAXL_LIMIT=${VIDAXL_LIMIT:-999999}
+      - IKEA_LIMIT=${IKEA_LIMIT:-999999}
+      - IKEA_USE_STEALTH=${IKEA_USE_STEALTH:-0}
+      - WAYFAIR_USE_STEALTH=${WAYFAIR_USE_STEALTH:-0}
+      - BESTBUY_LIMIT=${BESTBUY_LIMIT:-200}
+      - EBAY_LIMIT=${EBAY_LIMIT:-200}
+      - OTTO_LIMIT=${OTTO_LIMIT:-200}
+      - TARGET_LIMIT=${TARGET_LIMIT:-200}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.flatkey.ai}
+      - LLM_MODEL=${LLM_MODEL:-claude-haiku-4-5}
+
+  worker_12:
+    <<: *worker_template
+    container_name: smart-crawler-worker-12
+    profiles: ["workers"]
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
+      - RUN_SCHEDULER=0
+      - MEM_GATE_THRESHOLD=${MEM_GATE_THRESHOLD:-95}
+      - WORKER_ID=worker-12
+      - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
+      - HOMARY_LIMIT=${HOMARY_LIMIT:-999999}
+      - COSTWAY_PAGES_PER_CAT=${COSTWAY_PAGES_PER_CAT:-999999}
+      - VIDAXL_LIMIT=${VIDAXL_LIMIT:-999999}
+      - IKEA_LIMIT=${IKEA_LIMIT:-999999}
+      - IKEA_USE_STEALTH=${IKEA_USE_STEALTH:-0}
+      - WAYFAIR_USE_STEALTH=${WAYFAIR_USE_STEALTH:-0}
+      - BESTBUY_LIMIT=${BESTBUY_LIMIT:-200}
+      - EBAY_LIMIT=${EBAY_LIMIT:-200}
+      - OTTO_LIMIT=${OTTO_LIMIT:-200}
+      - TARGET_LIMIT=${TARGET_LIMIT:-200}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.flatkey.ai}
+      - LLM_MODEL=${LLM_MODEL:-claude-haiku-4-5}
+
+  worker_13:
+    <<: *worker_template
+    container_name: smart-crawler-worker-13
+    profiles: ["workers"]
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
+      - RUN_SCHEDULER=0
+      - MEM_GATE_THRESHOLD=${MEM_GATE_THRESHOLD:-95}
+      - WORKER_ID=worker-13
+      - TRIGGER_ALLOWLIST=manual,tracking_add,admin_quality_rerun,admin_retry
       - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
       - HOMARY_LIMIT=${HOMARY_LIMIT:-999999}
       - COSTWAY_PAGES_PER_CAT=${COSTWAY_PAGES_PER_CAT:-999999}

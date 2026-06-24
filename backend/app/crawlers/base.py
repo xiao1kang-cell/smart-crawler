@@ -28,6 +28,9 @@ class CrawlResult:
         self.browser_opens: int = 0
         self.pages_fetched: int = 0
         self.total_product_count: int | None = None
+        self.products_already_persisted: bool = False
+        self.persisted_products_count: int = 0
+        self.persisted_upsert_stats: dict | None = None
         self.coverage_complete: bool = True
         self.coverage_code: str | None = None
         self.coverage_stage: str | None = None
@@ -85,6 +88,26 @@ class BaseCrawler(ABC):
     def snapshot(self, name: str, content) -> None:
         """归档一份原始响应到大盘（见 app/snapshot.py）。"""
         _snapshot.save(self.site.site, name, content)
+
+    def persist_job_progress(self, *, products_count: int | None = None,
+                             total_product_count: int | None = None) -> None:
+        """Best-effort live progress for long non-streaming crawlers."""
+        if not self.job_id:
+            return
+        from ..db import session_scope
+        from ..models import CrawlJob
+
+        try:
+            with session_scope() as s:
+                job = s.get(CrawlJob, self.job_id)
+                if job is None:
+                    return
+                if products_count is not None:
+                    job.products_count = max(0, int(products_count))
+                if total_product_count is not None:
+                    job.total_product_count = max(0, int(total_product_count))
+        except Exception:
+            return
 
     def make_fetcher(self, *, kind: str = "product",
                      source: str = "unknown",

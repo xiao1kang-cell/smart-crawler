@@ -222,6 +222,141 @@ def test_homary_product_parsed_correctly(monkeypatch):
     assert p["product_url"] == _PRODUCT_URL
 
 
+def test_homary_concurrency_requires_proxy_lease_config():
+    site = _site()
+    site.crawler_config = {"detail_concurrency": 8}
+    crawler = _make_crawler(site, limit=1)
+
+    assert crawler._detail_concurrency() == 1
+    assert crawler._failed_product_retry_concurrency() == 1
+    assert crawler._proxy_lease_ttl_sec(default=0) == 0
+    assert crawler._rate_interval_sec() is None
+
+    site.crawler_config = {
+        "proxy_lease_ttl_sec": 300,
+        "detail_concurrency": 8,
+        "failed_product_retry_concurrency": 5,
+        "rate_interval_sec": 0.05,
+    }
+
+    assert crawler._detail_concurrency() == 8
+    assert crawler._failed_product_retry_concurrency() == 5
+    assert crawler._proxy_lease_ttl_sec(default=0) == 300
+    assert crawler._rate_interval_sec() == 0.05
+
+
+def test_homary_parallel_pdp_uses_proxy_lease_context(monkeypatch):
+    site = _site()
+    site.crawler_config = {
+        "proxy_lease_ttl_sec": 300,
+        "detail_concurrency": 2,
+        "rate_interval_sec": 0.05,
+    }
+    crawler = _make_crawler(site, limit=10)
+    second_product_url = f"{_BASE_URL}/item/modern-chair-67890.html"
+    item_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>{_PRODUCT_URL}</loc></url>
+  <url><loc>{second_product_url}</loc></url>
+</urlset>
+"""
+    url_map = {
+        _SITEMAP_ITEM_GZ: FetchResult(
+            ok=True, url=_SITEMAP_ITEM_GZ, status=200,
+            text="", content=gzip.compress(item_xml.encode("utf-8")),
+            final_url=_SITEMAP_ITEM_GZ, fetcher="curl_cffi",
+        ),
+        _SITEMAP_BEST_GZ: FetchResult(
+            ok=True, url=_SITEMAP_BEST_GZ, status=200,
+            text="", content=_SITEMAP_BEST_GZ_BYTES,
+            final_url=_SITEMAP_BEST_GZ, fetcher="curl_cffi",
+        ),
+        _PRODUCT_URL: FetchResult(
+            ok=True, url=_PRODUCT_URL, status=200,
+            text=_PRODUCT_HTML, content=_PRODUCT_HTML.encode("utf-8"),
+            final_url=_PRODUCT_URL, fetcher="curl_cffi",
+        ),
+        second_product_url: FetchResult(
+            ok=True, url=second_product_url, status=200,
+            text=_PRODUCT_HTML, content=_PRODUCT_HTML.encode("utf-8"),
+            final_url=second_product_url, fetcher="curl_cffi",
+        ),
+    }
+    make_fetcher_calls: list[dict] = []
+
+    def fake_make_fetcher(**kw):
+        make_fetcher_calls.append(kw)
+        return _make_fake_fetcher(crawler, url_map)
+
+    monkeypatch.setattr(crawler, "make_fetcher", fake_make_fetcher)
+    monkeypatch.setattr(crawler, "sleep", lambda: None)
+    monkeypatch.setattr(crawler, "snapshot", lambda name, content: None)
+
+    result = crawler.crawl()
+
+    assert {p["sku"] for p in result.products} == {"12345", "67890"}
+    product_calls = [kw for kw in make_fetcher_calls if kw["kind"] == "product"]
+    assert len(product_calls) == 2
+    assert all(kw["proxy_lease_ttl_sec"] == 300 for kw in product_calls)
+    assert all(kw["rate_interval_sec"] == 0.05 for kw in product_calls)
+    assert any("并发 2" in note for note in result.notes)
+
+
+def test_homary_sitemap_fetches_are_not_product_frontier(monkeypatch):
+    site = _site()
+    crawler = _make_crawler(site, limit=10)
+    invalid_item_url = f"{_BASE_URL}/item/category-landing.html"
+    item_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>{_PRODUCT_URL}</loc></url>
+  <url><loc>{invalid_item_url}</loc></url>
+</urlset>
+"""
+    url_map = {
+        _SITEMAP_ITEM_GZ: FetchResult(
+            ok=True, url=_SITEMAP_ITEM_GZ, status=200,
+            text="", content=gzip.compress(item_xml.encode("utf-8")),
+            final_url=_SITEMAP_ITEM_GZ, fetcher="curl_cffi",
+        ),
+        _SITEMAP_BEST_GZ: FetchResult(
+            ok=True, url=_SITEMAP_BEST_GZ, status=200,
+            text="", content=_SITEMAP_BEST_GZ_BYTES,
+            final_url=_SITEMAP_BEST_GZ, fetcher="curl_cffi",
+        ),
+        _PRODUCT_URL: FetchResult(
+            ok=True, url=_PRODUCT_URL, status=200,
+            text=_PRODUCT_HTML, content=_PRODUCT_HTML.encode("utf-8"),
+            final_url=_PRODUCT_URL, fetcher="curl_cffi",
+        ),
+    }
+    requests_seen: list[tuple[str, str]] = []
+
+    class _FakeFetcher:
+        def __init__(self, kind: str):
+            self.kind = kind
+
+        def get(self, url: str, **kw) -> FetchResult:
+            requests_seen.append((self.kind, url))
+            crawler.counter.api_calls += 1
+            return url_map[url]
+
+    def fake_make_fetcher(**kw):
+        return _FakeFetcher(kw["kind"])
+
+    monkeypatch.setattr(crawler, "make_fetcher", fake_make_fetcher)
+    monkeypatch.setattr(crawler, "sleep", lambda: None)
+    monkeypatch.setattr(crawler, "snapshot", lambda name, content: None)
+
+    result = crawler.crawl()
+
+    assert result.total_product_count == 1
+    assert [p["sku"] for p in result.products] == ["12345"]
+    assert ("sitemap", _SITEMAP_ITEM_GZ) in requests_seen
+    assert ("sitemap", _SITEMAP_BEST_GZ) in requests_seen
+    assert ("product", _PRODUCT_URL) in requests_seen
+    assert all(url != invalid_item_url for _kind, url in requests_seen)
+
+
 def test_homary_failed_product_retry_only_uses_given_urls(monkeypatch):
     site = _site()
     crawler = _make_crawler(site, limit=999)

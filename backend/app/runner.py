@@ -11,9 +11,10 @@ from __future__ import annotations
 import re
 import traceback
 import logging
+import os
 from datetime import datetime
 
-from sqlalchemy import and_, case, exists, or_, update
+from sqlalchemy import and_, case, exists, or_, text, update
 
 from .antiban import BlockedError, in_cooldown, set_cooldown
 from .billing import record_usage
@@ -83,6 +84,7 @@ FAILED_PRODUCT_RETRY_TRIGGER = "failed_product_retry"
 HIGH_PRIORITY_TRIGGERS = ("manual", "admin_quality_rerun", "admin_retry",
                           FAILED_PRODUCT_RETRY_TRIGGER)
 AUTO_DEDUP_TRIGGERS = ("scheduled", "daily_refresh", "daily_delta")
+DEFAULT_PLATFORM_RUNNING_LIMITS = {"vidaxl": 3}
 NON_FATAL_PARTIAL_FAILURE_CODES = {
     "anti_bot_challenge",
     "network_timeout",
@@ -103,14 +105,61 @@ class FailedProductRetryError(RuntimeError):
         self.status = status
 
 
+def _platform_running_limits() -> dict[str, int]:
+    raw = os.environ.get("CRAWL_PLATFORM_RUNNING_LIMITS", "")
+    limits = dict(DEFAULT_PLATFORM_RUNNING_LIMITS)
+    if not raw.strip():
+        return limits
+    for part in raw.split(","):
+        if ":" not in part:
+            continue
+        platform, value = part.split(":", 1)
+        platform = platform.strip().lower()
+        if not platform:
+            continue
+        try:
+            limit = int(value.strip())
+        except (TypeError, ValueError):
+            continue
+        if limit > 0:
+            limits[platform] = limit
+        else:
+            limits.pop(platform, None)
+    return limits
+
+
+def _platform_limit_reached(s, site: Site | None) -> bool:
+    platform = (getattr(site, "platform", None) or "").strip().lower()
+    if not platform:
+        return False
+    limit = _platform_running_limits().get(platform)
+    if not limit:
+        return False
+    if getattr(getattr(s, "bind", None), "dialect", None) is not None:
+        if s.bind.dialect.name == "postgresql":
+            s.execute(
+                text("select pg_advisory_xact_lock(hashtext(:lock_key))"),
+                {"lock_key": f"crawl-platform:{platform}"},
+            )
+    running = (
+        s.query(CrawlJob.id)
+        .join(Site, Site.site == CrawlJob.site)
+        .filter(CrawlJob.status == "running", Site.platform == platform)
+        .count()
+    )
+    return running >= limit
+
+
 def enqueue(site_name: str, trigger: str = "manual",
             requested_by_workspace_id: int | None = None,
-            requested_by_user_id: int | None = None) -> int:
+            requested_by_user_id: int | None = None) -> int | None:
     """入队一条采集任务，返回 job_id。"""
     with session_scope() as s:
         site = s.query(Site).filter(Site.site == site_name).first()
         if not site:
             raise ValueError(f"站点不存在: {site_name}")
+        if trigger in AUTO_DEDUP_TRIGGERS and site.track_status == "paused":
+            return None
         if trigger in AUTO_DEDUP_TRIGGERS:
             existing = (s.query(CrawlJob)
                         .filter(CrawlJob.site == site_name,
@@ -226,27 +275,36 @@ def claim_job(worker_id: str,
                 (CrawlJob.trigger.in_(HIGH_PRIORITY_TRIGGERS), CrawlJob.created_at),
                 else_=datetime(1970, 1, 1),
             )
-            job = query.order_by(priority, high_priority_touched_at.desc(),
-                                 CrawlJob.id).first()
-            if job is None:
+            candidates = (
+                query.order_by(priority, high_priority_touched_at.desc(),
+                               CrawlJob.id)
+                .limit(50)
+                .all()
+            )
+            if not candidates:
                 return None
-            site = s.query(Site).filter(Site.site == job.site).first()
-            preflight = crawl_preflight_issue(site, trigger=job.trigger, session=s)
-            if preflight is not None:
-                _skip_job(s, job, preflight)
-                s.flush()
-                skipped += 1
-                if skipped >= 50:
-                    return None
-                continue
-            # 乐观锁：仅当仍为 pending 时领取，防多 worker 抢同一任务
-            now = datetime.utcnow()
-            res = s.execute(
-                update(CrawlJob)
-                .where(CrawlJob.id == job.id, CrawlJob.status == "pending")
-                .values(status="running", worker=worker_id,
-                        started_at=now, heartbeat_at=now))
-            return job.id if res.rowcount == 1 else None
+            for job in candidates:
+                site = s.query(Site).filter(Site.site == job.site).first()
+                if _platform_limit_reached(s, site):
+                    continue
+                preflight = crawl_preflight_issue(site, trigger=job.trigger,
+                                                  session=s)
+                if preflight is not None:
+                    _skip_job(s, job, preflight)
+                    s.flush()
+                    skipped += 1
+                    if skipped >= 50:
+                        return None
+                    continue
+                # 乐观锁：仅当仍为 pending 时领取，防多 worker 抢同一任务
+                now = datetime.utcnow()
+                res = s.execute(
+                    update(CrawlJob)
+                    .where(CrawlJob.id == job.id, CrawlJob.status == "pending")
+                    .values(status="running", worker=worker_id,
+                            started_at=now, heartbeat_at=now))
+                return job.id if res.rowcount == 1 else None
+            return None
 
 
 def _failed_product_retry_limit(crawler) -> int:
@@ -413,25 +471,38 @@ def execute_job(job_id: int) -> dict:
                 "error": str(exc)}
 
     with session_scope() as s:
-        from .pipeline import upsert_products
         site = s.query(Site).filter(Site.site == site_name).first()
-        products, price_source_stats = enrich_products_from_site_config(
-            site, result.products, counter=getattr(crawler, "counter", None))
-        if price_source_stats.get("applied"):
-            result.notes.append(
-                "configured_price_source: "
-                f"matched={price_source_stats['matched']}, "
-                f"updated={price_source_stats['updated']}, "
-                f"rows={price_source_stats['rows']}"
-            )
-        elif price_source_stats.get("error"):
-            result.notes.append(
-                f"configured_price_source_failed: {price_source_stats['error']}")
-        stats = upsert_products(s, site_name, products)
+        if getattr(result, "products_already_persisted", False):
+            products = []
+            produced = int(getattr(result, "persisted_products_count", 0) or 0)
+            raw_stats = getattr(result, "persisted_upsert_stats", None) or {}
+            stats = {
+                "total": produced,
+                "inserted": int(raw_stats.get("inserted", 0) or 0),
+                "updated": int(raw_stats.get("updated", 0) or 0),
+                "skipped": int(raw_stats.get("skipped", 0) or 0),
+                "new": int(raw_stats.get("new", 0) or 0),
+                "changed": int(raw_stats.get("changed", 0) or 0),
+            }
+        else:
+            from .pipeline import upsert_products
+            products, price_source_stats = enrich_products_from_site_config(
+                site, result.products, counter=getattr(crawler, "counter", None))
+            if price_source_stats.get("applied"):
+                result.notes.append(
+                    "configured_price_source: "
+                    f"matched={price_source_stats['matched']}, "
+                    f"updated={price_source_stats['updated']}, "
+                    f"rows={price_source_stats['rows']}"
+                )
+            elif price_source_stats.get("error"):
+                result.notes.append(
+                    f"configured_price_source_failed: {price_source_stats['error']}")
+            stats = upsert_products(s, site_name, products)
+            produced = len(products)
         _save_categories(s, site_name, result.categories)
         s.flush()
         promo_count = _detect_promotions(s, site_name)
-        produced = len(products)
         crawl_total = _crawl_total_from_result(result, fallback_count=stats["total"])
         if produced > crawl_total:
             crawl_total = produced

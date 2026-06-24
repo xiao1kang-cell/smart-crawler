@@ -172,8 +172,8 @@ def upsert_products(session: Session, site: str, items: list[dict]) -> dict:
     stats = {"total": len(items), "inserted": 0, "updated": 0,
              "skipped": 0, "new": 0, "changed": 0}
 
-    existing = {p.sku: p for p in session.query(Product).filter(Product.site == site)}
     seen: set[str] = set()
+    normalized: list[dict] = []
 
     for raw in items:
         p = normalize(raw)
@@ -185,12 +185,27 @@ def upsert_products(session: Session, site: str, items: list[dict]) -> dict:
             stats["skipped"] += 1
             continue
         seen.add(sku)
+        normalized.append(p)
 
+    if not normalized:
+        return stats
+
+    existing = {
+        p.sku: p
+        for p in (
+            session.query(Product)
+            .filter(Product.site == site, Product.sku.in_(list(seen)))
+        )
+    }
+
+    for p in normalized:
+        sku = p["sku"]
         row = existing.get(sku)
         if row is None:                       # 新 SKU —— F1-012 首次出现规则
             p.setdefault("is_new", True)
             obj = Product(created_time=now, updated_time=now, **_product_kwargs(p))
             session.add(obj)
+            existing[sku] = obj
             product_row = obj
             stats["inserted"] += 1
             stats["new"] += 1

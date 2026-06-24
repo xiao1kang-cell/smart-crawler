@@ -122,6 +122,8 @@ class WestElmCrawler(BaseCrawler):
         targets = urls[: self.limit]
         result.total_product_count = len(urls)
         _persist_job_total_product_count(self.job_id, len(urls))
+        self.persist_job_progress(products_count=0,
+                                  total_product_count=len(urls))
         result.notes.append(
             f"sitemap 累计 {len(urls)} PDP URL，本次抓取 {len(targets)}")
         if len(targets) < len(urls):
@@ -236,6 +238,10 @@ class WestElmCrawler(BaseCrawler):
                     result.products.extend(rows)
                     ok += len(rows)
                     if ok and (ok // 50) > ((ok - len(rows)) // 50):
+                        self.persist_job_progress(
+                            products_count=ok,
+                            total_product_count=max(len(urls), ok),
+                        )
                         result.notes.append(
                             f"  进度 ok={ok} blocked={blocked}")
                 else:
@@ -253,6 +259,8 @@ class WestElmCrawler(BaseCrawler):
 
             self.sleep()
 
+        self.persist_job_progress(products_count=ok,
+                                  total_product_count=max(len(urls), ok))
         result.notes.append(
             f"成功 {ok}/{len(targets)} · 失败 {fail} · 反爬命中 {blocked} · "
             f"stealth fallback {stealth_used}")

@@ -364,7 +364,7 @@ def test_claim_job_skips_proxy_preflight_failure_and_claims_next(monkeypatch):
         s.close()
 
 
-def test_enqueue_skips_paused_tracking_site_before_proxy_preflight(monkeypatch):
+def test_auto_enqueue_does_not_create_job_for_paused_tracking_site(monkeypatch):
     init_db()
     from app import proxy_pool
 
@@ -385,16 +385,16 @@ def test_enqueue_skips_paused_tracking_site_before_proxy_preflight(monkeypatch):
 
     s = SessionLocal()
     try:
-        job = s.get(CrawlJob, job_id)
+        job = (s.query(CrawlJob)
+               .filter(CrawlJob.site == "runner_paused_probe")
+               .first())
         failure = (s.query(CrawlFailure)
-                   .filter(CrawlFailure.job_id == job_id)
+                   .filter(CrawlFailure.site == "runner_paused_probe")
                    .order_by(CrawlFailure.id.desc())
                    .first())
-        assert job.status == "skipped"
-        assert job.failure_code == TRACKING_PAUSED
-        assert job.retryable is False
-        assert failure is not None
-        assert failure.code == TRACKING_PAUSED
+        assert job_id is None
+        assert job is None
+        assert failure is None
     finally:
         s.close()
 
@@ -434,6 +434,66 @@ def test_claim_job_skips_paused_tracking_site_and_claims_next():
         ready = s.get(CrawlJob, ready_id)
         assert paused.status == "skipped"
         assert paused.failure_code == TRACKING_PAUSED
+        assert ready.status == "running"
+    finally:
+        s.close()
+
+
+def test_claim_job_respects_platform_running_limit(monkeypatch):
+    init_db()
+    monkeypatch.setenv("CRAWL_PLATFORM_RUNNING_LIMITS", "vidaxl:3")
+    now = datetime.utcnow()
+    s = SessionLocal()
+    try:
+        s.query(CrawlJob).delete()
+        for site_name in (
+            "runner_vidaxl_active_a",
+            "runner_vidaxl_active_b",
+            "runner_vidaxl_active_c",
+            "runner_vidaxl_pending",
+            "runner_other_pending",
+        ):
+            s.query(Site).filter(Site.site == site_name).delete()
+        for site_name in (
+            "runner_vidaxl_active_a",
+            "runner_vidaxl_active_b",
+            "runner_vidaxl_active_c",
+            "runner_vidaxl_pending",
+        ):
+            s.add(Site(site=site_name, brand="VidaXL", country="NL",
+                       url="https://example.com", platform="vidaxl",
+                       proxy_tier="none"))
+        s.add(Site(site="runner_other_pending", brand="Probe", country="US",
+                   url="https://example.com", platform="generic",
+                   proxy_tier="none"))
+        s.flush()
+        for site_name in (
+            "runner_vidaxl_active_a",
+            "runner_vidaxl_active_b",
+            "runner_vidaxl_active_c",
+        ):
+            s.add(CrawlJob(site=site_name, status="running",
+                           trigger="scheduled", created_at=now,
+                           started_at=now, heartbeat_at=now))
+        blocked = CrawlJob(site="runner_vidaxl_pending", status="pending",
+                           trigger="scheduled", created_at=now)
+        ready = CrawlJob(site="runner_other_pending", status="pending",
+                         trigger="scheduled",
+                         created_at=now + timedelta(seconds=1))
+        s.add_all([blocked, ready])
+        s.commit()
+        blocked_id = blocked.id
+        ready_id = ready.id
+    finally:
+        s.close()
+
+    assert claim_job("worker-test") == ready_id
+
+    s = SessionLocal()
+    try:
+        blocked = s.get(CrawlJob, blocked_id)
+        ready = s.get(CrawlJob, ready_id)
+        assert blocked.status == "pending"
         assert ready.status == "running"
     finally:
         s.close()

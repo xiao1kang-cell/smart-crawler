@@ -536,6 +536,37 @@ def test_vidaxl_failed_product_retry_reuses_storefront_pdp_executor(monkeypatch)
     assert "失败商品重抓" in result.notes[-1]
 
 
+def test_vidaxl_failed_product_retry_excludes_404_from_total(monkeypatch):
+    """404 PDPs are stale sitemap URLs and should not keep retries partial."""
+    from app.crawlers import vidaxl as vidaxl_mod
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    crawler = VidaxlCrawler(_site())
+    gone_url = "https://www.vidaxl.nl/e/gone/5059340199999.html"
+    logged: list[tuple[str, int, bool]] = []
+
+    def fake_fetch(url: str):
+        if url == gone_url:
+            return vidaxl_mod._PdpFetchResult(404, "")
+        return vidaxl_mod._PdpFetchResult(200, _PDP_HTML)
+
+    monkeypatch.setattr(crawler, "_try_fetch_storefront_pdp", fake_fetch)
+    monkeypatch.setattr(
+        vidaxl_mod,
+        "_log_fetched",
+        lambda site, url, status_code, **kw: logged.append(
+            (url, status_code, bool(kw.get("skipped")))
+        ),
+    )
+
+    result = crawler.crawl_failed_products([_PDP_URL, gone_url])
+
+    assert len(result.products) == 1
+    assert result.total_product_count == 1
+    assert "404=1" in result.notes[-1]
+    assert (gone_url, 404, True) in logged
+
+
 def test_vidaxl_collection_page_is_redirected_non_product():
     from app.crawlers.vidaxl import VidaxlCrawler
 

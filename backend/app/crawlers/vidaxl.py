@@ -25,7 +25,7 @@ import re
 import threading
 import time
 import zipfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -49,6 +49,10 @@ if STOREFRONT_LIMIT <= 0 or STOREFRONT_LIMIT == 3000:
 RUN_TARGET_LIMIT = int(os.environ.get("VIDAXL_RUN_TARGET_LIMIT", "0"))
 FRONTIER_REGISTER_MAX_URLS = int(os.environ.get(
     "VIDAXL_FRONTIER_REGISTER_MAX_URLS", "5000"))
+STREAM_UPSERT_BATCH_SIZE = int(os.environ.get(
+    "VIDAXL_STREAM_UPSERT_BATCH_SIZE", "1000"))
+STREAM_SUBMIT_MULTIPLIER = int(os.environ.get(
+    "VIDAXL_STREAM_SUBMIT_MULTIPLIER", "3"))
 API_PAGE = 500
 _LD_RE = re.compile(
     r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', re.S)
@@ -502,8 +506,14 @@ class VidaxlCrawler(BaseCrawler):
             retry_mode=False,
             progress_total=len(urls),
         )
-        result.products.extend(pdp_result.products)
+        if not pdp_result.products_already_persisted:
+            result.products.extend(pdp_result.products)
         result.notes.extend(pdp_result.notes)
+        result.products_already_persisted = pdp_result.products_already_persisted
+        result.persisted_products_count = pdp_result.persisted_products_count
+        result.persisted_upsert_stats = pdp_result.persisted_upsert_stats
+        if pdp_result.total_product_count is not None:
+            result.total_product_count = pdp_result.total_product_count
         latest_note = pdp_result.notes[-1] if pdp_result.notes else ""
         print(f"[vidaxl/{self.site.site}] {latest_note}", flush=True)
         for n in result.notes:
@@ -539,17 +549,58 @@ class VidaxlCrawler(BaseCrawler):
             return result
         max_workers = self._storefront_concurrency(retry_mode=retry_mode)
         retries = self._storefront_retries()
-        counters = {"ok": 0, "http_4xx": 0, "http_5xx": 0,
+        self._proxy_thread_local = threading.local()
+        self._proxy_lease_handles: list = []
+        self._proxy_lease_handles_lock = threading.Lock()
+        self._reuse_proxy_leases = self._reuse_proxy_leases_per_thread()
+        counters = {"ok": 0, "http_4xx": 0, "http_404": 0, "http_5xx": 0,
                     "timeout": 0, "parse_none": 0, "proxy_unavailable": 0,
                     "redirected_non_product": 0, "exception": 0}
         counters_lock = threading.Lock()
-        products_lock = threading.Lock()
+        batch: list[dict] = []
+        persisted_stats = {"total": 0, "inserted": 0, "updated": 0,
+                           "skipped": 0, "new": 0, "changed": 0}
+        stream_persist = bool(self.job_id)
+        result.products_already_persisted = stream_persist
 
         def _inc(key: str) -> None:
             with counters_lock:
                 counters[key] = counters.get(key, 0) + 1
 
-        def _fetch_one(url: str) -> None:
+        def _counter_value(key: str) -> int:
+            with counters_lock:
+                return int(counters.get(key, 0))
+
+        def _effective_display_total() -> int:
+            gone = _counter_value("http_404")
+            parsed = _counter_value("ok")
+            return max(parsed, int(display_total or 0) - gone)
+
+        def _merge_stats(stats: dict) -> None:
+            for key in persisted_stats:
+                persisted_stats[key] += int(stats.get(key, 0) or 0)
+
+        def _flush_batch() -> None:
+            if not stream_persist or not batch:
+                return
+            items = list(batch)
+            batch.clear()
+            stats = _persist_products_batch(
+                self.site.site,
+                items,
+                counter=getattr(self, "counter", None),
+            )
+            _merge_stats(stats)
+            parsed = _counter_value("ok")
+            result.persisted_products_count = parsed
+            result.persisted_upsert_stats = dict(persisted_stats)
+            _persist_job_progress(
+                self.job_id,
+                products_count=parsed,
+                total_product_count=_effective_display_total(),
+            )
+
+        def _fetch_one(url: str) -> dict | None:
             last = _PdpFetchResult(status=0)
             for _attempt in range(retries + 1):
                 last = self._try_fetch_storefront_pdp(url)
@@ -561,36 +612,40 @@ class VidaxlCrawler(BaseCrawler):
                         _log_fetched(self.site.site, url, 200,
                                      parsed=True, job_id=self.job_id,
                                      source=source)
-                        with products_lock:
-                            result.products.append(row)
                         with counters_lock:
                             self.counter.api_calls += 1
                         _inc("ok")
-                        return
+                        return row
                     if self._is_redirected_non_product_page(last.html):
                         _log_fetched(self.site.site, url, 200,
                                      skipped=True, job_id=self.job_id,
                                      source=source)
                         _inc("redirected_non_product")
-                        return
+                        return None
                     _log_fetched(self.site.site, url, 200,
                                  parse_failed=True, job_id=self.job_id,
                                  source=source)
                     _inc("parse_none")
-                    return
+                    return None
                 if last.failure and last.failure.code == PROXY_UNAVAILABLE:
                     _log_fetched(self.site.site, url, 0,
                                  job_id=self.job_id, source=source,
                                  failure=last.failure)
                     _inc("proxy_unavailable")
-                    return
+                    return None
                 if status == -1 or status >= 500:
                     continue
                 if 400 <= status < 500:
-                    _log_fetched(self.site.site, url, status,
-                                 job_id=self.job_id, source=source)
-                    _inc("http_4xx")
-                    return
+                    if status == 404:
+                        _log_fetched(self.site.site, url, status,
+                                     skipped=True, job_id=self.job_id,
+                                     source=source)
+                        _inc("http_404")
+                    else:
+                        _log_fetched(self.site.site, url, status,
+                                     job_id=self.job_id, source=source)
+                        _inc("http_4xx")
+                    return None
             _log_fetched(
                 self.site.site,
                 url,
@@ -605,27 +660,65 @@ class VidaxlCrawler(BaseCrawler):
                 _inc("http_5xx")
             else:
                 _inc("exception")
+            return None
 
         completed = 0
         progress_every = max(1, int(os.environ.get(
             "VIDAXL_PROGRESS_UPDATE_EVERY", "200")))
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futures = [ex.submit(_fetch_one, u) for u in targets]
-            for _ in as_completed(futures):
-                completed += 1
-                if completed % progress_every == 0 or completed == len(targets):
-                    with products_lock:
-                        parsed = len(result.products)
-                    _persist_job_progress(
-                        self.job_id,
-                        products_count=parsed,
-                        total_product_count=display_total,
-                    )
+        batch_size = max(1, STREAM_UPSERT_BATCH_SIZE)
+        submit_window = max(max_workers, max_workers * max(1, STREAM_SUBMIT_MULTIPLIER))
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                target_iter = iter(targets)
+                pending = set()
+
+                def _submit_more() -> None:
+                    while len(pending) < submit_window:
+                        try:
+                            url = next(target_iter)
+                        except StopIteration:
+                            return
+                        pending.add(ex.submit(_fetch_one, url))
+
+                _submit_more()
+                while pending:
+                    done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                    for fut in done:
+                        try:
+                            row = fut.result()
+                        except Exception:
+                            _inc("exception")
+                            row = None
+                        completed += 1
+                        if row:
+                            if stream_persist:
+                                batch.append(row)
+                                if len(batch) >= batch_size:
+                                    _flush_batch()
+                            else:
+                                result.products.append(row)
+                    if completed % progress_every == 0 or completed == len(targets):
+                        parsed = (_counter_value("ok") if stream_persist
+                                  else len(result.products))
+                        _persist_job_progress(
+                            self.job_id,
+                            products_count=parsed,
+                            total_product_count=_effective_display_total(),
+                        )
+                    _submit_more()
+            _flush_batch()
+        finally:
+            self._release_cached_proxy_leases()
+        if stream_persist:
+            result.persisted_products_count = _counter_value("ok")
+            result.persisted_upsert_stats = dict(persisted_stats)
+        result.total_product_count = _effective_display_total()
         mode = "失败商品重抓" if retry_mode else "全站PDP"
         result.notes.append(
             f"{mode} 并发 {max_workers}·重试 {retries} · "
             f"成功 {counters['ok']}/{len(targets)} · "
-            f"4xx={counters['http_4xx']} 5xx={counters['http_5xx']} "
+            f"404={counters['http_404']} 4xx={counters['http_4xx']} "
+            f"5xx={counters['http_5xx']} "
             f"timeout={counters['timeout']} proxy_unavailable={counters['proxy_unavailable']} "
             f"redirected_non_product={counters['redirected_non_product']} "
             f"parse_none={counters['parse_none']} exc={counters['exception']}")
@@ -637,18 +730,23 @@ class VidaxlCrawler(BaseCrawler):
         tier = self._storefront_proxy_tier()
         handle = None
         proxy_url = None
+        release_after_fetch = True
         if tier not in (None, "", "none"):
-            deadline = time.monotonic() + self._proxy_lease_wait_sec()
-            while time.monotonic() <= deadline:
-                handle = proxy_pool.lease_proxy(
-                    tier,
-                    site=self.site.site,
-                    job_id=self.job_id,
-                    ttl_sec=self._proxy_lease_ttl_sec(),
-                )
-                if handle:
-                    break
-                time.sleep(0.5)
+            if getattr(self, "_reuse_proxy_leases", False):
+                handle = self._thread_cached_proxy_lease(tier)
+                release_after_fetch = False
+            else:
+                deadline = time.monotonic() + self._proxy_lease_wait_sec()
+                while time.monotonic() <= deadline:
+                    handle = proxy_pool.lease_proxy(
+                        tier,
+                        site=self.site.site,
+                        job_id=self.job_id,
+                        ttl_sec=self._proxy_lease_ttl_sec(),
+                    )
+                    if handle:
+                        break
+                    time.sleep(0.5)
             if not handle:
                 return _PdpFetchResult(
                     status=0,
@@ -670,6 +768,11 @@ class VidaxlCrawler(BaseCrawler):
             failure = classify_http_status(resp.status_code)
             if resp.status_code in (429, 403):
                 proxy_pool.report_failure(proxy_url, hard=True)
+                if not release_after_fetch:
+                    self._discard_thread_cached_proxy_lease(
+                        success=False,
+                        failure_code=failure.code if failure else None,
+                    )
             elif 500 <= resp.status_code < 600:
                 proxy_pool.report_failure(proxy_url)
             else:
@@ -680,15 +783,85 @@ class VidaxlCrawler(BaseCrawler):
             proxy_pool.report_failure(proxy_url)
             return _PdpFetchResult(-1, "", failure)
         finally:
-            if handle and handle.lease_token:
+            if handle and handle.lease_token and release_after_fetch:
                 proxy_pool.release_proxy(
                     handle.lease_token,
                     success=failure is None,
                     failure_code=failure.code if failure else None,
                 )
 
+    def _thread_cached_proxy_lease(self, tier: str):
+        from .. import proxy_pool
+
+        local = getattr(self, "_proxy_thread_local", None)
+        if local is None:
+            return None
+        cached = getattr(local, "proxy_lease_handle", None)
+        expires_at = float(getattr(local, "proxy_lease_expires_at", 0.0) or 0.0)
+        if cached and expires_at > time.monotonic() + 10:
+            return cached
+        self._discard_thread_cached_proxy_lease(success=None)
+        deadline = time.monotonic() + self._proxy_lease_wait_sec()
+        while time.monotonic() <= deadline:
+            handle = proxy_pool.lease_proxy(
+                tier,
+                site=self.site.site,
+                job_id=self.job_id,
+                ttl_sec=self._proxy_lease_ttl_sec(),
+            )
+            if handle:
+                local.proxy_lease_handle = handle
+                local.proxy_lease_expires_at = (
+                    time.monotonic() + self._proxy_lease_ttl_sec())
+                with self._proxy_lease_handles_lock:
+                    self._proxy_lease_handles.append(handle)
+                return handle
+            time.sleep(0.5)
+        return None
+
+    def _discard_thread_cached_proxy_lease(
+        self,
+        *,
+        success: bool | None,
+        failure_code: str | None = None,
+    ) -> None:
+        local = getattr(self, "_proxy_thread_local", None)
+        if local is None:
+            return
+        handle = getattr(local, "proxy_lease_handle", None)
+        local.proxy_lease_handle = None
+        local.proxy_lease_expires_at = 0.0
+        if handle and handle.lease_token:
+            from .. import proxy_pool
+            proxy_pool.release_proxy(
+                handle.lease_token,
+                success=success,
+                failure_code=failure_code,
+            )
+
+    def _release_cached_proxy_leases(self) -> None:
+        handles = list(getattr(self, "_proxy_lease_handles", []) or [])
+        if not handles:
+            return
+        from .. import proxy_pool
+        seen: set[str] = set()
+        for handle in handles:
+            token = getattr(handle, "lease_token", None)
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            proxy_pool.release_proxy(token, success=True)
+        self._proxy_lease_handles = []
+
     def _storefront_proxy_tier(self) -> str | None:
         return self.site.proxy_tier or "residential"
+
+    def _reuse_proxy_leases_per_thread(self) -> bool:
+        config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
+        raw = config.get("reuse_proxy_lease_per_thread")
+        if raw is None:
+            raw = os.environ.get("VIDAXL_REUSE_PROXY_LEASE_PER_THREAD", "1")
+        return str(raw).strip().lower() not in {"0", "false", "no", "off"}
 
     def _storefront_concurrency(self, *, retry_mode: bool) -> int:
         config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
@@ -697,14 +870,21 @@ class VidaxlCrawler(BaseCrawler):
                    or config.get("detail_concurrency")
                    or os.environ.get("VIDAXL_FAILED_RETRY_CONCURRENCY")
                    or 3)
-            base = _bounded_int(raw, 1, 30, 3)
+            base = _bounded_int(raw, 1, self._storefront_max_concurrency(), 3)
             return self._cap_by_available_proxies(base)
         raw = (config.get("storefront_concurrency")
                or config.get("detail_concurrency")
                or os.environ.get("VIDAXL_CONCURRENCY")
                or 20)
-        base = _bounded_int(raw, 1, 50, 20)
+        base = _bounded_int(raw, 1, self._storefront_max_concurrency(), 20)
         return self._cap_by_available_proxies(base)
+
+    def _storefront_max_concurrency(self) -> int:
+        config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
+        raw = (config.get("max_storefront_concurrency")
+               or os.environ.get("VIDAXL_MAX_CONCURRENCY")
+               or 200)
+        return _bounded_int(raw, 1, 500, 200)
 
     def _cap_by_available_proxies(self, requested: int) -> int:
         tier = self._storefront_proxy_tier()
@@ -713,7 +893,11 @@ class VidaxlCrawler(BaseCrawler):
         try:
             from .. import proxy_pool
 
-            available = proxy_pool.available_count(tier, site=self.site.site)
+            available = (
+                proxy_pool.available_capacity(tier, site=self.site.site)
+                if hasattr(proxy_pool, "available_capacity")
+                else proxy_pool.available_count(tier, site=self.site.site)
+            )
         except Exception:
             available = 0
         if available <= 0:
@@ -914,6 +1098,30 @@ def _persist_job_progress(
         db.rollback()
     finally:
         db.close()
+
+
+def _persist_products_batch(site: str, items: list[dict], *, counter=None) -> dict:
+    """Persist one parsed VidaXL batch so long jobs do not retain all products."""
+    if not items:
+        return {"total": 0, "inserted": 0, "updated": 0,
+                "skipped": 0, "new": 0, "changed": 0}
+    try:
+        from ..db import session_scope
+        from ..models import Site
+        from ..pipeline import upsert_products
+        from ..price_sources import enrich_products_from_site_config
+    except Exception:
+        return {"total": len(items), "inserted": 0, "updated": 0,
+                "skipped": len(items), "new": 0, "changed": 0}
+
+    with session_scope() as db:
+        site_row = db.query(Site).filter(Site.site == site).first()
+        products, _price_source_stats = enrich_products_from_site_config(
+            site_row,
+            items,
+            counter=counter,
+        )
+        return upsert_products(db, site, products)
 
 
 def _register_frontier_targets(site: str, urls: list[str]) -> None:

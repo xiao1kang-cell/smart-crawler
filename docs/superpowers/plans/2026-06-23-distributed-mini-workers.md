@@ -961,6 +961,14 @@ Expected: `REACHABLE`。
 
 - [ ] **Step 2: 跑 proxy_health 迁移**
 
+⚠️ **迁移前必做（审查发现的风险）**：脚本第 3 步 `DROP CONSTRAINT IF EXISTS uq_proxy_health_hash` 假设旧唯一约束叫这个名字。但若生产表由 SQLAlchemy `create_all` 创建，PG 自动命名可能是 `proxy_health_proxy_hash_key`，导致 DROP 静默跳过、残留双约束。**先查实际约束名**：
+
+```bash
+docker exec smart-crawler-pg psql -U smart_crawler -d smart_crawler -c \
+  "SELECT conname FROM pg_constraint WHERE conrelid='proxy_health'::regclass AND contype='u';"
+```
+若输出的旧唯一约束名不是 `uq_proxy_health_hash`，先把 `backend/scripts/migrate_proxy_health_node.py` 第 3 步的约束名改成实际名字，再跑迁移。
+
 在 NAS 容器内：
 
 ```bash

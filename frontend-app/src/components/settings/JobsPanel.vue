@@ -35,7 +35,7 @@ const page = ref(1)
 const statusItems = [
   { label: '全部状态', value: 'all' },
   { label: '排队中', value: 'queued,pending' },
-  { label: '采取中', value: 'running' },
+  { label: '采集中', value: 'running' },
   { label: '成功', value: 'success,completed' },
   { label: '失败', value: 'failed' },
   { label: '阻断', value: 'blocked' },
@@ -300,7 +300,7 @@ onMounted(load)
   <section :class="{ 'jobs-panel-embedded': embedded }">
     <div v-if="!embedded" class="lead">采集任务 · 进程状态</div>
     <div class="sub">
-      {{ runningCount }} 采取中 · {{ successCount }} 成功 · 共 {{ jobTotal }} 条 ·
+      {{ runningCount }} 采集中 · {{ successCount }} 成功 · 共 {{ jobTotal }} 条 ·
       当前 {{ pageStart }}-{{ pageEnd }} 条 · 第 {{ page }} / {{ totalPages }} 页
     </div>
     <UAlert v-if="error" color="error" variant="soft" :title="error" class="mb-4" />

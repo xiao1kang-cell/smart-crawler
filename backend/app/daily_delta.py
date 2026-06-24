@@ -72,6 +72,9 @@ def sitemap_delta_job() -> dict:
 
             # 入队该 site（worker 抓时会增量处理）
             job_id = enqueue(site.site, trigger="daily_delta")
+            if job_id is None:
+                result[site.site] = {"skipped": "tracking_paused"}
+                continue
             result[site.site] = {
                 "fresh_sitemaps": len(fresh_maps),
                 "fetched": job_id,
@@ -113,6 +116,12 @@ def top_sku_refresh_job(top_n: int = 1000) -> dict:
         for site_name, count in rows:
             try:
                 job_id = enqueue(site_name, trigger="daily_refresh")
+                if job_id is None:
+                    result[site_name] = {
+                        "hi_value_skus": count,
+                        "skipped": "tracking_paused",
+                    }
+                    continue
                 result[site_name] = {"hi_value_skus": count, "job_id": job_id}
             except Exception as exc:
                 result[site_name] = {"error": str(exc)[:80]}

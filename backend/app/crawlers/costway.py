@@ -135,7 +135,6 @@ class CostwayCrawler(BaseCrawler):
                 _persist_job_progress(
                     self.job_id,
                     products_count=len(result.products),
-                    total_product_count=max(len(discovered), len(result.products)),
                 )
         result.total_product_count = len(discovered)
         _persist_job_progress(

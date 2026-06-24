@@ -277,3 +277,40 @@ def test_shoper_filters_costway_marketing_slugs_from_fallback():
     ]
 
     assert crawler._fallback_product_paths(hrefs, set()) == [f"/{_PRODUCT_SLUG}"]
+
+
+def test_shoper_failed_product_retry_excludes_gone_urls(monkeypatch):
+    """404 PDPs are stale candidates, so they should not keep retry jobs partial."""
+    from app.crawlers.shoper import ShoperCrawler
+
+    crawler = ShoperCrawler(_site())
+    crawler.sleep = lambda: None
+    gone_url = f"{_BASE}/nieistniejacy-produkt-testowy"
+    gone_marked: list[str] = []
+
+    def fake_get(url: str, **kw) -> FetchResult:
+        crawler.counter.api_calls += 1
+        if url == _PRODUCT_URL:
+            return FetchResult(
+                ok=True, url=url, status=200, text=_PRODUCT_HTML,
+                content=_PRODUCT_HTML.encode(), final_url=url,
+                fetcher="curl_cffi",
+            )
+        return FetchResult(
+            ok=False, url=url, status=404, text="not found",
+            content=b"not found", final_url=url, fetcher="curl_cffi",
+        )
+
+    class _F:
+        def get(self, url, **kw):
+            return fake_get(url, **kw)
+
+    monkeypatch.setattr(crawler, "make_fetcher", lambda **kw: _F())
+    monkeypatch.setattr(crawler, "_mark_gone_url", lambda url: gone_marked.append(url))
+
+    result = crawler.crawl_failed_products([_PRODUCT_URL, gone_url])
+
+    assert len(result.products) == 1
+    assert result.total_product_count == 1
+    assert result.coverage_complete is True
+    assert gone_marked == [gone_url]

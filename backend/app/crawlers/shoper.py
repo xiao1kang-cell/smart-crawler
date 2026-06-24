@@ -27,6 +27,8 @@ from selectolax.parser import HTMLParser
 
 from ..antiban import BlockedError
 from ..config import get_sites
+from ..db import SessionLocal
+from ..models import CrawlUrl, Product
 from ..url_filters import is_obvious_non_product_url
 from .base import BaseCrawler, CrawlResult
 
@@ -37,6 +39,10 @@ DEFAULT_CATEGORY_PAGE_CAP = int(os.environ.get("SHOPER_CATEGORY_PAGE_CAP", "0"))
 _LD_RE = re.compile(
     r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', re.S)
 _PRICE_RE = re.compile(r"[\d.,]+")
+
+
+class _ProductGone(Exception):
+    """Raised when a discovered Shoper URL is no longer a product page."""
 
 # 顶层非商品 slug（系统页 / 帮助 / 营销）
 _NON_PRODUCT_SLUGS = {
@@ -78,6 +84,16 @@ class ShoperCrawler(BaseCrawler):
         self._last_collect_stats: dict[str, object] = {}
         # 用户可在 sites.yaml 显式指定类别 URL；否则自动从主页发现
         self.category_urls: list[str] = hints.get("category_urls") or []
+        config = site.crawler_config or {}
+        config = config if isinstance(config, dict) else {}
+        raw_delay = config.get("rate_interval_sec") or os.environ.get(
+            "SHOPER_RATE_INTERVAL_SEC")
+        if raw_delay not in (None, ""):
+            try:
+                self.delay = max(0.0, min(float(raw_delay), 2.0))
+            except (TypeError, ValueError):
+                pass
+        self.use_frontier_seed = bool(config.get("use_frontier_seed"))
 
     def _headers(self) -> dict:
         """构造定制请求头（每请求透传给 CrawlerFetcher.get）。"""
@@ -96,48 +112,55 @@ class ShoperCrawler(BaseCrawler):
             retries=0,
         )
 
-        # 1. 拿类别列表
-        if not self.category_urls:
-            self.category_urls = self._discover_categories(fetcher)
+        product_urls = self._frontier_product_urls() if self.use_frontier_seed else []
+        if product_urls:
             result.notes.append(
-                f"自动发现 {len(self.category_urls)} 个类别（主页 menu）")
+                f"使用 frontier 已知 {len(product_urls)} 个商品 URL 作为本次目标")
         else:
+            # 1. 拿类别列表
+            if not self.category_urls:
+                self.category_urls = self._discover_categories(fetcher)
+                result.notes.append(
+                    f"自动发现 {len(self.category_urls)} 个类别（主页 menu）")
+            else:
+                result.notes.append(
+                    f"使用配置的 {len(self.category_urls)} 个类别")
+
+            if not self.category_urls:
+                raise RuntimeError(
+                    "未发现任何类别 URL —— 站点结构变化，需手动在 sites.yaml "
+                    "配置 category_urls")
+
+            # 2. 从类别页抓商品 slug
+            collect_budget = int(self.max_elapsed_sec) if self.max_elapsed_sec > 0 else None
+            product_urls = self._collect_product_urls(
+                fetcher, self.category_urls, started, collect_budget)
+            collect_stats = self._last_collect_stats or {}
             result.notes.append(
-                f"使用配置的 {len(self.category_urls)} 个类别")
-
-        if not self.category_urls:
-            raise RuntimeError(
-                "未发现任何类别 URL —— 站点结构变化，需手动在 sites.yaml "
-                "配置 category_urls")
-
-        # 2. 从类别页抓商品 slug
-        collect_budget = int(self.max_elapsed_sec) if self.max_elapsed_sec > 0 else None
-        product_urls = self._collect_product_urls(
-            fetcher, self.category_urls, started, collect_budget)
-        collect_stats = self._last_collect_stats or {}
-        result.notes.append(
-            f"从类别页收集 {len(product_urls)} 个商品候选 URL"
-            f"（收集预算 {collect_budget or '不限'}s / "
-            f"候选上限 {self.candidate_cap or '不限'} / "
-            f"页面上限 {self.category_page_cap or '不限'} / "
-            f"已访问页 {collect_stats.get('visited_pages', 0)} / "
-            f"剩余队列 {collect_stats.get('queued_pages', 0)}）")
-        if collect_stats.get("stopped_reason"):
-            result.coverage_complete = False
-            result.coverage_code = "incomplete_discovery"
-            result.coverage_stage = "discovery"
-            result.coverage_reason = (
-                f"Shoper 商品 URL 发现提前停止："
-                f"{collect_stats.get('stopped_reason')}"
-            )
-            result.coverage_retryable = True
-            result.coverage_suggested_action = (
-                "放宽 SHOPER_MAX_ELAPSED_SEC / SHOPER_CANDIDATE_CAP / "
-                "SHOPER_CATEGORY_PAGE_CAP 后重跑。"
-            )
+                f"从类别页收集 {len(product_urls)} 个商品候选 URL"
+                f"（收集预算 {collect_budget or '不限'}s / "
+                f"候选上限 {self.candidate_cap or '不限'} / "
+                f"页面上限 {self.category_page_cap or '不限'} / "
+                f"已访问页 {collect_stats.get('visited_pages', 0)} / "
+                f"剩余队列 {collect_stats.get('queued_pages', 0)}）")
+            if collect_stats.get("stopped_reason"):
+                result.coverage_complete = False
+                result.coverage_code = "incomplete_discovery"
+                result.coverage_stage = "discovery"
+                result.coverage_reason = (
+                    f"Shoper 商品 URL 发现提前停止："
+                    f"{collect_stats.get('stopped_reason')}"
+                )
+                result.coverage_retryable = True
+                result.coverage_suggested_action = (
+                    "放宽 SHOPER_MAX_ELAPSED_SEC / SHOPER_CANDIDATE_CAP / "
+                    "SHOPER_CATEGORY_PAGE_CAP 后重跑。"
+                )
 
         targets = product_urls[: self.limit]
         result.total_product_count = len(product_urls)
+        self.persist_job_progress(products_count=0,
+                                  total_product_count=len(product_urls))
         if len(targets) < len(product_urls):
             result.coverage_complete = False
             result.coverage_code = "incomplete_detail_parse"
@@ -154,6 +177,7 @@ class ShoperCrawler(BaseCrawler):
 
         # 3. 抓商品页
         ok = 0
+        gone = 0
         for url in targets:
             if (self.max_elapsed_sec > 0
                     and self._elapsed(started) >= self.max_elapsed_sec):
@@ -176,13 +200,123 @@ class ShoperCrawler(BaseCrawler):
                 if row:
                     result.products.append(row)
                     ok += 1
+                    if ok % 50 == 0:
+                        self.persist_job_progress(
+                            products_count=ok,
+                            total_product_count=max(ok, len(product_urls) - gone),
+                        )
+            except _ProductGone:
+                gone += 1
+                if gone % 25 == 0:
+                    self.persist_job_progress(
+                        products_count=ok,
+                        total_product_count=max(ok, len(product_urls) - gone),
+                    )
             except BlockedError:
                 raise
             except Exception as exc:
                 result.notes.append(f"跳过 {url[-50:]}: {exc}")
             self.sleep()
-        result.notes.append(f"成功解析 {ok}/{len(targets)} 个商品页")
+        self.persist_job_progress(products_count=ok,
+                                  total_product_count=max(ok, len(product_urls) - gone))
+        result.total_product_count = max(ok, len(product_urls) - gone)
+        result.notes.append(
+            f"成功解析 {ok}/{len(targets)} 个商品页，失效 404 URL {gone} 个")
         return result
+
+    def crawl_failed_products(self, urls: list[str]) -> CrawlResult:
+        result = CrawlResult()
+        fetcher = self.make_fetcher(
+            kind="product",
+            source="shoper_failed_product_retry",
+            fail_fast_blocked=True,
+            retries=1,
+        )
+        targets = self._dedupe_urls(urls)
+        ok = gone = failed = 0
+        result.total_product_count = len(targets)
+        self.persist_job_progress(products_count=0,
+                                  total_product_count=len(targets))
+        for url in targets:
+            try:
+                row = self._parse_product(fetcher, url)
+                if row:
+                    result.products.append(row)
+                    ok += 1
+                    self.persist_job_progress(
+                        products_count=ok,
+                        total_product_count=max(ok, len(targets) - gone),
+                    )
+                else:
+                    failed += 1
+            except _ProductGone:
+                gone += 1
+                self.persist_job_progress(
+                    products_count=ok,
+                    total_product_count=max(ok, len(targets) - gone),
+                )
+            except BlockedError:
+                raise
+            except Exception as exc:
+                failed += 1
+                if failed <= 5:
+                    result.notes.append(f"重抓跳过 {url[-50:]}: {exc}")
+            self.sleep()
+        result.total_product_count = max(ok, len(targets) - gone)
+        if failed:
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "fetch"
+            result.coverage_reason = (
+                f"Shoper 失败商品重抓仍有 {failed}/{len(targets)} 个 URL 未解析"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = "稍后继续重试失败商品。"
+        result.notes.append(
+            f"失败商品重抓成功 {ok}/{len(targets)}，失效 404 URL {gone}，失败 {failed}")
+        return result
+
+    def _frontier_product_urls(self) -> list[str]:
+        if not self.use_frontier_seed:
+            return []
+        db = SessionLocal()
+        try:
+            confirmed_rows = (
+                db.query(Product.product_url)
+                .filter(
+                    Product.site == self.site.site,
+                    Product.product_url.isnot(None),
+                )
+                .order_by(Product.updated_time.desc(), Product.id.asc())
+                .all()
+            )
+            confirmed = self._dedupe_urls(url for (url,) in confirmed_rows)
+            if confirmed:
+                return confirmed
+            rows = (
+                db.query(CrawlUrl.url)
+                .filter(
+                    CrawlUrl.site == self.site.site,
+                    CrawlUrl.kind == "product",
+                    CrawlUrl.url.isnot(None),
+                )
+                .order_by(CrawlUrl.first_seen_at.asc(), CrawlUrl.id.asc())
+                .all()
+            )
+            return self._dedupe_urls(url for (url,) in rows)
+        finally:
+            db.close()
+
+    @staticmethod
+    def _dedupe_urls(urls) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for url in urls:
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            out.append(url)
+        return out
 
     # ---------- 类别发现 ----------
     def _discover_categories(self, fetcher) -> list[str]:
@@ -408,6 +542,9 @@ class ShoperCrawler(BaseCrawler):
     # ---------- 商品解析 ----------
     def _parse_product(self, fetcher, url: str) -> dict | None:
         res = fetcher.get(url, headers=self._headers(), timeout=12)
+        if (res.status or 0) == 404:
+            self._mark_gone_url(url)
+            raise _ProductGone(url)
         if not res.ok:
             return None
         html = res.text
@@ -437,6 +574,29 @@ class ShoperCrawler(BaseCrawler):
             "product_url": url,
             "site": self.site.site,
         }
+
+    def _mark_gone_url(self, url: str) -> None:
+        try:
+            from ..crawl_diagnostics import hash_url
+        except Exception:
+            return
+        db = SessionLocal()
+        try:
+            row = (db.query(CrawlUrl)
+                   .filter(CrawlUrl.site == self.site.site,
+                           CrawlUrl.url_hash == hash_url(url))
+                   .first())
+            if row is not None:
+                row.status = "skipped"
+                row.failure_code = "not_found"
+                row.failure_stage = "fetch"
+                row.failure_detail = "HTTP 404 product URL no longer exists"
+                row.retryable = False
+                db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
 
     @staticmethod
     def _from_jsonld(html: str) -> dict | None:

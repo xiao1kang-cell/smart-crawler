@@ -116,6 +116,7 @@ function statusMeta(s?: string) {
     submitting: { label: '提交中', tone: 'busy' },
     queued: { label: '已入队', tone: 'busy' },
     pending: { label: '已入队', tone: 'busy' },
+    deferred: { label: '已延后', tone: 'idle' },
     running: { label: '抓取中', tone: 'busy' },
     success: { label: '已完成', tone: 'ok' },
     tracking: { label: '追踪中', tone: 'ok' },

@@ -136,7 +136,7 @@ onMounted(load)
         <div v-else class="trace-lines">
           <div>📦 商品: <b>{{ fmtNumber(totalSku) }}</b></div>
           <div>🌐 覆盖: <b>{{ coveragePct }}%</b></div>
-          <div>⚙️ 采取中: <b>{{ runningJobs }}</b></div>
+          <div>⚙️ 采集中: <b>{{ runningJobs }}</b></div>
           <div>🔔 代理: <b>{{ proxyOk }}/{{ proxyTotal }}</b></div>
           <div>🏪 站点: <b>{{ sites.length }}</b></div>
           <div>✅ 完成: <b>{{ successJobs }}</b></div>

@@ -26,9 +26,10 @@ else:
     # PostgreSQL：连接池 + 回收，避免长连接被 DB / 网络中断
     is_worker = bool(os.environ.get("WORKER_ID"))
     _kwargs["pool_size"] = int(os.environ.get(
-        "DB_POOL_SIZE", "1" if is_worker else "5"))
+        "DB_POOL_SIZE", "6" if is_worker else "5"))
     _kwargs["max_overflow"] = int(os.environ.get(
-        "DB_MAX_OVERFLOW", "1" if is_worker else "10"))
+        "DB_MAX_OVERFLOW", "6" if is_worker else "10"))
+    _kwargs["pool_timeout"] = int(os.environ.get("DB_POOL_TIMEOUT", "120"))
     _kwargs["pool_recycle"] = int(os.environ.get("DB_POOL_RECYCLE", "1800"))
 
 engine = create_engine(DATABASE_URL, **_kwargs)
@@ -146,6 +147,11 @@ def _migrate_with_connection(conn) -> None:
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_proxy_leases_active_endpoint "
             "ON proxy_leases (endpoint_id, expires_at, released_at)"))
+        if not IS_SQLITE:
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_proxy_leases_open_endpoint_expiry "
+                "ON proxy_leases (endpoint_id, expires_at) "
+                "WHERE released_at IS NULL"))
     if insp.has_table("crawl_urls"):
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_crawl_urls_failed_product_lookup "
@@ -198,6 +204,31 @@ def _migrate_with_connection(conn) -> None:
             BEFORE UPDATE ON crawl_jobs
             FOR EACH ROW
             EXECUTE FUNCTION guard_legacy_30min_crawl_cancel()
+        """))
+        conn.execute(text("""
+            CREATE OR REPLACE FUNCTION normalize_crawl_job_total_count()
+            RETURNS trigger AS $$
+            BEGIN
+              IF NEW.products_count IS NOT NULL
+                 AND NEW.products_count > 0
+                 AND (
+                   NEW.total_product_count IS NULL
+                   OR NEW.total_product_count < NEW.products_count
+                 ) THEN
+                NEW.total_product_count = NEW.products_count;
+              END IF;
+              RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        """))
+        conn.execute(text(
+            "DROP TRIGGER IF EXISTS trg_normalize_crawl_job_total_count "
+            "ON crawl_jobs"))
+        conn.execute(text("""
+            CREATE TRIGGER trg_normalize_crawl_job_total_count
+            BEFORE INSERT OR UPDATE ON crawl_jobs
+            FOR EACH ROW
+            EXECUTE FUNCTION normalize_crawl_job_total_count()
         """))
 
 

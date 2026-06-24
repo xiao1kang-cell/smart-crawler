@@ -244,6 +244,8 @@ button,input,select,textarea{font-family:inherit}
 .pill.warn{background:rgba(247,183,49,.14);color:#b45309;border:1px solid rgba(247,183,49,.3)}
 .pill.bad{background:rgba(251,113,133,.14);color:#be123c;border:1px solid rgba(251,113,133,.3)}
 .pill.pending{background:rgba(96,165,250,.14);color:#1d4ed8;border:1px solid rgba(96,165,250,.3)}
+.pill.running{background:rgba(124,58,237,.14);color:var(--ui-purple-strong);border:1px solid rgba(124,58,237,.30)}
+.pill.idle{background:rgba(148,163,184,.14);color:#475569;border:1px solid rgba(148,163,184,.30)}
 
 .btn-go{background:linear-gradient(135deg,#a78bfa,#7c3aed);color:#fff;border:none;padding:6px 16px;border-radius:7px;font-size:.78rem;font-weight:700;cursor:pointer}
 .btn-go:disabled{opacity:.55;cursor:wait}
@@ -800,6 +802,8 @@ html[data-theme="dark"] .pill.ok{background:rgba(16,185,129,.14);color:#6ee7b7;b
 html[data-theme="dark"] .pill.warn{background:rgba(247,183,49,.14);color:#fcd34d;border-color:rgba(247,183,49,.3)}
 html[data-theme="dark"] .pill.bad{background:rgba(251,113,133,.14);color:#fda4af;border-color:rgba(251,113,133,.3)}
 html[data-theme="dark"] .pill.pending{background:rgba(96,165,250,.14);color:#93c5fd;border-color:rgba(96,165,250,.3)}
+html[data-theme="dark"] .pill.running{background:rgba(185,148,255,.20);color:#dccfff;border-color:rgba(185,148,255,.42)}
+html[data-theme="dark"] .pill.idle{background:rgba(148,163,184,.14);color:#cbd5e1;border-color:rgba(148,163,184,.28)}
 html[data-theme="dark"] .inf-avatar,html[data-theme="dark"] .post img{background:rgba(167,139,250,.14);border-color:rgba(167,139,250,.3)}
 html[data-theme="dark"] .secret-box{color:#c4b5fd}
 html[data-theme="dark"] .settings-scroll-list::-webkit-scrollbar-thumb{background:#3a2f56}

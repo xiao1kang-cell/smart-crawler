@@ -43,11 +43,15 @@
 """
 from __future__ import annotations
 
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import json
 import os
 import re
+import threading
 import time
+from urllib.parse import quote
 
+from curl_cffi import requests as creq
 from selectolax.parser import HTMLParser
 
 from ..antiban import BlockedError
@@ -58,6 +62,7 @@ if DEFAULT_LIMIT <= 0 or DEFAULT_LIMIT in (200, 1000):
     DEFAULT_LIMIT = 999999
 MAX_ELAPSED_SEC = float(os.environ.get("IKEA_MAX_ELAPSED_SEC", "0"))
 SITEMAP_INDEX = "https://www.ikea.com/sitemaps/sitemap.xml"
+SEARCH_API = "https://sik.search.blue.cdtapps.com/{country}/{lang}/search-result-page"
 
 # country code → sitemap 分片前缀（lang 部分按 IKEA 主语种走）
 _COUNTRY_SHARD = {
@@ -103,6 +108,11 @@ class IkeaCrawler(BaseCrawler):
         self.country = (site.country or "US").upper()
         # IKEA Cloudflare 中级：1.5s 间隔实测稳定，保守 2s
         self.delay = float(os.environ.get("IKEA_DELAY", "2.0"))
+        self.api_delay = float(os.environ.get("IKEA_API_DELAY", "0.2"))
+        self.api_concurrency = max(
+            1, int(os.environ.get("IKEA_API_CONCURRENCY", "12"))
+        )
+        self.use_search_api = os.environ.get("IKEA_USE_SEARCH_API", "1") != "0"
 
     # ------------------------------------------------------------------
     # headers  (replaces old _session — proxy handled by CrawlerFetcher)
@@ -159,6 +169,13 @@ class IkeaCrawler(BaseCrawler):
             retries=0,
             max_blocked_events=0,
         )
+        api_fetcher = self.make_fetcher(
+            kind="api",
+            source="ikea_search_api",
+            fail_fast_blocked=False,
+            retries=1,
+            max_blocked_events=0,
+        )
         started = time.monotonic()
 
         # Warmup：访问首页建立会话 / 预热 Cloudflare cookie（计入 api_calls）
@@ -178,6 +195,8 @@ class IkeaCrawler(BaseCrawler):
 
         targets = urls[: self.limit]
         result.total_product_count = len(urls)
+        self.persist_job_progress(products_count=0,
+                                  total_product_count=len(urls))
         result.notes.append(
             f"sitemap 累计 {len(urls)} PDP URL，本次抓取 {len(targets)}")
         if len(targets) < len(urls):
@@ -190,9 +209,36 @@ class IkeaCrawler(BaseCrawler):
             result.coverage_retryable = True
             result.coverage_suggested_action = "移除 IKEA_LIMIT 后重跑。"
 
+        if self.use_search_api:
+            stats = self._crawl_via_search_api(targets, result, len(urls), started)
+            effective_total = len(urls) - stats["not_found"]
+            result.total_product_count = max(len(result.products), effective_total)
+            result.notes.append(
+                f"成功 {stats['ok']}/{len(targets)} · 失败 {stats['fail']} · "
+                f"search API 无结果 {stats['not_found']} · "
+                f"search API 并发 {stats['concurrency']}"
+            )
+            if stats["fail"] > 0 or len(result.products) < result.total_product_count:
+                result.coverage_complete = False
+                result.coverage_code = "incomplete_detail_parse"
+                result.coverage_stage = "api"
+                result.coverage_reason = (
+                    f"IKEA search API 本次有效商品 {result.total_product_count} 个，"
+                    f"实际解析 {len(result.products)} 个，失败 {stats['fail']} 个"
+                )
+                result.coverage_retryable = True
+                result.coverage_suggested_action = (
+                    "重试未解析商品；若 search API 仍缺失，再启用 PDP/外部数据源兜底。"
+                )
+            self.persist_job_progress(
+                products_count=len(result.products),
+                total_product_count=result.total_product_count,
+            )
+            return result
+
         import time as _t
 
-        ok = fail = blocked = missing = stealth_used = 0
+        ok = fail = blocked = missing = stealth_used = api_ok = api_miss = 0
         consecutive_block = 0
         BLOCK_BREAK = 10
         BLOCK_COOLDOWN_S = 90
@@ -219,6 +265,34 @@ class IkeaCrawler(BaseCrawler):
                 break
             url = entry["url"]
             sitemap_images: list[str] = entry.get("images") or []
+
+            if self.use_search_api:
+                try:
+                    row = self._fetch_via_search_api(api_fetcher, entry)
+                except BlockedError:
+                    raise
+                except Exception as exc:
+                    row = None
+                    if api_miss < 5:
+                        result.notes.append(
+                            f"IKEA search API 跳过 {url[-60:]}: {exc}")
+                if row:
+                    result.products.append(row)
+                    ok += 1
+                    api_ok += 1
+                    consecutive_block = 0
+                    if ok and ok % 50 == 0:
+                        self.persist_job_progress(
+                            products_count=ok,
+                            total_product_count=len(urls),
+                        )
+                        result.notes.append(
+                            f"  进度 ok={ok} api={api_ok} blocked={blocked} "
+                            f"404={missing}")
+                    if self.api_delay > 0:
+                        _t.sleep(self.api_delay)
+                    continue
+                api_miss += 1
 
             # 周期性 fetcher rotate（make_fetcher 每次创建新 CrawlerFetcher 实例）
             if i > 0 and i % SESSION_ROTATE == 0:
@@ -319,6 +393,10 @@ class IkeaCrawler(BaseCrawler):
                     result.products.append(row)
                     ok += 1
                     if ok and ok % 50 == 0:
+                        self.persist_job_progress(
+                            products_count=ok,
+                            total_product_count=len(urls),
+                        )
                         result.notes.append(
                             f"  进度 ok={ok} blocked={blocked} 404={missing}")
                 else:
@@ -333,8 +411,98 @@ class IkeaCrawler(BaseCrawler):
 
         result.notes.append(
             f"成功 {ok}/{len(targets)} · 失败 {fail} · 已下架(404) {missing} · "
-            f"反爬命中 {blocked} · stealth fallback {stealth_used}")
+            f"反爬命中 {blocked} · search API {api_ok}/{api_ok + api_miss} · "
+            f"stealth fallback {stealth_used}")
+        self.persist_job_progress(products_count=ok,
+                                  total_product_count=len(urls))
         return result
+
+    def _crawl_via_search_api(
+        self,
+        targets: list[dict],
+        result: CrawlResult,
+        display_total: int,
+        started: float,
+    ) -> dict:
+        max_workers = max(1, self.api_concurrency)
+        max_pending = max_workers * 4
+        local = threading.local()
+
+        def get_fetcher():
+            session = getattr(local, "session", None)
+            if session is None:
+                session = creq.Session(impersonate="chrome")
+                local.session = session
+            return session
+
+        def fetch_one(entry: dict) -> dict | None:
+            return self._fetch_via_search_api(None, entry, session=get_fetcher())
+
+        ok = fail = not_found = 0
+        target_iter = iter(targets)
+        pending = set()
+
+        def submit_more(executor: ThreadPoolExecutor) -> None:
+            while len(pending) < max_pending:
+                if MAX_ELAPSED_SEC > 0 and time.monotonic() - started >= MAX_ELAPSED_SEC:
+                    return
+                try:
+                    entry = next(target_iter)
+                except StopIteration:
+                    return
+                pending.add(executor.submit(fetch_one, entry))
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            submit_more(executor)
+            while pending:
+                if MAX_ELAPSED_SEC > 0 and time.monotonic() - started >= MAX_ELAPSED_SEC:
+                    for future in pending:
+                        future.cancel()
+                    result.coverage_complete = False
+                    result.coverage_code = "incomplete_detail_parse"
+                    result.coverage_stage = "api"
+                    result.coverage_reason = (
+                        f"达到 IKEA_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
+                        f"本次只解析 {ok}/{len(targets)} 个商品"
+                    )
+                    result.coverage_retryable = True
+                    result.coverage_suggested_action = (
+                        "放宽 IKEA_MAX_ELAPSED_SEC 或拆分失败商品重抓。"
+                    )
+                    break
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    try:
+                        row = future.result()
+                    except BlockedError:
+                        raise
+                    except Exception as exc:
+                        fail += 1
+                        if fail <= 5:
+                            result.notes.append(f"IKEA search API 失败: {exc}")
+                        continue
+                    if row:
+                        result.products.append(row)
+                        ok += 1
+                        if ok % 50 == 0:
+                            self.persist_job_progress(
+                                products_count=ok,
+                                total_product_count=display_total,
+                            )
+                            result.notes.append(
+                                    f"  search API 进度 ok={ok} fail={fail}"
+                            )
+                    elif row is False:
+                        not_found += 1
+                    else:
+                        fail += 1
+                submit_more(executor)
+        return {
+            "ok": ok,
+            "fail": fail,
+            "not_found": not_found,
+            "concurrency": max_workers,
+        }
 
     # ------------------------------------------------------------------
     # sitemap
@@ -419,6 +587,161 @@ class IkeaCrawler(BaseCrawler):
         if (res.status or 0) == 200:
             return res.text, 200
         return None, res.status or 0
+
+    def _fetch_via_search_api(self, fetcher, entry: dict,
+                              session=None) -> dict | None:
+        """Use IKEA's search JSON API as the primary product data source.
+
+        PDP pages are prone to anti-bot challenge in production. The search API
+        is still keyed by the sitemap SKU and carries the fields we need for
+        price trend tracking: title, PDP URL, images, price, currency, rating,
+        and category metadata.
+        """
+        url = entry.get("url") or ""
+        sku = self._sku_from_url(url)
+        if not sku:
+            return None
+        api_url = self._search_api_url(sku)
+        headers = {
+            "User-Agent": self.ua(),
+            "Accept": "application/json",
+            "Accept-Language": self._accept_language(),
+            "Referer": f"{self.base}/{self._country_segment()}/",
+        }
+        if session is not None:
+            res = session.get(api_url, headers=headers, timeout=20)
+            status = getattr(res, "status_code", None) or getattr(res, "status", None)
+            text = res.text or ""
+        else:
+            res = fetcher.get(
+                api_url,
+                headers=headers,
+                timeout=20,
+            )
+            status = res.status or 0
+            text = res.text or ""
+        if (status or 0) != 200 or not text:
+            raise RuntimeError(f"IKEA search API status={status or 0}")
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("IKEA search API JSON decode failed") from exc
+        items = (
+            data.get("searchResultPage", {})
+            .get("products", {})
+            .get("main", {})
+            .get("items", [])
+        )
+        product = self._pick_search_product(items, sku, url)
+        if not product:
+            return False
+        return self._row_from_search_product(product, url, entry.get("images") or [])
+
+    def _search_api_url(self, sku: str) -> str:
+        lang = self._country_segment().split("/", 1)[1]
+        country = self._country_segment().split("/", 1)[0]
+        return (
+            SEARCH_API.format(country=country, lang=lang)
+            + f"?types=PRODUCT&q={quote(str(sku))}"
+        )
+
+    @staticmethod
+    def _pick_search_product(items: list, sku: str, url: str) -> dict | None:
+        if not isinstance(items, list):
+            return None
+        normalized_sku = str(sku).lower()
+        normalized_url = url.rstrip("/")
+        first_product = None
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            product = item.get("product")
+            if not isinstance(product, dict):
+                continue
+            first_product = first_product or product
+            ids = {
+                str(product.get("id") or "").lower(),
+                str(product.get("itemNo") or "").lower(),
+                str(product.get("itemNoGlobal") or "").lower(),
+            }
+            pip_url = str(product.get("pipUrl") or "").rstrip("/")
+            if normalized_sku in ids or pip_url == normalized_url:
+                return product
+        return first_product if len(items) == 1 else None
+
+    def _row_from_search_product(
+        self,
+        product: dict,
+        fallback_url: str,
+        sitemap_images: list[str],
+    ) -> dict | None:
+        sku = (
+            self._sku_from_url(fallback_url)
+            or product.get("itemNo")
+            or product.get("id")
+        )
+        if not sku:
+            return None
+        sku = str(sku).strip()
+        name = str(product.get("name") or "").strip()
+        type_name = str(product.get("typeName") or "").strip()
+        measure = str(product.get("itemMeasureReferenceText") or "").strip()
+        title_parts = [p for p in (name, type_name, measure) if p]
+        title = ", ".join(title_parts[:3])
+        if not title:
+            return None
+
+        price = product.get("salesPrice") or {}
+        sale_price = self._num(price.get("numeral"))
+        currency = price.get("currencyCode") or _COUNTRY_CURRENCY.get(
+            self.country, "USD")
+        images = []
+        for raw in product.get("allProductImage") or []:
+            if isinstance(raw, dict) and raw.get("url"):
+                images.append(raw["url"])
+        for raw in (
+            product.get("mainImageUrl"),
+            product.get("contextualImageUrl"),
+            *sitemap_images,
+        ):
+            if raw:
+                images.append(raw)
+        clean_images = []
+        seen = set()
+        for image in images:
+            if image and image not in seen:
+                seen.add(image)
+                clean_images.append(image)
+
+        business = product.get("businessStructure") or {}
+        category_parts = [
+            business.get("productRangeAreaName"),
+            business.get("homeFurnishingBusinessName"),
+            business.get("productAreaName"),
+            product.get("filterClass"),
+        ]
+        category_path = "/".join(
+            str(p).strip() for p in category_parts if p
+        ) or None
+        online_sellable = product.get("onlineSellable")
+        status = "on_sale" if online_sellable is not False else "out_of_stock"
+        return {
+            "sku": sku,
+            "spu": sku,
+            "title": title,
+            "description": product.get("mainImageAlt"),
+            "image_urls": clean_images[:10],
+            "category_path": category_path,
+            "sale_price": sale_price,
+            "original_price": sale_price,
+            "currency": currency,
+            "ratings": self._num(product.get("ratingValue")),
+            "review_count": self._int(product.get("ratingCount")),
+            "status": status,
+            "product_url": product.get("pipUrl") or fallback_url,
+            "site": self.site.site,
+            "brand": self.site.brand or "IKEA",
+        }
 
     def _fetch_via_stealth(self, url: str) -> str | None:
         """curl_cffi 触发反爬时走 StealthyFetcher（Camoufox）。
@@ -653,6 +976,11 @@ class IkeaCrawler(BaseCrawler):
         return None
 
     @staticmethod
+    def _sku_from_url(url: str) -> str | None:
+        m = _SKU_RE.search((url or "").rstrip("/"))
+        return m.group(1) if m else None
+
+    @staticmethod
     def _num(v):
         if v is None:
             return None
@@ -660,4 +988,13 @@ class IkeaCrawler(BaseCrawler):
         try:
             return float(m.group()) if m else None
         except ValueError:
+            return None
+
+    @staticmethod
+    def _int(v):
+        if v is None:
+            return None
+        try:
+            return int(str(v).replace(",", ""))
+        except (TypeError, ValueError):
             return None

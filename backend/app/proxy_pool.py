@@ -58,6 +58,7 @@ class ProxyEntry:
     pool_slugs: set[str] = field(default_factory=set)
     provider: str | None = None
     country: str | None = None
+    max_concurrency: int = 1
     fail_count: int = 0
     success_count: int = 0
     last_used: float = 0.0
@@ -188,6 +189,7 @@ class ProxyPool:
                     pool_slugs=pool_slugs,
                     provider=row.provider,
                     country=row.country,
+                    max_concurrency=max(1, int(row.max_concurrency or 1)),
                 ))
             return proxies
         except Exception:
@@ -249,6 +251,19 @@ class ProxyPool:
         self._ensure_loaded()
         with self._lock:
             return len(self._available_candidates(candidate_tiers, site))
+
+    def available_capacity(self, tier: str | None = None,
+                           site: str | None = None) -> int:
+        """Return usable lease capacity, respecting endpoint max_concurrency."""
+        candidate_tiers = _candidate_tiers_from_rules(site, tier)
+        if not candidate_tiers or candidate_tiers[0] in (None, "none", ""):
+            return 0
+        self._ensure_loaded()
+        with self._lock:
+            return sum(
+                max(1, int(p.max_concurrency or 1))
+                for p in self._available_candidates(candidate_tiers, site)
+            )
 
     def has_available(self, tier: str | None = None,
                       site: str | None = None) -> bool:
@@ -544,6 +559,10 @@ def reload_pool():
 
 def available_count(tier: str | None = None, site: str | None = None) -> int:
     return _pool.available_count(tier, site)
+
+
+def available_capacity(tier: str | None = None, site: str | None = None) -> int:
+    return _pool.available_capacity(tier, site)
 
 
 def has_available_proxy(tier: str | None = None, site: str | None = None) -> bool:

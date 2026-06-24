@@ -47,11 +47,11 @@ sites:
   - {site: costway_pl, brand: Costway, country: PL, url: "https://costway.pl/", platform: shoper, proxy_tier: none}
 
   # ========== Homary（爆米科技, P0）— Nuxt SSR ==========
-  - {site: homary_us, brand: Homary, country: US, url: "https://www.homary.com/", platform: nuxt, proxy_tier: none}
-  - {site: homary_uk, brand: Homary, country: UK, url: "https://uk.homary.com/", platform: nuxt, proxy_tier: none}
-  - {site: homary_de, brand: Homary, country: DE, url: "https://de.homary.com/", platform: nuxt, proxy_tier: none}
-  - {site: homary_es, brand: Homary, country: ES, url: "https://es.homary.com/", platform: nuxt, proxy_tier: none}
-  - {site: homary_fr, brand: Homary, country: FR, url: "https://fr.homary.com/", platform: nuxt, proxy_tier: none}
+  - {site: homary_us, brand: Homary, country: US, url: "https://www.homary.com/", platform: nuxt, proxy_tier: residential, crawler_config: {proxy_lease_ttl_sec: 300, detail_concurrency: 8, failed_product_retry_concurrency: 8, rate_interval_sec: 0.03}}
+  - {site: homary_uk, brand: Homary, country: UK, url: "https://uk.homary.com/", platform: nuxt, proxy_tier: residential, crawler_config: {proxy_lease_ttl_sec: 300, detail_concurrency: 8, failed_product_retry_concurrency: 8, rate_interval_sec: 0.03}}
+  - {site: homary_de, brand: Homary, country: DE, url: "https://de.homary.com/", platform: nuxt, proxy_tier: residential, crawler_config: {proxy_lease_ttl_sec: 300, detail_concurrency: 8, failed_product_retry_concurrency: 8, rate_interval_sec: 0.03}}
+  - {site: homary_es, brand: Homary, country: ES, url: "https://es.homary.com/", platform: nuxt, proxy_tier: residential, crawler_config: {proxy_lease_ttl_sec: 300, detail_concurrency: 8, failed_product_retry_concurrency: 8, rate_interval_sec: 0.03}}
+  - {site: homary_fr, brand: Homary, country: FR, url: "https://fr.homary.com/", platform: nuxt, proxy_tier: residential, crawler_config: {proxy_lease_ttl_sec: 300, detail_concurrency: 8, failed_product_retry_concurrency: 8, rate_interval_sec: 0.03}}
 
   # ========== Yaheetech（亚讯达, P1）— Shopify ==========
   - {site: yaheetech_us, brand: Yaheetech, country: US, url: "https://www.yaheetech.shop/", platform: shopify, proxy_tier: none}
@@ -86,7 +86,7 @@ sites:
   - {site: bcp_us, brand: BEST CHOICE PRODUCTS, country: US, url: "https://bestchoiceproducts.com/", platform: shopify, proxy_tier: none}
 
   # ========== VonHaus / VonShef（杜木 Domu, P2）— Magento ==========
-  - {site: vonhaus_uk, brand: VonHaus, country: UK, url: "https://www.vonhaus.com/", platform: magento, proxy_tier: none, product_match: "/vh_en/"}
+  - {site: vonhaus_uk, brand: VonHaus, country: UK, url: "https://www.vonhaus.com/", platform: vonhaus, proxy_tier: none, product_match: "/vh_en/"}
 
   # ========== Woltu（P2）— Shopware ==========
   - {site: woltu_de, brand: Woltu, country: DE, url: "https://www.woltu.eu/", platform: generic, proxy_tier: none, sitemap: "https://www.woltu.eu/sitemap.xml", product_match: "/p/"}

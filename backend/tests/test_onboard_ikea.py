@@ -93,6 +93,52 @@ _SHARD_XML = (
     + " " * 35000  # pad to pass internal size checks
 )
 
+_SEARCH_API_PRODUCT = {
+    "searchResultPage": {
+        "products": {
+            "main": {
+                "items": [
+                    {
+                        "product": {
+                            "name": "KALLAX",
+                            "typeName": "Shelf unit",
+                            "itemMeasureReferenceText": "30 3/8x57 7/8 \"",
+                            "mainImageUrl": (
+                                "https://www.ikea.com/us/en/images/products/"
+                                "kallax.jpg"
+                            ),
+                            "pipUrl": _PDP_URL,
+                            "filterClass": "shelving units",
+                            "allProductImage": [
+                                {
+                                    "url": (
+                                        "https://www.ikea.com/us/en/images/"
+                                        "products/kallax.jpg"
+                                    )
+                                }
+                            ],
+                            "id": _SKU,
+                            "itemNo": _SKU,
+                            "onlineSellable": True,
+                            "ratingValue": 4.7,
+                            "ratingCount": 12345,
+                            "salesPrice": {
+                                "currencyCode": "USD",
+                                "numeral": 69.99,
+                            },
+                            "businessStructure": {
+                                "productRangeAreaName": "Storage furniture",
+                                "homeFurnishingBusinessName": "Storage",
+                                "productAreaName": "Shelving units",
+                            },
+                        }
+                    }
+                ]
+            }
+        }
+    }
+}
+
 
 def _site() -> Site:
     s = Site()
@@ -133,6 +179,7 @@ def test_ikea_curl_path_counts_api(monkeypatch):
 
     crawler = IkeaCrawler(_site())
     crawler.limit = 1
+    crawler.use_search_api = False
 
     url_map = {
         "https://www.ikea.com/sitemaps/sitemap.xml": FetchResult(
@@ -197,6 +244,64 @@ def test_ikea_product_parse_not_degraded():
     assert row["brand"] == "IKEA"
     assert row["product_url"] == _PDP_URL
     assert "Storage" in (row["category_path"] or "")
+
+
+def test_ikea_search_api_path_avoids_pdp_when_product_found(monkeypatch):
+    from app.crawlers.ikea import IkeaCrawler
+
+    crawler = IkeaCrawler(_site())
+    crawler.limit = 1
+    search_url = crawler._search_api_url(_SKU)
+    calls: list[str] = []
+
+    url_map = {
+        "https://www.ikea.com/sitemaps/sitemap.xml": FetchResult(
+            ok=True, url="https://www.ikea.com/sitemaps/sitemap.xml",
+            status=200, text=_SITEMAP_INDEX_XML,
+            content=_SITEMAP_INDEX_XML.encode(),
+            final_url="https://www.ikea.com/sitemaps/sitemap.xml",
+            fetcher="curl_cffi",
+        ),
+        "https://www.ikea.com/sitemaps/prod-en-US_1.xml": FetchResult(
+            ok=True, url="https://www.ikea.com/sitemaps/prod-en-US_1.xml",
+            status=200, text=_SHARD_XML,
+            content=_SHARD_XML.encode(),
+            final_url="https://www.ikea.com/sitemaps/prod-en-US_1.xml",
+            fetcher="curl_cffi",
+        ),
+    }
+
+    class _FakeFetcher:
+        def get(self, url: str, **kw) -> FetchResult:
+            calls.append(url)
+            crawler.counter.api_calls += 1
+            if url in url_map:
+                return url_map[url]
+            return FetchResult(
+                ok=False, url=url, status=404,
+                text="", content=b"", final_url=url, fetcher="curl_cffi",
+            )
+
+    monkeypatch.setattr(crawler, "make_fetcher", lambda **kw: _FakeFetcher())
+    monkeypatch.setattr(crawler, "sleep", lambda: None)
+    monkeypatch.setattr(crawler, "snapshot", lambda name, content: None)
+    monkeypatch.setattr(crawler, "api_delay", 0)
+
+    def fake_search_api(_fetcher, entry, session=None):
+        calls.append(search_url)
+        product = _SEARCH_API_PRODUCT["searchResultPage"]["products"]["main"]["items"][0]["product"]
+        return crawler._row_from_search_product(product, entry["url"], entry.get("images") or [])
+
+    monkeypatch.setattr(crawler, "_fetch_via_search_api", fake_search_api)
+
+    result = crawler.crawl()
+
+    assert [p["sku"] for p in result.products] == [_SKU]
+    assert result.products[0]["sale_price"] == 69.99
+    assert result.products[0]["currency"] == "USD"
+    assert result.products[0]["product_url"] == _PDP_URL
+    assert search_url in calls
+    assert _PDP_URL not in calls
 
 
 # ---------------------------------------------------------------------------

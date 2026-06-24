@@ -39,6 +39,9 @@ def _product_job(site_name: str) -> None:
                 return
         from .runner import enqueue
         job_id = enqueue(site_name, trigger="scheduled")
+        if job_id is None:
+            logger.info("站点 %s 已暂停追踪,未创建定时采集任务", site_name)
+            return
         logger.info("已入队商品采集: %s (job %s)", site_name, job_id)
     except Exception as exc:
         logger.error("入队失败 %s: %s", site_name, exc)

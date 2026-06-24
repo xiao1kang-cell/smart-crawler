@@ -100,6 +100,7 @@ class GenericCrawler(BaseCrawler):
         self.product_match = hints.get("product_match", "")
         self.exclude_match = hints.get("exclude_match", "")
         self.limit = self._resolve_limit(DEFAULT_LIMIT, honor_persisted=False)
+        self._skipped_product_urls = 0
 
     def _session(self) -> creq.Session:
         s = creq.Session(impersonate="chrome")
@@ -236,6 +237,8 @@ class GenericCrawler(BaseCrawler):
         total = len(products)
         targets = products[: self.limit]
         result.total_product_count = total
+        self.persist_job_progress(products_count=0,
+                                  total_product_count=total)
         result.notes.append(
             f"通用发现 {total} 个候选商品 URL，本次抓取 {len(targets)} 条")
         if len(targets) < total:
@@ -254,6 +257,7 @@ class GenericCrawler(BaseCrawler):
             return result
 
         ok = 0
+        self._skipped_product_urls = 0
         for url in targets:
             elapsed = time.monotonic() - started
             if MAX_ELAPSED_SEC > 0 and elapsed >= MAX_ELAPSED_SEC:
@@ -277,9 +281,17 @@ class GenericCrawler(BaseCrawler):
                 if row:
                     result.products.append(row)
                     ok += 1
+                    if ok % 50 == 0:
+                        self.persist_job_progress(
+                            products_count=ok,
+                            total_product_count=self._effective_total(total),
+                        )
             except Exception as exc:
                 result.notes.append(f"跳过 {url[:60]}: {exc}")
             self.sleep()
+        result.total_product_count = self._effective_total(total)
+        self.persist_job_progress(products_count=ok,
+                                  total_product_count=result.total_product_count)
         result.notes.append(f"成功解析 {ok}/{len(targets)} 个商品页")
         return result
 
@@ -289,11 +301,14 @@ class GenericCrawler(BaseCrawler):
         started = time.monotonic()
         targets = self._dedupe([u for u in urls if u])
         result.total_product_count = len(targets)
+        self.persist_job_progress(products_count=0,
+                                  total_product_count=len(targets))
         if not targets:
             result.notes.append("没有可重试的失败商品 URL")
             return result
 
         ok = 0
+        self._skipped_product_urls = 0
         for url in targets:
             if MAX_ELAPSED_SEC > 0 and time.monotonic() - started >= MAX_ELAPSED_SEC:
                 result.coverage_complete = False
@@ -311,6 +326,11 @@ class GenericCrawler(BaseCrawler):
                 if row:
                     result.products.append(row)
                     ok += 1
+                    if ok % 50 == 0:
+                        self.persist_job_progress(
+                            products_count=ok,
+                            total_product_count=self._effective_total(len(targets)),
+                        )
             except Exception as exc:
                 self._record_parse_failure(
                     url,
@@ -318,8 +338,14 @@ class GenericCrawler(BaseCrawler):
                 )
                 result.notes.append(f"跳过 {url[:60]}: {exc}")
             self.sleep()
+        result.total_product_count = self._effective_total(len(targets))
+        self.persist_job_progress(products_count=ok,
+                                  total_product_count=result.total_product_count)
         result.notes.append(f"失败商品重试成功解析 {ok}/{len(targets)} 个商品页")
         return result
+
+    def _effective_total(self, discovered_total: int) -> int:
+        return max(0, int(discovered_total) - int(self._skipped_product_urls or 0))
 
     def _is_candidate_url(self, url: str) -> bool:
         if not url or url.endswith((".xml", ".xml.gz")):
@@ -350,6 +376,7 @@ class GenericCrawler(BaseCrawler):
                 status,
                 source=source,
             )
+            self._skipped_product_urls += 1
             return None
         if status is None or status >= 400:
             return None

@@ -26,6 +26,15 @@ class VonHausCrawler(BaseCrawler):
         super().__init__(site)
         self.base = site.url.rstrip("/")
         self.limit = self._resolve_limit(DEFAULT_LIMIT, honor_persisted=False)
+        config = site.crawler_config or {}
+        config = config if isinstance(config, dict) else {}
+        raw_delay = config.get("rate_interval_sec") or os.environ.get(
+            "VONHAUS_RATE_INTERVAL_SEC")
+        if raw_delay not in (None, ""):
+            try:
+                self.delay = max(0.0, min(float(raw_delay), 2.0))
+            except (TypeError, ValueError):
+                pass
 
     def _headers(self) -> dict:
         return {"User-Agent": self.ua()}
@@ -68,6 +77,7 @@ class VonHausCrawler(BaseCrawler):
         scanned = 0
         stopped_by_limit = False
         discovered_products = 0
+        self.persist_job_progress(products_count=0)
         for url in scan_urls:
             scanned += 1
             try:
@@ -79,11 +89,20 @@ class VonHausCrawler(BaseCrawler):
                     if len(result.products) < self.limit:
                         self.snapshot(url.rstrip("/").split("/")[-1], html)
                         result.products.append(row)
+                        if len(result.products) % 50 == 0:
+                            self.persist_job_progress(
+                                products_count=len(result.products),
+                                total_product_count=discovered_products,
+                            )
                     else:
                         stopped_by_limit = True
             except Exception:
                 pass
             self.sleep()
+        self.persist_job_progress(
+            products_count=len(result.products),
+            total_product_count=discovered_products,
+        )
 
         result.notes.append(
             f"扫描 {scanned} 页，发现商品 {discovered_products} 个，"

@@ -15,6 +15,7 @@ import gzip
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from selectolax.parser import HTMLParser
 
@@ -65,15 +66,18 @@ class HomaryCrawler(BaseCrawler):
     def crawl(self) -> CrawlResult:
         result = CrawlResult()
         started = time.monotonic()
-        fetcher = self.make_fetcher(
-            kind="product",
-            source="homary",
+        sitemap_fetcher = self.make_fetcher(
+            kind="sitemap",
+            source="homary_sitemap",
             fail_fast_blocked=True,
             retries=0,
         )
 
-        item_urls = [u for u in self._sitemap_urls(fetcher, "item") if "/item/" in u]
-        best_ids = {m.group(1) for u in self._sitemap_urls(fetcher, "best_sellers")
+        item_urls = [
+            u for u in self._sitemap_urls(sitemap_fetcher, "item")
+            if "/item/" in u and _ID_RE.search(u)
+        ]
+        best_ids = {m.group(1) for u in self._sitemap_urls(sitemap_fetcher, "best_sellers")
                     if (m := _ID_RE.search(u))}
         total = len(item_urls)
         targets = item_urls[: self.limit]
@@ -93,39 +97,96 @@ class HomaryCrawler(BaseCrawler):
             result.coverage_retryable = True
             result.coverage_suggested_action = "移除 HOMARY_LIMIT 后重跑。"
 
-        for url in targets:
-            if (max_elapsed_sec > 0
-                    and self._elapsed(started) >= max_elapsed_sec):
-                result.notes.append(
-                    f"达到 Homary 总耗时上限 {max_elapsed_sec}s，"
-                    f"提前停止，已解析 {len(result.products)}/{len(targets)}")
-                result.coverage_complete = False
-                result.coverage_code = "incomplete_detail_parse"
-                result.coverage_stage = "fetch"
-                result.coverage_reason = (
-                    f"达到 Homary 总耗时上限 {max_elapsed_sec}s，"
-                    f"本次只解析 {len(result.products)}/{len(targets)} 个商品"
-                )
-                result.coverage_retryable = True
-                result.coverage_suggested_action = (
-                    "放宽 HOMARY_MAX_ELAPSED_SEC 或拆分失败商品重抓。"
-                )
-                break
-            try:
-                row = self._parse_product(fetcher, url, best_ids)
-                if row:
-                    result.products.append(row)
+        concurrency = self._detail_concurrency()
+        failed = 0
+        if concurrency <= 1:
+            for url in targets:
+                if (max_elapsed_sec > 0
+                        and self._elapsed(started) >= max_elapsed_sec):
+                    result.notes.append(
+                        f"达到 Homary 总耗时上限 {max_elapsed_sec}s，"
+                        f"提前停止，已解析 {len(result.products)}/{len(targets)}")
+                    result.coverage_complete = False
+                    result.coverage_code = "incomplete_detail_parse"
+                    result.coverage_stage = "fetch"
+                    result.coverage_reason = (
+                        f"达到 Homary 总耗时上限 {max_elapsed_sec}s，"
+                        f"本次只解析 {len(result.products)}/{len(targets)} 个商品"
+                    )
+                    result.coverage_retryable = True
+                    result.coverage_suggested_action = (
+                        "放宽 HOMARY_MAX_ELAPSED_SEC 或拆分失败商品重抓。"
+                    )
+                    break
+                try:
+                    row = self._parse_product_with_new_fetcher(
+                        url,
+                        best_ids,
+                        "homary",
+                        0,
+                    )
+                    if row:
+                        result.products.append(row)
+                    else:
+                        failed += 1
+                        result.notes.append(f"未解析到商品: {url}")
+                except BlockedError:
+                    raise
+                except Exception as exc:            # 单页失败不影响整体
+                    failed += 1
+                    result.notes.append(f"跳过 {url}: {exc}")
+                if len(result.products) % 50 == 0:
+                    _persist_job_progress(
+                        self.job_id,
+                        products_count=len(result.products),
+                        total_product_count=total,
+                    )
+                self.sleep()
+        else:
+            with ThreadPoolExecutor(max_workers=concurrency) as pool:
+                futures = {
+                    pool.submit(
+                        self._parse_product_with_new_fetcher,
+                        url,
+                        best_ids,
+                        "homary",
+                        0,
+                    ): url
+                    for url in targets
+                }
+                for future in as_completed(futures):
+                    url = futures[future]
+                    try:
+                        row = future.result()
+                        if row:
+                            result.products.append(row)
+                        else:
+                            failed += 1
+                            result.notes.append(f"未解析到商品: {url}")
+                    except BlockedError:
+                        raise
+                    except Exception as exc:        # 单页失败不影响整体
+                        failed += 1
+                        result.notes.append(f"跳过 {url}: {exc}")
                     if len(result.products) % 50 == 0:
                         _persist_job_progress(
                             self.job_id,
                             products_count=len(result.products),
                             total_product_count=total,
                         )
-            except BlockedError:
-                raise
-            except Exception as exc:                # 单页失败不影响整体
-                result.notes.append(f"跳过 {url}: {exc}")
-            self.sleep()
+        if len(result.products) < len(targets):
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "fetch"
+            result.coverage_reason = (
+                f"Homary 本次计划抓取 {len(targets)} 个商品，"
+                f"实际解析 {len(result.products)} 个"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = "重试未解析/失败商品，或全量重跑该站点。"
+        result.notes.append(
+            f"Homary PDP 抓取并发 {concurrency}，成功 {len(result.products)}/"
+            f"{len(targets)}，失败 {failed}")
         _persist_job_progress(
             self.job_id,
             products_count=len(result.products),
@@ -141,32 +202,83 @@ class HomaryCrawler(BaseCrawler):
         if not targets:
             result.notes.append("没有可重抓的 Homary 商品 URL")
             return result
-        fetcher = self.make_fetcher(
-            kind="product",
-            source="homary_failed_product_retry",
+        sitemap_fetcher = self.make_fetcher(
+            kind="sitemap",
+            source="homary_sitemap",
             fail_fast_blocked=True,
             retries=1,
         )
-        best_ids = {m.group(1) for u in self._sitemap_urls(fetcher, "best_sellers")
+        best_ids = {m.group(1) for u in self._sitemap_urls(sitemap_fetcher, "best_sellers")
                     if (m := _ID_RE.search(u))}
         failed = 0
-        for url in targets:
-            try:
-                row = self._parse_product(fetcher, url, best_ids)
-                if row:
-                    result.products.append(row)
-                else:
+        concurrency = self._failed_product_retry_concurrency()
+        if concurrency <= 1:
+            for url in targets:
+                try:
+                    row = self._parse_product_with_new_fetcher(
+                        url,
+                        best_ids,
+                        "homary_failed_product_retry",
+                        1,
+                    )
+                    if row:
+                        result.products.append(row)
+                    else:
+                        failed += 1
+                        result.notes.append(f"未解析到商品: {url}")
+                except BlockedError:
+                    raise
+                except Exception as exc:
                     failed += 1
-                    result.notes.append(f"未解析到商品: {url}")
-            except BlockedError:
-                raise
-            except Exception as exc:
-                failed += 1
-                result.notes.append(f"重抓失败 {url}: {exc}")
-            self.sleep()
+                    result.notes.append(f"重抓失败 {url}: {exc}")
+                self.sleep()
+        else:
+            with ThreadPoolExecutor(max_workers=concurrency) as pool:
+                futures = {
+                    pool.submit(
+                        self._parse_product_with_new_fetcher,
+                        url,
+                        best_ids,
+                        "homary_failed_product_retry",
+                        1,
+                    ): url
+                    for url in targets
+                }
+                for future in as_completed(futures):
+                    url = futures[future]
+                    try:
+                        row = future.result()
+                        if row:
+                            result.products.append(row)
+                        else:
+                            failed += 1
+                            result.notes.append(f"未解析到商品: {url}")
+                    except BlockedError:
+                        raise
+                    except Exception as exc:
+                        failed += 1
+                        result.notes.append(f"重抓失败 {url}: {exc}")
         result.notes.append(
-            f"失败商品重抓 {len(result.products)}/{len(targets)}，失败 {failed}")
+            f"失败商品重抓 {len(result.products)}/{len(targets)}，"
+            f"并发 {concurrency}，失败 {failed}")
         return result
+
+    def _parse_product_with_new_fetcher(
+        self,
+        url: str,
+        best_ids: set,
+        source: str,
+        retries: int,
+    ) -> dict | None:
+        fetcher = self.make_fetcher(
+            kind="product",
+            source=source,
+            fail_fast_blocked=True,
+            retries=retries,
+            proxy_lease_ttl_sec=self._proxy_lease_ttl_sec(default=0),
+            rate_interval_sec=self._rate_interval_sec(),
+        )
+        return self._parse_product(fetcher, url, best_ids)
 
     def _parse_product(self, fetcher, url: str, best_ids: set) -> dict | None:
         m = _ID_RE.search(url)
@@ -303,6 +415,65 @@ class HomaryCrawler(BaseCrawler):
     @staticmethod
     def _elapsed(started: float) -> float:
         return time.monotonic() - started
+
+    def _detail_concurrency(self) -> int:
+        config = self.site.crawler_config or {}
+        config = config if isinstance(config, dict) else {}
+        if self._proxy_lease_ttl_sec(default=0) <= 0:
+            return 1
+        raw = (
+            config.get("detail_concurrency")
+            or config.get("homary_concurrency")
+            or os.environ.get("HOMARY_CONCURRENCY")
+        )
+        if raw in (None, ""):
+            return 8
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = 8
+        return max(1, min(value, 20))
+
+    def _failed_product_retry_concurrency(self) -> int:
+        config = self.site.crawler_config or {}
+        config = config if isinstance(config, dict) else {}
+        if self._proxy_lease_ttl_sec(default=0) <= 0:
+            return 1
+        raw = (
+            config.get("failed_product_retry_concurrency")
+            or config.get("detail_concurrency")
+            or os.environ.get("HOMARY_FAILED_PRODUCT_RETRY_CONCURRENCY")
+        )
+        if raw in (None, ""):
+            return 6
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = 6
+        return max(1, min(value, 12))
+
+    def _proxy_lease_ttl_sec(self, *, default: int = 300) -> int:
+        config = self.site.crawler_config or {}
+        config = config if isinstance(config, dict) else {}
+        raw = config.get("proxy_lease_ttl_sec") or os.environ.get("HOMARY_PROXY_LEASE_TTL_SEC")
+        if raw in (None, "") and default <= 0:
+            return 0
+        try:
+            return max(30, min(int(raw or default), 1800))
+        except (TypeError, ValueError):
+            return default
+
+    def _rate_interval_sec(self) -> float | None:
+        config = self.site.crawler_config or {}
+        config = config if isinstance(config, dict) else {}
+        raw = config.get("rate_interval_sec") or os.environ.get("HOMARY_RATE_INTERVAL_SEC")
+        if raw in (None, "") and self._proxy_lease_ttl_sec(default=0) <= 0:
+            return None
+        try:
+            value = float(raw if raw not in (None, "") else 0.15)
+        except (TypeError, ValueError):
+            value = 0.15
+        return max(0.03, min(value, 2.0))
 
 
 def _persist_job_progress(
