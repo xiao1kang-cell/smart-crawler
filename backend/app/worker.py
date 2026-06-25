@@ -6,6 +6,11 @@
 """
 from __future__ import annotations
 
+import os as _os
+if _os.environ.get("SC_ENV_FILE"):
+    from .envfile import load_env_file
+    load_env_file()
+
 import logging
 import os
 import signal
@@ -20,7 +25,7 @@ from .analytics import recompute
 from .crawl_diagnostics import classify_exception, job_timeout_failure, record_failure
 from .db import session_scope
 from .models import CrawlJob
-from .runner import claim_job, execute_job
+from .runner import assign_pending_jobs, claim_job, execute_job
 from . import memory_gate
 
 logging.basicConfig(level=logging.INFO,
@@ -35,7 +40,21 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_str_tuple(name: str) -> tuple[str, ...] | None:
+    values = tuple(x.strip() for x in os.environ.get(name, "").split(",")
+                   if x.strip())
+    return values or None
+
+
 WORKER_ID = os.environ.get("WORKER_ID") or f"{socket.gethostname()}-{os.getpid()}"
+NODE_ID = os.environ.get("NODE_ID") or "nas"
 POLL_INTERVAL = _env_int("WORKER_POLL", 10)
 DEFAULT_JOB_TIMEOUT = _env_int("WORKER_JOB_TIMEOUT", 43200)  # 12h 默认
 JOB_TIMEOUT_MIN = _env_int("WORKER_JOB_TIMEOUT_MIN", 300)
@@ -59,6 +78,11 @@ def _env_int_tuple(name: str) -> tuple[int, ...] | None:
 
 WORKSPACE_ALLOWLIST = _env_int_tuple("WORKSPACE_ALLOWLIST")
 WORKSPACE_BLOCKLIST = _env_int_tuple("WORKSPACE_BLOCKLIST")
+WORKER_ASSIGNED_ONLY = _env_bool("WORKER_ASSIGNED_ONLY")
+WORKER_DISTRIBUTOR_NODES = _env_str_tuple("WORKER_DISTRIBUTOR_NODES")
+WORKER_DISTRIBUTOR_ONLY = _env_bool("WORKER_DISTRIBUTOR_ONLY")
+WORKER_DISTRIBUTOR_BATCH = _env_int("WORKER_DISTRIBUTOR_BATCH", 100)
+WORKER_ASSIGNMENT_STALE_SECONDS = _env_int("WORKER_ASSIGNMENT_STALE_SECONDS", 300)
 # 内存自适应并发闸 —— 主机已用内存超阈值则暂停领新 job。设 0/100 关闸。
 MEM_THRESHOLD = float(os.environ.get("MEM_GATE_THRESHOLD", "80"))
 MEM_CHECK_INTERVAL = float(os.environ.get("MEM_GATE_CHECK_INTERVAL", "2"))
@@ -265,13 +289,33 @@ def run_loop(should_continue=None) -> None:
         pass
     trigger_scope = ",".join(TRIGGER_ALLOWLIST) if TRIGGER_ALLOWLIST else "all"
     logger.info(
-        "worker %s 启动，轮询间隔 %ds，默认运行预算 %ds，心跳卡死阈值 %ds，trigger=%s",
-        WORKER_ID, POLL_INTERVAL, DEFAULT_JOB_TIMEOUT,
-        STALE_HEARTBEAT_TIMEOUT, trigger_scope)
+        "worker %s 启动，node=%s，轮询间隔 %ds，默认运行预算 %ds，心跳卡死阈值 %ds，trigger=%s，assigned_only=%s，distributor_only=%s，distributor_nodes=%s",
+        WORKER_ID, NODE_ID, POLL_INTERVAL, DEFAULT_JOB_TIMEOUT,
+        STALE_HEARTBEAT_TIMEOUT, trigger_scope, WORKER_ASSIGNED_ONLY,
+        WORKER_DISTRIBUTOR_ONLY, ",".join(WORKER_DISTRIBUTOR_NODES or ()))
     while should_continue():
         reclaimed = _reclaim_stale_crawl_jobs(STALE_HEARTBEAT_TIMEOUT)
         if reclaimed:
             logger.warning("回收 %d 个超时 crawl job", reclaimed)
+        if WORKER_DISTRIBUTOR_NODES:
+            try:
+                assigned = assign_pending_jobs(
+                    WORKER_ID,
+                    WORKER_DISTRIBUTOR_NODES,
+                    batch_size=WORKER_DISTRIBUTOR_BATCH,
+                    stale_after_sec=WORKER_ASSIGNMENT_STALE_SECONDS,
+                    trigger_allowlist=TRIGGER_ALLOWLIST,
+                    workspace_allowlist=WORKSPACE_ALLOWLIST,
+                    workspace_blocklist=WORKSPACE_BLOCKLIST,
+                )
+                if assigned:
+                    logger.info("NAS 分发 %d 个 pending job 到节点: %s",
+                                assigned, ",".join(WORKER_DISTRIBUTOR_NODES))
+            except Exception as exc:
+                logger.error("NAS 分发任务失败: %s", exc)
+        if WORKER_DISTRIBUTOR_ONLY:
+            time.sleep(POLL_INTERVAL)
+            continue
         # 内存安全闸:已用内存超阈值则暂停领新 job(不起新浏览器),
         # 内存回落自动恢复。超时回循环重判,绝不在内存高位硬领。
         if not memory_gate.wait_until_ok(
@@ -288,7 +332,9 @@ def run_loop(should_continue=None) -> None:
         try:
             job_id = claim_job(WORKER_ID, TRIGGER_ALLOWLIST,
                                workspace_allowlist=WORKSPACE_ALLOWLIST,
-                               workspace_blocklist=WORKSPACE_BLOCKLIST)
+                               workspace_blocklist=WORKSPACE_BLOCKLIST,
+                               assigned_node=NODE_ID,
+                               assigned_only=WORKER_ASSIGNED_ONLY)
         except Exception as exc:
             logger.error("领取任务失败: %s", exc)
             time.sleep(POLL_INTERVAL)

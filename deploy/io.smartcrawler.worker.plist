@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>io.smartcrawler.worker-__N__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/solvea/smart-crawler/.venv/bin/python</string>
+    <string>-m</string><string>app.worker</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/solvea/smart-crawler/backend</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SC_ENV_FILE</key><string>__ENV_FILE__</string>
+    <key>DYLD_LIBRARY_PATH</key><string>/opt/homebrew/opt/expat/lib</string>
+  </dict>
+  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/Users/solvea/smart-crawler/logs/worker-__N__.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/solvea/smart-crawler/logs/worker-__N__.err.log</string>
+</dict>
+</plist>

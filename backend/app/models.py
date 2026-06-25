@@ -437,6 +437,9 @@ class CrawlJob(Base):
     trigger = Column(String, default="manual")       # manual / scheduled
     requested_by_workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)
     requested_by_user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    assigned_node = Column(String, index=True)       # NAS 预分配的执行节点
+    assigned_at = Column(DateTime)
+    assigned_by = Column(String)
     worker = Column(String)                          # 领取该任务的 worker 标识
     created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime)

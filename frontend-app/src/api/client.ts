@@ -11,9 +11,40 @@ export type ApiRequestInit = RequestInit & {
 let authRedirecting = false
 let lastToast = { message: '', at: 0 }
 
+function stripHtml(value: string) {
+  return value
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function looksLikeHtml(value: string) {
+  return /<!doctype\s+html|<html\b|<head\b|<body\b|<title\b/i.test(value)
+}
+
+function normalizeErrorMessage(message: unknown, fallback: string) {
+  const raw = typeof message === 'string' ? message : JSON.stringify(message)
+  if (!raw) return fallback
+  const lower = raw.toLowerCase()
+  if (lower.includes('error code 524') || lower.includes('a timeout occurred')) {
+    return '请求超时（Cloudflare 524），服务器处理报表查询太久'
+  }
+  if (looksLikeHtml(raw)) {
+    const text = stripHtml(raw)
+    if (text.includes('524')) return '请求超时（Cloudflare 524），服务器处理报表查询太久'
+    if (text.includes('502') || text.includes('Bad Gateway')) return '服务网关异常（502）'
+    if (text.includes('503') || text.includes('Service Unavailable')) return '服务暂时不可用（503）'
+    if (text.includes('504') || text.includes('Gateway Timeout')) return '服务响应超时（504）'
+    return text ? text.slice(0, 180) : fallback
+  }
+  return raw.length > 240 ? `${raw.slice(0, 240)}…` : raw
+}
+
 function errorMessageFrom(data: any, fallback: string) {
   const message = data?.detail || data?.error || data?.message || fallback
-  return typeof message === 'string' ? message : JSON.stringify(message)
+  return normalizeErrorMessage(message, fallback)
 }
 
 function notifyError(message: string, description?: string) {
@@ -63,7 +94,7 @@ export async function apiJson<T = any>(path: string, opts: ApiRequestInit = {}):
     try {
       data = JSON.parse(text)
     } catch {
-      data = { message: text }
+      data = { message: normalizeErrorMessage(text, `${res.status} ${res.statusText}`) }
     }
   }
   if (!res.ok) {

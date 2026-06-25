@@ -48,7 +48,12 @@ def site_metric_to_dict(row: SiteMetric) -> dict:
     return data
 
 
-def load_site_metrics(db: Session, sites: list[str]) -> dict[str, dict]:
+def load_site_metrics(
+    db: Session,
+    sites: list[str],
+    *,
+    collect_missing: bool = False,
+) -> dict[str, dict]:
     site_codes = sorted({site for site in sites if site})
     if not site_codes:
         return {}
@@ -57,7 +62,7 @@ def load_site_metrics(db: Session, sites: list[str]) -> dict[str, dict]:
             .all())
     out = {row.site: site_metric_to_dict(row) for row in rows}
     missing = [site for site in site_codes if site not in out]
-    if missing:
+    if missing and collect_missing:
         out.update(collect_site_metrics(db, missing))
     for site in site_codes:
         out.setdefault(site, empty_site_metric(site))

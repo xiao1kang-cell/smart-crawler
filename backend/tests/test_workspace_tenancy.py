@@ -13,7 +13,7 @@ from app.auth import hash_password, hash_secret, make_token
 from app.db import Base
 from app.models import (ApiKey, CrawlFailure, CrawlJob, CrawlUrl, InviteCode, OnDemandJob,
                         PriceHistory, Product, Promotion, Review, Site,
-                        SpineJob, User, Workspace, WorkspaceMember,
+                        SiteMetric, SpineJob, User, Workspace, WorkspaceMember,
                         WorkspaceSite, Trend)
 
 
@@ -219,6 +219,59 @@ def test_jobs_list_reports_total_and_summary_beyond_current_limit():
     assert second_page["page"] == 2
     assert second_page["page_size"] == 2
     assert [item["products_count"] for item in second_page["items"]] == [3, 2]
+
+
+def test_jobs_list_collapses_same_site_same_day_by_default():
+    from app.api.routes import list_jobs
+
+    db = _threadsafe_session()
+    ws_a, _ws_b, _alice, _bob, _admin = _seed_two_workspaces(db)
+    base = datetime(2026, 6, 25, 8, 0)
+    previous_day = CrawlJob(site="site_a", status="success",
+                            products_count=7,
+                            requested_by_workspace_id=ws_a.id,
+                            created_at=base - timedelta(days=1),
+                            finished_at=base - timedelta(days=1) + timedelta(hours=1))
+    old_same_day = CrawlJob(site="site_a", status="success",
+                            products_count=10,
+                            requested_by_workspace_id=ws_a.id,
+                            created_at=base,
+                            finished_at=base + timedelta(minutes=30))
+    latest_same_day = CrawlJob(site="site_a", status="failed",
+                               products_count=12,
+                               requested_by_workspace_id=ws_a.id,
+                               created_at=base + timedelta(hours=1),
+                               finished_at=base + timedelta(hours=1, minutes=10))
+    active_same_day = CrawlJob(site="site_a", status="running",
+                               products_count=3,
+                               requested_by_workspace_id=ws_a.id,
+                               created_at=base + timedelta(hours=2),
+                               started_at=base + timedelta(hours=2))
+    db.add_all([previous_day, old_same_day, latest_same_day, active_same_day])
+    db.commit()
+
+    payload = list_jobs(limit=20, user="alice", x_workspace_id=str(ws_a.id),
+                        db=db)
+
+    displayed_ids = {item["id"] for item in payload["items"]}
+    assert payload["total"] == 2
+    assert displayed_ids == {previous_day.id, active_same_day.id}
+    assert payload["summary"]["success"] == 1
+    assert payload["summary"]["running"] == 1
+    assert payload["summary"]["active"] == 1
+
+    exact_payload = list_jobs(
+        limit=20,
+        ids=f"{old_same_day.id},{latest_same_day.id}",
+        user="alice",
+        x_workspace_id=str(ws_a.id),
+        db=db,
+    )
+    assert exact_payload["total"] == 2
+    assert {item["id"] for item in exact_payload["items"]} == {
+        old_same_day.id,
+        latest_same_day.id,
+    }
 
 
 def test_jobs_list_skips_live_progress_by_default():
@@ -852,6 +905,48 @@ def test_coverage_actual_product_count_can_use_discovered_urls_without_details()
     assert row["actual_product_count"] == 2
     assert row["actual_product_count_source"] == "discovered_url"
     assert row["product_detail_count"] == 0
+
+
+def test_coverage_does_not_treat_sitemap_only_rows_as_report_details():
+    from app.api.routes import data_coverage
+
+    db = _session()
+    ws_a, _ws_b, _alice, _bob, admin = _seed_two_workspaces(db)
+    _site(db, "overstock_us", "Overstock")
+    _workspace_site(db, ws_a, "overstock_us")
+    db.add(SiteMetric(
+        site="overstock_us",
+        sku_count=1_000_417,
+        product_listing_count=1_000_417,
+        fetched_count=0,
+        discovered_product_url_count=41,
+        price_signal_count=0,
+        review_signal_count=0,
+        sales_signal_count=0,
+        revenue_signal_count=0,
+    ))
+    db.add(CrawlJob(
+        site="overstock_us",
+        status="success",
+        trigger="scheduled",
+        products_count=1000,
+        total_product_count=1000,
+    ))
+    db.commit()
+
+    coverage = data_coverage(user=admin.username,
+                             x_workspace_id=str(ws_a.id), db=db)
+    row = next(item for item in coverage["sites"]
+               if item["site"] == "overstock_us")
+
+    assert row["actual_product_count"] == 1000
+    assert row["actual_product_count_source"] == "latest_success_job"
+    assert row["metadata_product_count"] == 1_000_417
+    assert row["product_listing_count"] == 1_000_417
+    assert row["product_detail_count"] == 0
+    assert row["report_product_count"] == 0
+    assert row["current_raw"] == 0
+    assert row["status"] == "empty"
 
 
 def test_coverage_has_no_implicit_static_target():
@@ -1736,7 +1831,8 @@ def test_workspace_jobs_list_marks_retryable_and_retry_enqueues_visible_site():
     db.add_all([failed, active, other])
     db.commit()
 
-    out = list_jobs(limit=20, user=alice.username,
+    out = list_jobs(limit=20, ids=f"{failed.id},{active.id},{other.id}",
+                    user=alice.username,
                     x_workspace_id=str(ws_a.id), db=db)
     by_id = {row["id"]: row for row in out["items"]}
     assert by_id[failed.id]["retryable"] is True
@@ -1766,7 +1862,8 @@ def test_workspace_jobs_list_marks_retryable_and_retry_enqueues_visible_site():
                         x_workspace_id=str(ws_a.id), db=db)
     assert exc.value.status_code == 409
 
-    bob_out = list_jobs(limit=20, user=bob.username,
+    bob_out = list_jobs(limit=20, ids=f"{failed.id},{active.id},{other.id}",
+                        user=bob.username,
                         x_workspace_id=str(ws_b.id), db=db)
     assert [row["id"] for row in bob_out["items"]] == [other.id]
 

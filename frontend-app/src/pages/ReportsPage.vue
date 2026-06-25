@@ -15,11 +15,11 @@ const sortedRows = computed(() => rows.value.slice().sort((a, b) => actualProduc
 const jobTrigger = useJobTrigger({ onDone: () => load() })
 
 function actualProductCount(row: Record<string, any>) {
-  return Number(row.product_listing_count ?? row.actual_product_count ?? row.sku_count ?? row.products ?? row.count ?? 0)
+  return Number(row.actual_product_count ?? row.report_product_count ?? row.product_listing_count ?? row.sku_count ?? row.products ?? row.count ?? 0)
 }
 
 function detailCount(row: Record<string, any>) {
-  return Number(row.product_detail_count ?? row.sku_count ?? row.products ?? 0)
+  return Number(row.report_product_count ?? row.product_detail_count ?? row.sku_count ?? row.products ?? 0)
 }
 
 function productCountSource(row: Record<string, any>) {

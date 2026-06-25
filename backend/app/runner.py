@@ -12,9 +12,9 @@ import re
 import traceback
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import and_, case, exists, or_, text, update
+from sqlalchemy import and_, case, exists, false, or_, text, update
 
 from .antiban import BlockedError, in_cooldown, set_cooldown
 from .billing import record_usage
@@ -30,7 +30,7 @@ from .crawl_diagnostics import (
     zero_products_failure,
 )
 from .crawlers.registry import get_crawler
-from .db import session_scope
+from .db import IS_SQLITE, session_scope
 from .models import Category, CrawlJob, CrawlUrl, Product, Promotion, Site
 from .pipeline import parse_dt, to_price
 from .price_sources import enrich_products_from_site_config
@@ -253,10 +253,168 @@ def _skip_job(s, job: CrawlJob, info: FailureInfo) -> None:
     record_failure(s, site=job.site, job_id=job.id, info=info)
 
 
+def _workspace_belongs_predicate(s, ws_ids):
+    """Return a NULL-safe job → workspace ownership predicate."""
+    from .models import WorkspaceSite  # noqa: PLC0415  避免循环 import
+
+    site_subq = (s.query(WorkspaceSite.site)
+                 .filter(WorkspaceSite.workspace_id.in_(ws_ids)))
+    return or_(
+        and_(CrawlJob.requested_by_workspace_id.isnot(None),
+             CrawlJob.requested_by_workspace_id.in_(ws_ids)),
+        and_(CrawlJob.requested_by_workspace_id.is_(None),
+             CrawlJob.site.in_(site_subq)),
+    )
+
+
+def _apply_claim_filters(query, s, trigger_allowlist=None,
+                         workspace_allowlist=None,
+                         workspace_blocklist=None,
+                         assigned_node: str | None = None,
+                         assigned_only: bool = False):
+    running_alias = CrawlJob.__table__.alias("running_jobs")
+    query = query.filter(~exists().where(
+        running_alias.c.status == "running"
+    ).where(running_alias.c.site == CrawlJob.site))
+    if assigned_only:
+        if not assigned_node:
+            return query.filter(false())
+        query = query.filter(CrawlJob.assigned_node == assigned_node)
+    elif assigned_node:
+        query = query.filter(or_(CrawlJob.assigned_node.is_(None),
+                                 CrawlJob.assigned_node == assigned_node))
+    if trigger_allowlist:
+        query = query.filter(CrawlJob.trigger.in_(trigger_allowlist))
+    if workspace_allowlist:
+        query = query.filter(_workspace_belongs_predicate(s, workspace_allowlist))
+    if workspace_blocklist:
+        query = query.filter(~_workspace_belongs_predicate(s, workspace_blocklist))
+    return query
+
+
+def _parse_distribution_nodes(nodes: tuple[str, ...]) -> tuple[
+    tuple[str, ...], dict[str, int], dict[str, int]
+]:
+    weights: dict[str, int] = {}
+    caps: dict[str, int] = {}
+    for raw_node in nodes:
+        item = raw_node.strip()
+        if not item:
+            continue
+        parts = item.split(":")
+        node = parts[0].strip()
+        if not node:
+            continue
+        weight = 1
+        if len(parts) >= 2 and parts[1].strip():
+            try:
+                weight = max(1, int(parts[1]))
+            except ValueError:
+                weight = 1
+        weights[node] = weights.get(node, 0) + weight
+        if len(parts) >= 3 and parts[2].strip():
+            try:
+                caps[node] = max(1, int(parts[2]))
+            except ValueError:
+                pass
+    return tuple(weights), weights, caps
+
+
+def assign_pending_jobs(distributor_id: str,
+                        nodes: tuple[str, ...],
+                        batch_size: int = 100,
+                        stale_after_sec: int = 300,
+                        trigger_allowlist: tuple[str, ...] | None = None,
+                        workspace_allowlist: tuple[int, ...] | None = None,
+                        workspace_blocklist: tuple[int, ...] | None = None) -> int:
+    """NAS 将未分配的 pending job 预分配到节点，返回本轮分配数。"""
+    clean_nodes, node_weights, node_caps = _parse_distribution_nodes(nodes)
+    if not clean_nodes or batch_size <= 0:
+        return 0
+
+    with session_scope() as s:
+        if not IS_SQLITE:
+            locked = s.execute(
+                text("SELECT pg_try_advisory_xact_lock(:key)"),
+                {"key": 740731552},
+            ).scalar()
+            if not locked:
+                return 0
+
+        now = datetime.utcnow()
+        if stale_after_sec > 0:
+            cutoff = now - timedelta(seconds=stale_after_sec)
+            s.execute(
+                update(CrawlJob)
+                .where(CrawlJob.status == "pending",
+                       CrawlJob.assigned_node.isnot(None),
+                       or_(CrawlJob.assigned_at.is_(None),
+                           CrawlJob.assigned_at < cutoff))
+                .values(assigned_node=None, assigned_at=None, assigned_by=None)
+            )
+
+        priority = case(
+            (CrawlJob.trigger.in_(HIGH_PRIORITY_TRIGGERS), 0),
+            (CrawlJob.trigger == "tracking_add", 1),
+            else_=2,
+        )
+        high_priority_touched_at = case(
+            (CrawlJob.trigger.in_(HIGH_PRIORITY_TRIGGERS), CrawlJob.created_at),
+            else_=datetime(1970, 1, 1),
+        )
+        query = s.query(CrawlJob).filter(CrawlJob.status == "pending",
+                                         CrawlJob.assigned_node.is_(None))
+        query = _apply_claim_filters(
+            query, s,
+            trigger_allowlist=trigger_allowlist,
+            workspace_allowlist=workspace_allowlist,
+            workspace_blocklist=workspace_blocklist,
+        )
+        candidates = (
+            query.order_by(priority, high_priority_touched_at.desc(), CrawlJob.id)
+            .limit(batch_size)
+            .all()
+        )
+        if not candidates:
+            return 0
+
+        assigned_counts = {
+            node: s.query(CrawlJob)
+            .filter(CrawlJob.status.in_(("pending", "running")),
+                    CrawlJob.assigned_node == node)
+            .count()
+            for node in clean_nodes
+        }
+        assigned = 0
+        for job in candidates:
+            eligible_nodes = tuple(
+                node for node in clean_nodes
+                if node_caps.get(node) is None or assigned_counts[node] < node_caps[node]
+            )
+            if not eligible_nodes:
+                break
+            node = min(
+                eligible_nodes,
+                key=lambda item: (
+                    assigned_counts[item] / node_weights[item],
+                    assigned_counts[item],
+                    clean_nodes.index(item),
+                ),
+            )
+            job.assigned_node = node
+            job.assigned_at = now
+            job.assigned_by = distributor_id
+            assigned_counts[node] += 1
+            assigned += 1
+        return assigned
+
+
 def claim_job(worker_id: str,
               trigger_allowlist: tuple[str, ...] | None = None,
               workspace_allowlist: tuple[int, ...] | None = None,
-              workspace_blocklist: tuple[int, ...] | None = None) -> int | None:
+              workspace_blocklist: tuple[int, ...] | None = None,
+              assigned_node: str | None = None,
+              assigned_only: bool = False) -> int | None:
     """worker 原子领取最旧的 pending 任务，返回 job_id 或 None。
 
     workspace_allowlist: 只领这些 workspace_id 的 job（mini 专用）。
@@ -264,25 +422,8 @@ def claim_job(worker_id: str,
     scheduled / daily_refresh 等系统触发的 job requested_by_workspace_id 为 NULL，
     此时靠 workspace_sites 表映射 site → workspace 判定归属。
     """
-    from .models import WorkspaceSite  # noqa: PLC0415  避免循环 import
-
     with session_scope() as s:
         skipped = 0
-
-        def _belongs_to(ws_ids):
-            """job 归属于给定 workspace 集合的谓词（NULL-safe，不产生 NULL 传播）。
-            字段非 NULL → 只看第一分支（isnot(None)=TRUE，in_ 返回 T/F）；
-            字段为 NULL → 第一分支 isnot(None)=FALSE，只看第二分支。
-            孤儿 job（NULL + site 无映射）→ 两分支皆 FALSE → belongs=FALSE → ~=TRUE。
-            """
-            site_subq = (s.query(WorkspaceSite.site)
-                         .filter(WorkspaceSite.workspace_id.in_(ws_ids)))
-            return or_(
-                and_(CrawlJob.requested_by_workspace_id.isnot(None),
-                     CrawlJob.requested_by_workspace_id.in_(ws_ids)),
-                and_(CrawlJob.requested_by_workspace_id.is_(None),
-                     CrawlJob.site.in_(site_subq)),
-            )
 
         while True:
             priority = case(
@@ -291,16 +432,14 @@ def claim_job(worker_id: str,
                 else_=2,
             )
             query = s.query(CrawlJob).filter(CrawlJob.status == "pending")
-            running_alias = CrawlJob.__table__.alias("running_jobs")
-            query = query.filter(~exists().where(
-                running_alias.c.status == "running"
-            ).where(running_alias.c.site == CrawlJob.site))
-            if trigger_allowlist:
-                query = query.filter(CrawlJob.trigger.in_(trigger_allowlist))
-            if workspace_allowlist:
-                query = query.filter(_belongs_to(workspace_allowlist))
-            if workspace_blocklist:
-                query = query.filter(~_belongs_to(workspace_blocklist))
+            query = _apply_claim_filters(
+                query, s,
+                trigger_allowlist=trigger_allowlist,
+                workspace_allowlist=workspace_allowlist,
+                workspace_blocklist=workspace_blocklist,
+                assigned_node=assigned_node,
+                assigned_only=assigned_only,
+            )
             high_priority_touched_at = case(
                 (CrawlJob.trigger.in_(HIGH_PRIORITY_TRIGGERS), CrawlJob.created_at),
                 else_=datetime(1970, 1, 1),

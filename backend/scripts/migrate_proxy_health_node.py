@@ -23,10 +23,30 @@ def main() -> None:
         conn.execute(text(
             "UPDATE proxy_health SET node='nas' WHERE node IS NULL"
         ))
-        # 3. 删旧唯一约束（若存在）
-        conn.execute(text(
-            "ALTER TABLE proxy_health DROP CONSTRAINT IF EXISTS uq_proxy_health_hash"
-        ))
+        # 3. 删旧的单列 proxy_hash 唯一约束（生产库可能是 SQLAlchemy/PG 自动命名）
+        conn.execute(text("""
+            DO $$
+            DECLARE
+                r record;
+            BEGIN
+                FOR r IN
+                    SELECT c.conname
+                    FROM pg_constraint c
+                    WHERE c.conrelid = 'proxy_health'::regclass
+                      AND c.contype = 'u'
+                      AND c.conname <> 'uq_proxy_health_hash_node'
+                      AND (
+                          SELECT array_agg(a.attname::text ORDER BY u.ord)
+                          FROM unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord)
+                          JOIN pg_attribute a
+                            ON a.attrelid = c.conrelid
+                           AND a.attnum = u.attnum
+                      ) = ARRAY['proxy_hash']
+                LOOP
+                    EXECUTE format('ALTER TABLE proxy_health DROP CONSTRAINT %I', r.conname);
+                END LOOP;
+            END $$;
+        """))
         # 4. 建新组合唯一约束（若不存在）
         conn.execute(text("""
             DO $$

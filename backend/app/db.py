@@ -178,6 +178,9 @@ def _migrate_with_connection(conn) -> None:
             "ON price_history (site, sku, date) "
             "WHERE review_count IS NOT NULL"))
     if not IS_SQLITE and insp.has_table("crawl_jobs"):
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_crawl_jobs_assigned_node_status "
+            "ON crawl_jobs (assigned_node, status, id)"))
         conn.execute(text("""
             CREATE OR REPLACE FUNCTION guard_legacy_30min_crawl_cancel()
             RETURNS trigger AS $$

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import String, and_, cast, exists, func, or_, text
+from sqlalchemy import String, and_, case, cast, exists, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from ..access import DEFAULT_API_KEY_SCOPES, api_key_scopes, normalize_scopes
@@ -23,7 +23,7 @@ from ..auth import (TOKEN_TTL, generate_session_id, hash_secret, hash_password,
 from ..currency import (currency_for_site as _currency_for_site,
                         normalize_currency_for_site as _display_currency)
 from ..crawl_diagnostics import hash_url
-from ..db import get_db
+from ..db import IS_SQLITE, get_db
 from ..export import export_workbook
 from ..models import (ApiKey, Category, CrawlFailure, CrawlJob, CrawlUrl,
                       Keyword, PriceHistory, ProxyHealth,
@@ -40,7 +40,8 @@ except ImportError:
 try:
     from ..site_metrics import load_site_metrics
 except Exception:
-    def load_site_metrics(db: Session, sites: list[str]) -> dict[str, dict]:
+    def load_site_metrics(db: Session, sites: list[str], *,
+                          collect_missing: bool = False) -> dict[str, dict]:
         return {}
 
 
@@ -61,6 +62,7 @@ CRAWL_JOB_STUCK_SEC = _env_int("CRAWL_JOB_STUCK_SEC", 3600)
 CRAWL_JOB_PENDING_STALE_SEC = 7200
 CRAWL_JOB_RETRY_STATUSES = {"failed", "blocked", "partial", "skipped"}
 _CRAWL_URL_PROCESSED_STATUSES = ("parsed", "fetched", "failed", "blocked")
+_CRAWL_JOB_ACTIVE_DISPLAY_STATUSES = ("running", "pending", "queued")
 
 
 def _is_crawl_job_retryable(job: CrawlJob, *, now: datetime | None = None) -> bool:
@@ -125,6 +127,32 @@ def _crawl_job_live_progress(
         total_source = total_source or "crawl_stats_total"
 
     return fetched_count, (total_count if total_count > 0 else None), total_source
+
+
+def _daily_crawl_job_display_query(q):
+    """Collapse the task board to one visible job per site per created day."""
+    job_day = func.date(
+        func.coalesce(CrawlJob.created_at, CrawlJob.started_at, CrawlJob.finished_at)
+    )
+    active_rank = case(
+        (CrawlJob.status.in_(_CRAWL_JOB_ACTIVE_DISPLAY_STATUSES), 0),
+        else_=1,
+    )
+    ranked = (
+        q.with_entities(
+            CrawlJob.id.label("id"),
+            func.row_number()
+            .over(
+                partition_by=(CrawlJob.site, job_day),
+                order_by=(active_rank, CrawlJob.id.desc()),
+            )
+            .label("daily_rank"),
+        )
+        .subquery()
+    )
+    return q.filter(
+        CrawlJob.id.in_(select(ranked.c.id).where(ranked.c.daily_rank == 1))
+    )
 
 
 # ---------- 鉴权依赖：接受 Bearer Token 或 X-API-Key ----------
@@ -919,12 +947,18 @@ def _variant_counts_for_products(db: Session, products: list[Product]) -> dict[i
     keys = {(p.site, p.spu or p.sku) for p in products if p.site and (p.spu or p.sku)}
     if not keys:
         return {}
-    sites = sorted({site for site, _key in keys})
     variant_key = func.coalesce(Product.spu, Product.sku)
+    key_filters = [
+        and_(
+            Product.site == site,
+            or_(Product.spu == key, and_(Product.spu.is_(None), Product.sku == key)),
+        )
+        for site, key in keys
+    ]
     rows = (
         db.query(Product.site, variant_key.label("variant_key"),
                  func.count(Product.id))
-        .filter(Product.site.in_(sites))
+        .filter(or_(*key_filters))
         .group_by(Product.site, variant_key)
         .all()
     )
@@ -1131,7 +1165,7 @@ def list_sites(
     if cached is not None:
         return cached
     hidden = _load_hidden_sites() if not include_hidden else set()
-    metrics = load_site_metrics(db, allowed_sites)
+    metrics = load_site_metrics(db, allowed_sites, collect_missing=IS_SQLITE)
     cat_counts = dict(db.query(Category.site, func.count(Category.id))
                         .group_by(Category.site).all())
     out = []
@@ -1156,45 +1190,61 @@ def site_overview(site: str, user: str = Depends(require_user),
                   date_from: str | None = None,
                   date_to: str | None = None,
                   db: Session = Depends(get_db)):
-    """6 个指标卡 + 趋势序列。"""
+    """6 个指标卡 + 趋势序列。
+
+    线上 products 已是百万级表，报表首屏不能在请求路径上实时聚合
+    count/distinct/sum。站点级指标由 worker/维护脚本刷新到 site_metrics，
+    这里只读小表和趋势表，保证打开报表是稳定的毫秒级查询。
+    """
     ws = _current_workspace(user, db, x_workspace_id)
     _require_site_in_workspace(site, _workspace_site_names(db, ws.id))
+    cache_key = f"site-overview:{ws.id}:{site}:{granularity}:{date_from or ''}:{date_to or ''}"
+    cached = _coverage_cache_get(cache_key)
+    if cached is not None:
+        return cached
     site_row = db.query(Site).filter(Site.site == site).first()
     if not site_row:
         raise HTTPException(404, "站点不存在")
     currency = _currency_for_site(site)
-    sku_count = db.query(Product).filter(Product.site == site).count()
-    product_count = (
-        db.query(func.count(func.distinct(func.coalesce(Product.spu, Product.sku))))
-        .filter(Product.site == site)
-        .scalar() or 0
-    )
-    _new_cutoff = datetime.utcnow() - timedelta(days=NEW_PRODUCT_DAYS)
-    new_count = db.query(Product).filter(
-        Product.site == site,
-        or_(Product.created_time >= _new_cutoff,
-            Product.published_at >= _new_cutoff),
-    ).count()
-    latest_product_count = db.query(Product).filter(
-        Product.site == site,
-        or_(Product.created_time.isnot(None),
-            Product.published_at.isnot(None),
-            Product.updated_time.isnot(None)),
-    ).count()
-    bestseller_count = db.query(Product).filter(
-        Product.site == site, Product.is_bestseller.is_(True)).count()
-    category_count = (db.query(func.count(func.distinct(Product.category_path)))
-                      .filter(Product.site == site,
-                              Product.category_path.isnot(None)).scalar() or 0)
-    sales, revenue = db.query(
-        func.coalesce(func.sum(Product.thirty_day_sales), 0),
-        func.coalesce(func.sum(Product.thirty_day_revenue), 0.0),
-    ).filter(Product.site == site).first()
-    last_product_updated = (db.query(func.max(Product.updated_time))
-                            .filter(Product.site == site).scalar())
+    metric = load_site_metrics(db, [site], collect_missing=IS_SQLITE).get(site, {})
+    sku_count = int(metric.get("sku_count") or 0)
+    product_count = int(metric.get("product_listing_count") or sku_count or 0)
+    latest_product_count = sku_count
+    new_count = 0
+    bestseller_count = 0
+    avg_rating = None
+    review_total = int(metric.get("review_signal_count") or 0)
+    category_count = (db.query(func.coalesce(func.count(Category.id), 0))
+                      .filter(Category.site == site).scalar() or 0)
+    if IS_SQLITE:
+        _new_cutoff = datetime.utcnow() - timedelta(days=NEW_PRODUCT_DAYS)
+        new_count = db.query(Product).filter(
+            Product.site == site,
+            or_(Product.created_time >= _new_cutoff,
+                Product.published_at >= _new_cutoff),
+        ).count()
+        latest_product_count = db.query(Product).filter(
+            Product.site == site,
+            or_(Product.created_time.isnot(None),
+                Product.published_at.isnot(None),
+                Product.updated_time.isnot(None)),
+        ).count()
+        bestseller_count = db.query(Product).filter(
+            Product.site == site, Product.is_bestseller.is_(True)).count()
+        category_count = (db.query(func.count(func.distinct(Product.category_path)))
+                          .filter(Product.site == site,
+                                  Product.category_path.isnot(None)).scalar() or 0)
+        avg_rating, review_total = db.query(
+            func.avg(Product.ratings),
+            func.coalesce(func.sum(Product.review_count), 0),
+        ).filter(Product.site == site).first()
+    sales = int(metric.get("thirty_day_sales") or 0)
+    revenue = float(metric.get("thirty_day_revenue") or 0.0)
+    last_product_updated = metric.get("last_product_updated")
     updated_candidates = [
         site_row.last_crawled,
         last_product_updated,
+        metric.get("refreshed_at"),
         site_row.updated_at,
         site_row.created_at,
     ]
@@ -1230,10 +1280,6 @@ def site_overview(site: str, user: str = Depends(require_user),
         if (not parsed_from or snapshot_date >= parsed_from.date()) and (
             not parsed_to or snapshot_date <= parsed_to.date()
         ):
-            avg_rating, review_total = db.query(
-                func.avg(Product.ratings),
-                func.coalesce(func.sum(Product.review_count), 0),
-            ).filter(Product.site == site).first()
             trends = [{
                 "date": _trend_bucket_key(snapshot_date, granularity),
                 "source_date": snapshot_date.isoformat(),
@@ -1261,14 +1307,14 @@ def site_overview(site: str, user: str = Depends(require_user),
         "traffic": None,
         "conversion_rate": None,
         "avg_rating": None,
-        "review_total": None,
+        "review_total": int(review_total or 0),
     }
     previous_period = trends[-2] if len(trends) > 1 else None
-    return {
+    result = {
         "cards": {
             "sku_count": sku_count, "product_count": int(product_count),
             "spu_count": int(product_count),
-            "new_product_count": new_count,
+            "new_product_count": int(current_period.get("new_product_count") or 0),
             "latest_product_count": latest_product_count,
             "bestseller_count": bestseller_count,
             "category_count": int(category_count),
@@ -1289,6 +1335,8 @@ def site_overview(site: str, user: str = Depends(require_user),
             "snapshot_fallback": used_snapshot_fallback,
         },
     }
+    _coverage_cache_set(cache_key, result)
+    return result
 
 
 # ---------- 商品分析（R-010 / §14.3 / API-002）----------
@@ -1334,7 +1382,23 @@ def list_products(
         has_video=has_video, free_shipping=free_shipping,
         created_from=created_from, created_to=created_to,
     )
-    total = q.count()
+    can_use_metric_total = (
+        site and tab == "all" and not any([
+            search, status, min_price is not None, max_price is not None,
+            category, min_rating is not None, max_rating is not None,
+            min_reviews is not None, max_reviews is not None,
+            min_sales is not None, max_sales is not None,
+            min_revenue is not None, max_revenue is not None,
+            min_variants is not None, max_variants is not None,
+            has_video is not None, free_shipping is not None,
+            created_from, created_to,
+        ])
+    )
+    if can_use_metric_total:
+        metric = load_site_metrics(db, [site], collect_missing=IS_SQLITE).get(site, {})
+        total = int(metric.get("sku_count") or 0)
+    else:
+        total = q.count()
     rows = (q.order_by(*_product_order_cols(tab))
             .offset((page - 1) * page_size).limit(page_size).all())
     variant_counts = _variant_counts_for_products(db, rows)
@@ -2031,14 +2095,22 @@ def update_report_config(config_id: int, payload: dict,
 @router.get("/jobs")
 def list_jobs(limit: int = 30, page: int = 1, status: str | None = None,
               ids: str | None = None, include_live_progress: bool = False,
+              all_workspaces: bool = False,
               user: str = Depends(require_user),
               x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
               db: Session = Depends(get_db)):
     ws = _current_workspace(user, db, x_workspace_id)
-    allowed_sites = _workspace_site_names(db, ws.id)
-    q = (db.query(CrawlJob)
-         .filter(or_(CrawlJob.requested_by_workspace_id == ws.id,
-                     CrawlJob.site.in_(allowed_sites))))
+    actor = _current_user(user, db)
+    if actor is None and user == "admin":
+        actor = User(username="admin", role="admin", global_role="super_admin")
+    global_view = bool(all_workspaces and _is_super_admin(actor))
+    if global_view:
+        q = db.query(CrawlJob)
+    else:
+        allowed_sites = _workspace_site_names(db, ws.id)
+        q = (db.query(CrawlJob)
+             .filter(or_(CrawlJob.requested_by_workspace_id == ws.id,
+                         CrawlJob.site.in_(allowed_sites))))
     if status:
         statuses = [s.strip() for s in status.split(",") if s.strip()]
         if statuses:
@@ -2054,6 +2126,8 @@ def list_jobs(limit: int = 30, page: int = 1, status: str | None = None,
         else:
             return {"total": 0, "page": page, "page_size": limit,
                     "items": [], "jobs": [], "summary": {}}
+    else:
+        q = _daily_crawl_job_display_query(q)
     limit = max(1, min(int(limit or 30), 500))
     page = max(1, int(page or 1))
     total = q.count()
@@ -2078,13 +2152,24 @@ def list_jobs(limit: int = 30, page: int = 1, status: str | None = None,
             j,
             include_live_progress=include_live_progress,
         )
+        live_duration = None
+        if (j.status or "").lower() == "running" and j.started_at:
+            live_duration = max(0.0, (now - j.started_at).total_seconds())
+        display_duration = live_duration if live_duration is not None else j.duration_sec
         items.append({
             "id": j.id, "site": j.site, "status": j.status,
             "products_count": fetched_count, "new_count": j.new_count,
             "total_product_count": total_count,
             "total_product_count_source": total_source,
             "promotion_count": j.promotion_count, "success_rate": j.success_rate,
-            "duration_sec": round(j.duration_sec, 1) if j.duration_sec else None,
+            "duration_sec": round(display_duration, 1) if display_duration else None,
+            "persisted_duration_sec": round(j.duration_sec, 1) if j.duration_sec else None,
+            "live_duration_sec": round(live_duration, 1) if live_duration is not None else None,
+            "worker": j.worker,
+            "assigned_node": j.assigned_node,
+            "assigned_at": j.assigned_at.isoformat() if j.assigned_at else None,
+            "assigned_by": j.assigned_by,
+            "heartbeat_at": j.heartbeat_at.isoformat() if j.heartbeat_at else None,
             "requested_by_workspace_id": j.requested_by_workspace_id,
             "requested_by_user_id": j.requested_by_user_id,
             "created_at": j.created_at.isoformat() if j.created_at else None,
@@ -2098,7 +2183,8 @@ def list_jobs(limit: int = 30, page: int = 1, status: str | None = None,
             "suggested_action": j.suggested_action,
         })
     return {"total": total, "page": page, "page_size": limit,
-            "items": items, "jobs": items, "summary": summary}
+            "items": items, "jobs": items, "summary": summary,
+            "global_view": global_view}
 
 
 @router.post("/jobs/{job_id}/retry")
@@ -2373,7 +2459,7 @@ def crawl_diagnostics(
     sites = [site] if site else sorted(allowed)
 
     target_counts = _workspace_site_targets(db, ws.id, include_hidden=True)
-    metric_rows = load_site_metrics(db, sites)
+    metric_rows = load_site_metrics(db, sites, collect_missing=IS_SQLITE)
     latest_jobs: dict[str, CrawlJob] = {}
     for job in (db.query(CrawlJob)
                 .filter(CrawlJob.site.in_(sites))
@@ -3659,6 +3745,13 @@ _FULL_ESTIMATES: dict[str, int] = {
     # 其他：缺数据，0 = 不计入覆盖率
 }
 
+_DETAIL_SIGNAL_METRIC_KEYS = (
+    "price_signal_count",
+    "review_signal_count",
+    "sales_signal_count",
+    "revenue_signal_count",
+)
+
 _SITEMAP_TOTALS_PATH = os.environ.get(
     "SITEMAP_TOTALS_PATH", "/app/data/sitemap_totals.json")
 
@@ -3687,6 +3780,92 @@ def _load_hidden_sites() -> set[str]:
         return set(((cfg.get("settings") or {}).get("hidden_sites") or []))
     except Exception:
         return set()
+
+
+def _latest_successful_job_counts(db: Session, sites: list[str]) -> dict[str, int]:
+    site_codes = sorted({site for site in sites if site})
+    if not site_codes:
+        return {}
+    rows = (
+        db.query(
+            CrawlJob.site,
+            CrawlJob.products_count,
+            CrawlJob.total_product_count,
+        )
+        .filter(CrawlJob.site.in_(site_codes), CrawlJob.status == "success")
+        .order_by(CrawlJob.site.asc(), CrawlJob.id.desc())
+        .all()
+    )
+    out: dict[str, int] = {}
+    for site, products_count, total_product_count in rows:
+        if site in out:
+            continue
+        out[site] = max(int(products_count or 0), int(total_product_count or 0))
+    return out
+
+
+def _detail_signal_count(metric: dict) -> int:
+    return max(int(metric.get(key) or 0) for key in _DETAIL_SIGNAL_METRIC_KEYS)
+
+
+def _coverage_display_counts(
+    metric: dict,
+    *,
+    latest_success_job_count: int = 0,
+    sitemap_product_count: int = 0,
+) -> dict:
+    """Return report-facing counts without treating sitemap-only rows as PDP data."""
+    sku_count = int(metric.get("sku_count") or 0)
+    listing_product_count = int(metric.get("product_listing_count") or 0)
+    discovered_product_count = int(metric.get("discovered_product_url_count") or 0)
+    detail_count = _detail_signal_count(metric)
+    metadata_count = max(listing_product_count, sku_count)
+
+    if detail_count > 0:
+        candidates = [
+            ("product_listing", listing_product_count),
+            ("sku_rows", sku_count),
+            ("discovered_url", discovered_product_count),
+            ("sitemap", int(sitemap_product_count or 0)),
+        ]
+        source, actual_count = next(
+            ((name, count) for name, count in candidates if count > 0),
+            ("none", 0),
+        )
+        return {
+            "actual_product_count": int(actual_count),
+            "actual_product_count_source": source,
+            "product_detail_count": int(detail_count),
+            "report_product_count": int(detail_count),
+            "metadata_product_count": int(metadata_count),
+        }
+
+    if latest_success_job_count > 0:
+        return {
+            "actual_product_count": int(latest_success_job_count),
+            "actual_product_count_source": "latest_success_job",
+            "product_detail_count": 0,
+            "report_product_count": 0,
+            "metadata_product_count": int(metadata_count),
+        }
+
+    candidates = [
+        ("product_listing", listing_product_count),
+        ("sku_rows", sku_count),
+        ("discovered_url", discovered_product_count),
+        ("sitemap", int(sitemap_product_count or 0)),
+    ]
+    source, actual_count = next(
+        ((name, count) for name, count in candidates if count > 0),
+        ("none", 0),
+    )
+    return {
+        "actual_product_count": int(actual_count),
+        "actual_product_count_source": source,
+        "product_detail_count": 0,
+        "report_product_count": 0,
+        "metadata_product_count": int(metadata_count),
+    }
 
 
 # ── /api/coverage in-memory cache (30s TTL · invalidated on crawl success) ──
@@ -3737,7 +3916,8 @@ def data_coverage(
     from ..models import Site as SiteModel
     hidden = _load_hidden_sites() if not include_hidden else set()
     sitemap_totals = _load_sitemap_totals()
-    metrics = load_site_metrics(db, allowed_sites)
+    metrics = load_site_metrics(db, allowed_sites, collect_missing=IS_SQLITE)
+    latest_success_counts = _latest_successful_job_counts(db, allowed_sites)
     rows = []
     for s in db.query(SiteModel).filter(SiteModel.site.in_(allowed_sites)).all():
         if s.site in hidden or s.site not in allowed_sites:
@@ -3746,10 +3926,16 @@ def data_coverage(
         metric = metrics.get(s.site, {})
         fetched = int(metric.get("fetched_count") or 0)
         sku_count = int(metric.get("sku_count") or 0)
-        cur_raw = fetched if fetched >= sku_count else sku_count
         # 覆盖率基准只使用工作区显式配置的目标；未配置时用 sitemap/frontier/已入库数据估计。
         configured_target = target_sku_counts.get(s.site)
         sitemap_total = int(sitemap_totals.get(s.site) or 0)
+        display_counts = _coverage_display_counts(
+            metric,
+            latest_success_job_count=int(latest_success_counts.get(s.site) or 0),
+            sitemap_product_count=sitemap_total,
+        )
+        report_product_count = int(display_counts["report_product_count"] or 0)
+        cur_raw = max(fetched, report_product_count)
         configured_est = int(configured_target or 0)
         fallback_est = int(_FULL_ESTIMATES.get(s.site, 0) or 0)
         effective_target = max(configured_est, sitemap_total, fallback_est, int(cur_raw or 0))
@@ -3785,28 +3971,19 @@ def data_coverage(
         sitemap_product_count = sitemap_total
         discovered_product_count = int(metric.get("discovered_product_url_count") or 0)
         listing_product_count = int(metric.get("product_listing_count") or 0)
-        # actual_product_count 表示当前系统可落到商品/商品 URL 的实际数量。
-        # 原始 sitemap URL 总数单独暴露为 sitemap_product_count，避免报表把它当已采商品总量。
-        actual_candidates = [
-            ("product_listing", listing_product_count),
-            ("sku_rows", int(sku_count or 0)),
-            ("discovered_url", discovered_product_count),
-            ("sitemap", sitemap_product_count),
-        ]
-        actual_source, actual_product_count = next(
-            ((source, count) for source, count in actual_candidates if count > 0),
-            ("none", 0),
-        )
         rows.append({
             "site": s.site, "brand": s.brand, "country": s.country,
             "url": s.url, "platform": s.platform,
             "current": cur, "current_raw": cur_raw, "estimated_full": est,
-            "actual_product_count": actual_product_count,
-            "actual_product_count_source": actual_source,
+            "actual_product_count": display_counts["actual_product_count"],
+            "actual_product_count_source": display_counts["actual_product_count_source"],
             "sitemap_product_count": sitemap_product_count,
             "discovered_product_url_count": discovered_product_count,
             "product_listing_count": listing_product_count,
-            "product_detail_count": int(sku_count or 0),
+            "metadata_product_count": display_counts["metadata_product_count"],
+            "product_detail_count": display_counts["product_detail_count"],
+            "report_product_count": display_counts["report_product_count"],
+            "latest_success_job_product_count": int(latest_success_counts.get(s.site) or 0),
             "target_sku_count": target_sku,
             "target_sku_source": target_source,
             "sku_deviation_abs": sku_deviation_abs,
@@ -4048,7 +4225,7 @@ def _build_data_quality_payload(
     target_sku_by_site = target_sku_by_site or {}
 
     sitemap_totals = _load_sitemap_totals()
-    metric_rows = load_site_metrics(db, site_codes)
+    metric_rows = load_site_metrics(db, site_codes, collect_missing=IS_SQLITE)
     expected_currency_by_site = {
         site: _currency_for_site(site) for site in site_codes
     }

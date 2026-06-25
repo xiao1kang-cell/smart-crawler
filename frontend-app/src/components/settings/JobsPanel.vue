@@ -72,6 +72,7 @@ async function load() {
       limit: pageSize.value,
       page: page.value,
       status: statusFilter.value === 'all' ? undefined : statusFilter.value,
+      all_workspaces: 1,
     })
     jobs.value = asList(jobData, ['jobs', 'items'])
     jobTotal.value = Number(jobData?.total ?? jobs.value.length)
@@ -251,6 +252,35 @@ function fmtJobTime(value?: string | null) {
   return out === '-' ? '—' : out
 }
 
+function fmtDuration(seconds?: number | string | null) {
+  const raw = Number(seconds ?? 0)
+  if (!Number.isFinite(raw) || raw <= 0) return '—'
+  const total = Math.round(raw)
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const secs = total % 60
+  if (hours > 0) return `${hours}h ${minutes}m`
+  if (minutes > 0) return `${minutes}m ${secs}s`
+  return `${secs}s`
+}
+
+function nodeText(job: Record<string, any>) {
+  return job.assigned_node || job.node || '未分配'
+}
+
+function workerText(job: Record<string, any>) {
+  return job.worker || (job.status === 'pending' ? '待领取' : '—')
+}
+
+function runtimeTitle(job: Record<string, any>) {
+  const bits = [
+    job.started_at ? `开始：${fmtJobTime(job.started_at)}` : '',
+    job.heartbeat_at ? `心跳：${fmtJobTime(job.heartbeat_at)}` : '',
+    job.finished_at ? `完成：${fmtJobTime(job.finished_at)}` : '',
+  ].filter(Boolean)
+  return bits.join('\n')
+}
+
 function failureText(job: Record<string, any>) {
   return job.failure_code || (job.error ? 'unknown' : '—')
 }
@@ -325,11 +355,13 @@ onMounted(load)
         <div class="col-id">#</div>
         <div class="col-site">站点</div>
         <div class="col-status">状态</div>
+        <div class="col-node">分配</div>
+        <div class="col-worker">执行</div>
         <div class="col-products">已抓取/总量</div>
-        <div class="col-duration">耗时</div>
+        <div class="col-started">开始</div>
+        <div class="col-duration">已跑/耗时</div>
         <div class="col-failure">失败码</div>
         <div class="col-action">建议动作</div>
-        <div class="col-finished">完成</div>
         <div class="col-ops">操作</div>
       </div>
       <PageLoading v-if="loading && !jobs.length" compact title="加载采集任务..." note="正在读取最近任务队列" />
@@ -338,11 +370,13 @@ onMounted(load)
           <div class="col-id">{{ job.id }}</div>
           <div class="col-site">{{ job.site || job.brand }}</div>
           <div class="col-status"><StatusBadge :status="job.status" /></div>
+          <div class="col-node" :title="job.assigned_by ? `由 ${job.assigned_by} 分配于 ${fmtJobTime(job.assigned_at)}` : ''">{{ nodeText(job) }}</div>
+          <div class="col-worker" :title="workerText(job)">{{ workerText(job) }}</div>
           <div class="col-products" :title="job.total_product_count_source ? `本次总量来源：${job.total_product_count_source}` : '暂无本次总量数据'">{{ productProgressText(job) }}</div>
-          <div class="col-duration">{{ job.duration_sec ? Math.round(job.duration_sec) + ' 秒' : '—' }}</div>
+          <div class="col-started">{{ fmtJobTime(job.started_at) }}</div>
+          <div class="col-duration" :title="runtimeTitle(job)">{{ fmtDuration(job.duration_sec) }}</div>
           <div :title="failureTitle(job)" class="col-failure failure-code">{{ failureText(job) }}</div>
           <div :title="job.failure_detail || job.error || ''" class="col-action job-action">{{ job.suggested_action || '—' }}</div>
-          <div class="col-finished">{{ fmtJobTime(job.finished_at) }}</div>
           <div class="col-ops">
             <button class="btn-mini" :disabled="!canOpenFailedProducts(job)" @click="openFailedProducts(job)">
               失败商品
@@ -527,11 +561,11 @@ onMounted(load)
 .job-row {
   width: 100%;
   min-width: 0;
-  grid-template-columns: 44px minmax(76px, .8fr) 72px 92px 62px minmax(78px, .75fr) minmax(132px, 1.35fr) minmax(98px, .85fr) 136px;
+  grid-template-columns: 44px minmax(76px, .8fr) 72px minmax(76px, .65fr) minmax(88px, .8fr) 92px minmax(98px, .85fr) 72px minmax(76px, .7fr) minmax(120px, 1.15fr) 136px;
   gap: 8px;
 }
 .jobs-list {
-  overflow-x: hidden;
+  overflow-x: auto;
 }
 .job-row > div {
   min-width: 0;
@@ -545,8 +579,13 @@ onMounted(load)
 }
 .col-products,
 .col-duration,
+.col-node,
 .col-ops {
   text-align: center;
+}
+.col-worker,
+.col-started {
+  color: var(--ui-muted);
 }
 .col-ops {
   justify-self: end;
@@ -708,15 +747,16 @@ onMounted(load)
     grid-template-areas:
       "site ops"
       "status products"
+      "node worker"
+      "started duration"
       "failure failure"
-      "action action"
-      "finished finished";
+      "action action";
     padding: 12px 14px;
     gap: 6px 10px;
   }
 
   .col-id,
-  .col-duration {
+  .job-row.head .col-duration {
     display: none;
   }
 
@@ -737,6 +777,52 @@ onMounted(load)
     text-align: right;
   }
 
+  .col-node {
+    grid-area: node;
+    display: block;
+    color: var(--ui-muted);
+    font-size: 12px;
+    text-align: left;
+  }
+
+  .job-row:not(.head) .col-node::before {
+    content: "分配 ";
+  }
+
+  .col-worker {
+    grid-area: worker;
+    display: block;
+    color: var(--ui-muted);
+    font-size: 12px;
+    text-align: right;
+  }
+
+  .job-row:not(.head) .col-worker::before {
+    content: "执行 ";
+  }
+
+  .col-started {
+    grid-area: started;
+    color: var(--ui-muted);
+    font-size: 12px;
+  }
+
+  .job-row:not(.head) .col-started::before {
+    content: "开始 ";
+  }
+
+  .col-duration {
+    grid-area: duration;
+    display: block;
+    color: var(--ui-muted);
+    font-size: 12px;
+    text-align: right;
+  }
+
+  .job-row:not(.head) .col-duration::before {
+    content: "已跑 ";
+  }
+
   .job-row:not(.head) .col-products::before {
     content: "商品 ";
   }
@@ -747,12 +833,6 @@ onMounted(load)
 
   .col-action {
     grid-area: action;
-  }
-
-  .col-finished {
-    grid-area: finished;
-    color: var(--ui-muted);
-    font-size: 12px;
   }
 
   .col-ops {
