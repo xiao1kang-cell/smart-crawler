@@ -558,11 +558,27 @@ class HomaryCrawler(BaseCrawler):
             "[class*=reviewCount]", "[data-review-count]",
         ):
             for node in tree.css(selector):
-                text = node.attributes.get("data-review-count") or node.text(" ", strip=True)
+                text = node.attributes.get("data-review-count") or node.text(separator=" ", strip=True)
                 count = cls._count_from_text(text)
                 if count is not None:
                     return count
-        return cls._count_from_text(html)
+        for pattern in (
+            r"\breviewCount\b\s*[:=]\s*([A-Za-z_$][\w$]*|\d+)",
+            r"\bratingCount\b\s*[:=]\s*([A-Za-z_$][\w$]*|\d+)",
+        ):
+            match = re.search(pattern, html)
+            if not match:
+                continue
+            token = match.group(1)
+            if token.isdigit():
+                return int(token)
+            var_match = re.search(
+                rf"\b{re.escape(token)}\b\s*=\s*['\"]?(\d+)['\"]?",
+                html,
+            )
+            if var_match:
+                return int(var_match.group(1))
+        return cls._count_from_text(html) or 0
 
     @staticmethod
     def _count_from_text(text: str | None) -> int | None:

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import gzip
 import html
+import json
 import os
 import re
 import time
@@ -266,6 +267,12 @@ class MagentoCrawler(BaseCrawler):
         imgs = data.get("images") or (
             [self._meta(tree, "og:image")] if self._meta(tree, "og:image") else [])
         slug = url.rstrip("/").split("/")[-1].split("?")[0][:80]
+        category_path = (
+            data.get("category")
+            or _jsonld_breadcrumb(tree)
+            or _dom_breadcrumb(tree)
+            or _category_from_title_fallback(title)
+        )
         return {
             "sku": data.get("sku") or slug,
             "spu": data.get("sku") or slug,
@@ -273,13 +280,13 @@ class MagentoCrawler(BaseCrawler):
             "description": data.get("description")
             or self._meta(tree, "og:description"),
             "image_urls": imgs,
-            "category_path": data.get("category"),
+            "category_path": category_path,
             "sale_price": sale,
             "original_price": original,
             "currency": data.get("currency")
             or _CURRENCY.get(self.site.country, "USD"),
             "ratings": data.get("rating"),
-            "review_count": data.get("review_count"),
+            "review_count": data.get("review_count") or 0,
             "status": data.get("status", "on_sale"),
             "has_video": "<video" in html,
             "mpn": data.get("mpn"),
@@ -321,31 +328,30 @@ class MagentoCrawler(BaseCrawler):
             with session_scope() as s:
                 mark_parsed(s, site=self.site.site, url=url)
 
-        if self._prefer_sitemap_only():
-            for url in urls:
-                _add_row(url, self._row_from_sitemap(url))
-        else:
-            fetcher = self.make_fetcher(
-                kind="product",
-                source="magento_failed_product_retry",
-                fail_fast_blocked=False,
-                retries=1,
-            )
-            self._fetcher = fetcher
-            with ThreadPoolExecutor(max_workers=max(1, min(WORKERS, 8))) as pool:
-                future_by_url = {pool.submit(self._fetch_one, url): url for url in urls}
-                for future, url in future_by_url.items():
-                    try:
-                        _add_row(url, future.result())
-                    except BlockedError:
-                        raise
-                    except Exception as exc:
-                        failures += 1
-                        info = classify_exception(exc)
-                        with session_scope() as s:
-                            mark_failed(s, site=self.site.site, url=url,
-                                        failure=info)
-                        result.notes.append(f"{url} 重抓失败: {exc}")
+        fetcher = self.make_fetcher(
+            kind="product",
+            source="magento_failed_product_retry",
+            fail_fast_blocked=False,
+            retries=1,
+        )
+        self._fetcher = fetcher
+        with ThreadPoolExecutor(max_workers=max(1, min(WORKERS, 8))) as pool:
+            future_by_url = {pool.submit(self._fetch_one, url): url for url in urls}
+            for future, url in future_by_url.items():
+                try:
+                    row = future.result()
+                    if row is None and self._prefer_sitemap_only():
+                        row = self._row_from_sitemap(url)
+                    _add_row(url, row)
+                except BlockedError:
+                    raise
+                except Exception as exc:
+                    failures += 1
+                    info = classify_exception(exc)
+                    with session_scope() as s:
+                        mark_failed(s, site=self.site.site, url=url,
+                                    failure=info)
+                    result.notes.append(f"{url} 重抓失败: {exc}")
 
         result.total_product_count = len(urls)
         if failures:
@@ -399,9 +405,14 @@ class MagentoCrawler(BaseCrawler):
             }
 
     def _prefer_sitemap_only(self) -> bool:
-        return (self.site.site or "").startswith("costway_")
+        config = self.site.crawler_config or {}
+        config = config if isinstance(config, dict) else {}
+        raw = config.get("sitemap_only") or os.environ.get("MAGENTO_SITEMAP_ONLY")
+        return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
 
     def _row_from_sitemap(self, url: str) -> dict | None:
+        if _looks_like_category_url(url):
+            return None
         meta = self._sitemap_meta.get(url) or {}
         title = meta.get("title") or _title_from_url(url)
         if not title:
@@ -453,3 +464,98 @@ def _category_from_url(url: str) -> str | None:
     if not parts:
         return None
     return " / ".join(re.sub(r"[-_]+", " ", part).strip() for part in parts if part)
+
+
+def _looks_like_category_url(url: str) -> bool:
+    path = re.sub(r"https?://[^/]+", "", url).lower()
+    return path.startswith("/c/") or "/category/" in path or "/catalog/category/" in path
+
+
+def _dom_breadcrumb(tree: HTMLParser) -> str | None:
+    crumbs = [
+        n.text(separator=" ", strip=True)
+        for n in tree.css(
+            ".breadcrumbs a, .breadcrumb a, [class*=breadcrumb] a, "
+            "nav[aria-label*=breadcrumb] a, [itemtype*=BreadcrumbList] [itemprop=name]"
+        )
+    ]
+    cleaned = []
+    for crumb in crumbs:
+        text = re.sub(r"\s+", " ", html.unescape(crumb or "")).strip()
+        if not text or text.lower() in {"home", "startseite", "accueil", "inicio"}:
+            continue
+        cleaned.append(text)
+    if len(cleaned) <= 1:
+        return None
+    return "/".join(cleaned[:-1][:4])
+
+
+def _jsonld_breadcrumb(tree: HTMLParser) -> str | None:
+    for node in tree.css('script[type="application/ld+json"]'):
+        raw = node.text(strip=True)
+        if not raw:
+            continue
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        stack = parsed if isinstance(parsed, list) else [parsed]
+        while stack:
+            item = stack.pop(0)
+            if not isinstance(item, dict):
+                continue
+            graph = item.get("@graph")
+            if isinstance(graph, list):
+                stack.extend(graph)
+            raw_type = item.get("@type")
+            types = raw_type if isinstance(raw_type, list) else [raw_type]
+            if not any(str(t).lower() == "breadcrumblist" for t in types if t):
+                continue
+            names = []
+            for elem in item.get("itemListElement") or []:
+                if not isinstance(elem, dict):
+                    continue
+                nested = elem.get("item")
+                name = nested.get("name") if isinstance(nested, dict) else None
+                name = name or elem.get("name")
+                text = re.sub(r"\s+", " ", str(name or "").strip())
+                if not text or text.lower() in {"home", "startseite", "accueil", "inicio"}:
+                    continue
+                names.append(text)
+            if len(names) > 1:
+                return "/".join(names[:-1][:4])
+    return None
+
+
+def _category_from_title_fallback(title: str | None) -> str | None:
+    text = (title or "").strip().lower()
+    if not text:
+        return None
+    rules = (
+        (r"kratzbaum|katzen|cat tree|arbre.*chat|rascador.*gato|albero.*gatti",
+         "Pet Supplies/Cat Furniture"),
+        (r"bett|bed|lit |cama|letto|matras|mattress|colch[oó]n|colch[aã]o",
+         "Furniture/Bedroom"),
+        (r"stuhl|chair|silla|chaise|sedia|stoel|bank|bench",
+         "Furniture/Chairs & Seating"),
+        (r"tisch|table|mesa|bureau|scrivania|tafel",
+         "Furniture/Tables"),
+        (r"regal|shelf|shelving|[ée]tag[èe]re|estante|scaffale|kast",
+         "Furniture/Storage & Shelving"),
+        (r"lampe|lamp|l[aá]mpara|lampadaire|lampada",
+         "Lighting"),
+        (r"garten|garden|jardin|giardino|outdoor|terrasse|patio",
+         "Garden & Outdoor"),
+        (r"küche|kitchen|cocina|cuisine|cucina",
+         "Kitchen & Dining"),
+        (r"spiel|speelgoed|trein|bouwblokken|schuimblokken|kids|kinder|children|enfant|niñ|bambin|beb[eé]",
+         "Kids & Baby"),
+        (r"pool|piscina|spa|trampolin|trampoline",
+         "Sports & Outdoor Recreation"),
+        (r"fitness|exercise|training|sport",
+         "Sports & Fitness"),
+    )
+    for pattern, category in rules:
+        if re.search(pattern, text, re.I):
+            return category
+    return None

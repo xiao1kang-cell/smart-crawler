@@ -53,7 +53,7 @@ RUN_TARGET_LIMIT = int(os.environ.get("VIDAXL_RUN_TARGET_LIMIT", "0"))
 FRONTIER_REGISTER_MAX_URLS = int(os.environ.get(
     "VIDAXL_FRONTIER_REGISTER_MAX_URLS", "5000"))
 STREAM_UPSERT_BATCH_SIZE = int(os.environ.get(
-    "VIDAXL_STREAM_UPSERT_BATCH_SIZE", "1000"))
+    "VIDAXL_STREAM_UPSERT_BATCH_SIZE", "100"))
 STREAM_SUBMIT_MULTIPLIER = int(os.environ.get(
     "VIDAXL_STREAM_SUBMIT_MULTIPLIER", "3"))
 API_PAGE = 500
@@ -2151,21 +2151,24 @@ class VidaxlCrawler(BaseCrawler):
         })
         html_attributes = _promotion_attributes_from_html(html)
         attributes = _merge_promotion_attributes(attributes, html_attributes)
+        title = product_doc.get("name")
         return {
             "sku": product_doc.get("sku") or product_doc.get("mpn")
             or url.rstrip("/").split("/")[-1].replace(".html", ""),
             "spu": product_doc.get("sku") or product_doc.get("mpn"),
-            "title": product_doc.get("name"),
+            "title": title,
             "description": product_doc.get("description"),
             "image_urls": imgs,
             "category_path": category_path
-            or self._category_value(product_doc.get("category")),
+            or self._category_value(product_doc.get("category"))
+            or _category_from_title_fallback(title),
             "sale_price": price, "original_price": original_price,
             "currency": offers.get("priceCurrency") or self.currency,
             "gtin": product_doc.get("gtin13") or product_doc.get("gtin"),
             "mpn": product_doc.get("mpn"),
             "ratings": _num(rating.get("ratingValue")),
-            "review_count": _int(rating.get("reviewCount")),
+            "review_count": _int(rating.get("reviewCount")
+                                 or rating.get("ratingCount")) or 0,
             "status": "out_of_stock" if "outofstock" in avail
             else "on_sale",
             "brand": brand or self.site.brand,
@@ -2775,6 +2778,78 @@ def _category_from_url_path(url: str) -> str | None:
             continue
         meaningful.append(part)
     return "/".join(meaningful[:3]) or None
+
+
+def _category_from_title_fallback(title: str | None) -> str | None:
+    """Best-effort taxonomy for vidaXL PDPs whose breadcrumb is product-only."""
+    text = (title or "").strip().lower()
+    if not text:
+        return None
+    rules = (
+        (r"\bcolch(?:[ãa]o|ões)\b",
+         "Mobiliário/Camas e acessórios/Colchões"),
+        (r"\bcama\b",
+         "Mobiliário/Camas e acessórios/Camas e estruturas de camas"),
+        (r"\bcesto\s+gabi(?:[ãa]o|ao)\b|\bgabi(?:[ãa]o|ao)\b",
+         "Hardware/Cercas e barreiras/Gabiões"),
+        (r"\bcanteiro\b",
+         "Casa e jardim/Relvado e jardim/Jardinagem/Canteiros elevados"),
+        (r"\bcerca\b",
+         "Hardware/Cercas e barreiras/Cercas"),
+        (r"\bgalinheiro\b",
+         "Animais & acessórios/Produtos para animais de estimação/Produtos para animais pequenos/Casotas e gaiolas para animais pequenos"),
+        (r"\bmangueira\b|\benrolador\b",
+         "Casa e jardim/Relvado e jardim/Rega e irrigação/Mangueiras de jardim"),
+        (r"\bbombas?\s+de\s+filtragem\b|\bbomba\s+de\s+filtro\b",
+         "Casa e jardim/Piscinas e spas/Acessórios para piscinas/Bombas de piscina"),
+        (r"\bparafusos?\b",
+         "Hardware/Ferragens/Parafusos"),
+        (r"\bt-?shirt\b",
+         "Outros/Vestuário e acessórios/Roupas/Roupa de criança/Tops de criança"),
+        (r"\bbroca\b",
+         "Hardware/Ferramentas/Brocas"),
+        (r"\bmesa\s+(?:cozinha|de\s+trabalho\s+de\s+cozinha)\b",
+         "Casa e jardim/Cozinha e sala de jantar/Móveis de cozinha"),
+        (r"\bmesa\s+de\s+jantar\s+para\s+jardim\b",
+         "Mobiliário/Mobiliário de exterior/Mesas de exterior"),
+        (r"\brampas?\s+protetoras?\s+de\s+cabos\b",
+         "Hardware/Segurança/Proteção de cabos"),
+        (r"\btoldo\b|\bguarda-sol\b",
+         "Casa e jardim/Relvado e jardim/Espaço exterior/Guarda-sóis e telas de varanda"),
+        (r"\bcanil\b",
+         "Animais & acessórios/Produtos para animais de estimação/Produtos para cães/Canis"),
+        (r"\b(?:conduta|tubo)\s+de\s+exaust[ãa]o\b",
+         "Hardware/Aquecimento, ventilação e ar condicionado/Condutas e ventilação"),
+        (r"\b[áa]rvore\b.*\bartificial\b",
+         "Casa e jardim/Decoração/Plantas artificiais"),
+        (r"\b(outdoor|garten|jardin|jard[ií]n|giardino)\b.*\b(sofa\w*|sof[aá]\w*|canap[eé]\w*|loungeset|sitzgruppe|salon|conjunto)\b|"
+         r"\b(salon|conjunto|set|ensemble|sofagarnitur)\b.*\b(garten|jardin|jard[ií]n|outdoor|exterior)\b",
+         "Garden & Outdoor/Outdoor Furniture/Outdoor Sofas & Sets"),
+        (r"\b(sofa|sof[aá]|canap[eé]|ecksofa|canape|divan)\b",
+         "Furniture/Sofas"),
+        (r"\b(regal|wandregal|w[üu]rfelregal|estanter[ií]a|[ée]tag[èe]re|shelving|shelf)\b",
+         "Furniture/Storage & Shelving"),
+        (r"\b(schminktisch|tocador|coiffeuse|dressing table)\b",
+         "Furniture/Bedroom/Vanities"),
+        (r"\b(nachttisch|mesita\s+de\s+noche|table\s+de\s+chevet|bedside)\b",
+         "Furniture/Bedroom/Nightstands"),
+        (r"\b(schrank|kleiderschrank|armario|armoire|wardrobe|closet)\b",
+         "Furniture/Wardrobes"),
+        (r"\b(tisch|mesa|table|bureau|desk)\b",
+         "Furniture/Tables"),
+        (r"\b(stuhl|silla|chaise|chair|tabouret|hocker)\b",
+         "Furniture/Chairs & Seating"),
+        (r"\b(bett|cama|lit|bed|matratze|colch[oó]n|matelas)\b",
+         "Furniture/Bedroom/Beds & Mattresses"),
+        (r"\b(kissen|coj[ií]n|coussin|pillow|cushion)\b",
+         "Home & Garden/Textiles/Cushions"),
+        (r"\b(garten|jardin|jard[ií]n|terrasse|patio|outdoor|exterior)\b",
+         "Garden & Outdoor"),
+    )
+    for pattern, category in rules:
+        if re.search(pattern, text, re.I):
+            return category
+    return None
 
 
 def _bounded_int(value, low: int, high: int, default: int) -> int:

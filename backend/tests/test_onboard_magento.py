@@ -327,6 +327,7 @@ def test_magento_costway_sitemap_only_rows(monkeypatch):
     site.url = "https://www.costway.de"
     site.country = "DE"
     site.brand = "Costway"
+    site.crawler_config = {"sitemap_only": True}
     crawler = MagentoCrawler.__new__(MagentoCrawler)
     from app.crawlers.base import BaseCrawler
     BaseCrawler.__init__(crawler, site)
@@ -339,8 +340,16 @@ def test_magento_costway_sitemap_only_rows(monkeypatch):
 
     product_url = "https://www.costway.de/costway-klappstuhl-rot.html"
     product_url_2 = "https://www.costway.de/costway-tisch-blau.html"
+    category_url = "https://www.costway.de/c/gartenstuehle.html"
     sitemap_xml = f"""
     <urlset xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+      <url>
+        <loc>{category_url}</loc>
+        <image:image>
+          <image:loc>https://www.costway.de/media/category.jpg</image:loc>
+          <image:title>Gartenstuehle</image:title>
+        </image:image>
+      </url>
       <url>
         <loc>{product_url}</loc>
         <lastmod>2026-06-17T13:23:52+00:00</lastmod>
@@ -378,7 +387,7 @@ def test_magento_costway_sitemap_only_rows(monkeypatch):
     assert row["title"] == "Klappstuhl Rot"
     assert row["image_urls"] == ["https://www.costway.de/media/chair.jpg"]
     assert row["currency"] == "EUR"
-    assert result.total_product_count == 2
+    assert result.total_product_count == 3
     assert result.coverage_complete is False
     assert result.coverage_code == "incomplete_detail_parse"
 
