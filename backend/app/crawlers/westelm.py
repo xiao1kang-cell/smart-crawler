@@ -49,6 +49,8 @@ import re
 import time
 
 from ..antiban import BlockedError
+from ..db import session_scope
+from ..frontier import mark_parsed
 from .base import BaseCrawler, CrawlResult
 
 DEFAULT_LIMIT = int(os.environ.get("WESTELM_LIMIT", "999999"))
@@ -268,6 +270,66 @@ class WestElmCrawler(BaseCrawler):
             int(result.total_product_count or 0),
             len(result.products),
         )
+        return result
+
+    def crawl_failed_products(self, urls: list[str]) -> CrawlResult:
+        """Retry West Elm PDP URLs without rediscovering the whole sitemap."""
+        result = CrawlResult()
+        targets = [u for u in urls if u]
+        result.total_product_count = len(targets)
+        if not targets:
+            result.notes.append("没有可重抓的 WestElm PDP URL")
+            return result
+
+        fetcher = self.make_fetcher(kind="product",
+                                    source="westelm_failed_product_retry")
+        ok = fail = blocked = 0
+        for url in targets:
+            html, code = self._fetch_pdp(fetcher, url)
+            is_block = (
+                code in (401, 403, 429, 451)
+                or (html is not None and self._is_blocked_body(html))
+            )
+            if is_block:
+                blocked += 1
+                fail += 1
+                result.notes.append(f"{url} 被阻断 status={code or 'body-block'}")
+                fetcher = self.make_fetcher(
+                    kind="product",
+                    source="westelm_failed_product_retry",
+                )
+                self.sleep()
+                continue
+            if code == 404:
+                fail += 1
+                result.notes.append(f"{url} 已 404，跳过")
+                self.sleep()
+                continue
+            if not html:
+                fail += 1
+                result.notes.append(f"{url} 抓取失败 status={code}")
+                self.sleep()
+                continue
+
+            rows = self._parse_product(html, url)
+            if not rows:
+                fail += 1
+                result.notes.append(f"{url} 未解析出商品")
+                self.sleep()
+                continue
+
+            result.products.extend(rows)
+            ok += len(rows)
+            with session_scope() as s:
+                mark_parsed(s, site=self.site.site, url=url)
+            if ok and ok % 50 == 0:
+                self.persist_job_progress(products_count=ok,
+                                          total_product_count=len(targets))
+            self.sleep()
+
+        result.notes.append(
+            f"失败商品重抓 URL {len(targets)} 个，产出 {ok} 个 SKU，"
+            f"失败 {fail} 个，反爬命中 {blocked} 个")
         return result
 
     # ---------- sitemap ----------

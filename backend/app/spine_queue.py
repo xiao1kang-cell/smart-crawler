@@ -18,6 +18,39 @@ from .db import session_scope
 from .models import SpineJob
 
 
+def _enqueue_spine_webhook(s: Session, job: SpineJob | None, *,
+                           event_type: str,
+                           result: dict | None = None,
+                           error: str | None = None) -> None:
+    if job is None:
+        return
+    try:
+        from .webhooks import enqueue_delivery
+
+        enqueue_delivery(
+            s,
+            workspace_id=job.workspace_id,
+            event_type=event_type,
+            job_kind="spine",
+            job_id=job.id,
+            status=job.status or "pending",
+            created_at=job.created_at,
+            finished_at=job.finished_at,
+            error=error if error is not None else job.error,
+            result={
+                "url": job.url,
+                "dataset": job.dataset,
+                "entity_type": job.entity_type,
+                "save_policy": job.save_policy,
+                "result_record_id": job.result_record_id,
+                "retries": job.retries or 0,
+                **(result or {}),
+            },
+        )
+    except Exception:
+        pass
+
+
 def enqueue(db: Session, url: str, dataset: str, *,
             entity_type: str = "generic",
             save_policy: str = "promote_if_valid",
@@ -32,6 +65,7 @@ def enqueue(db: Session, url: str, dataset: str, *,
                    workspace_id=workspace_id, created_at=datetime.utcnow())
     db.add(job)
     db.flush()
+    _enqueue_spine_webhook(db, job, event_type="job.triggered")
     return job.id
 
 
@@ -126,6 +160,12 @@ def execute_job(job_id: int) -> dict:
                 job.result_record_id = out.get("record_id")
                 job.finished_at = datetime.utcnow()
                 job.error = None
+                _enqueue_spine_webhook(
+                    s,
+                    job,
+                    event_type="job.completed",
+                    result={"record_id": out.get("record_id")},
+                )
                 return {"job_id": job_id, "status": "success",
                         "record_id": out.get("record_id")}
             except Exception as exc:
@@ -163,6 +203,8 @@ def _handle_failure(s: Session, job: SpineJob, exc: Exception) -> dict:
         return {"job_id": job.id, "status": "pending", "retries": job.retries}
     job.status = "failed"
     job.finished_at = datetime.utcnow()
+    _enqueue_spine_webhook(s, job, event_type="job.completed",
+                           error=job.error)
     return {"job_id": job.id, "status": "failed", "retries": job.retries}
 
 

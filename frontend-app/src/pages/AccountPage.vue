@@ -4,10 +4,12 @@ import { changePassword, updateMe } from '../api/auth'
 import { asList, fmtDate, fmtNumber } from '../api/client'
 import { billingUsage, createApiKey, deleteApiKey, listApiKeys, updateApiKey } from '../api/settings'
 import { useAuthStore } from '../stores/auth'
+import { useToastStore } from '../stores/toast'
 import { useWorkspaceStore } from '../stores/workspace'
 import PageLoading from '../components/common/PageLoading.vue'
 
 const auth = useAuthStore()
+const toast = useToastStore()
 const workspace = useWorkspaceStore()
 const section = ref('profile')
 const apiKeys = ref<Record<string, any>[]>([])
@@ -17,7 +19,6 @@ const passwordForm = ref({ old_password: '', new_password: '', confirm_password:
 const keyForm = ref({ name: '', scopes: 'crawler:read,crawler:crawl' })
 const currentWorkspaceId = ref('')
 const loading = ref(false)
-const message = ref('')
 const error = ref('')
 
 const menu = [
@@ -38,7 +39,6 @@ function formatRole(role?: string) {
 
 async function guarded(fn: () => Promise<void>) {
   error.value = ''
-  message.value = ''
   try {
     await fn()
   } catch (err) {
@@ -80,7 +80,7 @@ async function logout() {
 async function saveProfile() {
   await guarded(async () => {
     auth.user = await updateMe(profileForm.value)
-    message.value = '资料已保存'
+    toast.success('资料已保存')
   })
 }
 
@@ -88,7 +88,7 @@ async function savePassword() {
   await guarded(async () => {
     await changePassword(passwordForm.value)
     passwordForm.value = { old_password: '', new_password: '', confirm_password: '' }
-    message.value = '密码已更新'
+    toast.success('密码已更新')
   })
 }
 
@@ -98,7 +98,11 @@ async function saveApiKey() {
     const data = await createApiKey({ name: keyForm.value.name, scopes })
     keyForm.value.name = ''
     await load()
-    message.value = data?.key ? `新密钥：${data.key}` : 'API Key 已创建'
+    if (data?.key) {
+      toast.show({ title: 'API Key 已创建', description: `新密钥：${data.key}`, tone: 'success', timeout: 0 })
+    } else {
+      toast.success('API Key 已创建')
+    }
   })
 }
 
@@ -128,7 +132,6 @@ onMounted(load)
     <div class="lead">账号</div>
     <div class="sub">个人资料 · 密码安全 · 接口密钥 · 用量 · 当前工作区</div>
     <UAlert v-if="error" color="error" variant="soft" :title="error" class="mb-4" />
-    <UAlert v-if="message" color="success" variant="soft" :title="message" class="mb-4" />
 
     <PageLoading v-if="loading && !auth.user" title="加载账号信息..." note="正在同步个人资料、工作区和接口密钥" />
 

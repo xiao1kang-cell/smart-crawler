@@ -444,9 +444,9 @@ class ProxyMiddleware:
                 kwargs["_proxy"] = handle.url
                 kwargs["_proxy_lease_token"] = handle.lease_token
                 return
-            proxy = None
-        else:
-            proxy = proxy_pool.get_proxy(tier, site=ctx.site.site)
+            # 租约容量满时，降级为非租约代理，避免把短暂饱和误判成
+            # "无可用代理" 直接失败；后续请求仍会走同一 tier / site 规则。
+        proxy = proxy_pool.get_proxy(tier, site=ctx.site.site)
         if proxy:
             kwargs["_proxy"] = proxy
             return

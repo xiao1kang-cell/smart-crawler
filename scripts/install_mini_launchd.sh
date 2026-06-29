@@ -2,8 +2,10 @@
 # Install launchd worker plists and per-worker env files on a Mac mini.
 #
 # Run on the mini after deploy_mini.sh has synced backend/, deploy/, and scripts/.
-# Defaults install files only; pass --load after DATABASE_URL/WORKSPACE_ALLOWLIST are
-# configured to bootstrap the launchd jobs.
+# Defaults install files only. Pass --load after DATABASE_URL/WORKSPACE_ALLOWLIST
+# are configured to bootstrap missing launchd jobs. --load is non-disruptive for
+# already-loaded workers; pass --restart explicitly after draining when plist/env
+# changes must take effect.
 set -euo pipefail
 
 APP="${APP:-/Users/solvea/smart-crawler}"
@@ -12,10 +14,33 @@ NODE_ID="${NODE_ID:?set NODE_ID, e.g. US-macmini1}"
 WORKER_PREFIX="${WORKER_PREFIX:-$NODE_ID}"
 WORKER_COUNT="${WORKER_COUNT:-4}"
 LOAD=0
+RESTART=0
 
-if [[ "${1:-}" == "--load" ]]; then
-  LOAD=1
-fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --load)
+      LOAD=1
+      ;;
+    --restart|--force-restart)
+      LOAD=1
+      RESTART=1
+      ;;
+    -h|--help)
+      cat <<EOF
+Usage: NODE_ID=US-macmini1 WORKER_COUNT=6 $0 [--load] [--restart]
+
+  --load      Bootstrap only missing launchd workers; keep running workers alive.
+  --restart   Bootout/bootstrap/kickstart workers. Drain jobs before using this.
+EOF
+      exit 0
+      ;;
+    *)
+      echo "unknown option: $1" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
 
 TEMPLATE="$APP/deploy/io.smartcrawler.worker.plist"
 LAUNCH_AGENTS="$USER_HOME/Library/LaunchAgents"
@@ -59,14 +84,29 @@ EOF
   xattr -c "$plist" >/dev/null 2>&1 || true
 
   if [[ "$LOAD" == "1" ]]; then
-    launchctl bootout "gui/$(id -u)/io.smartcrawler.worker-$n" >/dev/null 2>&1 || true
-    launchctl bootout "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
-    launchctl bootstrap "gui/$(id -u)" "$plist"
-    launchctl kickstart -k "gui/$(id -u)/io.smartcrawler.worker-$n"
+    domain="gui/$(id -u)"
+    service="$domain/io.smartcrawler.worker-$n"
+    if launchctl print "$service" >/dev/null 2>&1; then
+      if [[ "$RESTART" == "1" ]]; then
+        echo "restarting loaded worker io.smartcrawler.worker-$n"
+        launchctl bootout "$service" >/dev/null 2>&1 || true
+        launchctl bootout "$domain" "$plist" >/dev/null 2>&1 || true
+        launchctl bootstrap "$domain" "$plist"
+        launchctl kickstart -k "$service"
+      else
+        echo "worker io.smartcrawler.worker-$n already loaded; preserving running process. Use --restart after draining to apply plist/env changes."
+      fi
+    else
+      echo "bootstrapping missing worker io.smartcrawler.worker-$n"
+      launchctl bootstrap "$domain" "$plist"
+      launchctl kickstart "$service"
+    fi
   fi
 done
 
 echo "installed $WORKER_COUNT smart-crawler launchd worker plist(s) for $NODE_ID"
 if [[ "$LOAD" != "1" ]]; then
   echo "not loaded. Fill DATABASE_URL and WORKSPACE_ALLOWLIST in $USER_HOME/.smart-crawler-*.env, then rerun with --load."
+elif [[ "$RESTART" != "1" ]]; then
+  echo "--load completed without restarting already-loaded workers. Use --restart only after draining active jobs."
 fi

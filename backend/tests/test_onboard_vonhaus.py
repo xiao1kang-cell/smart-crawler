@@ -14,6 +14,7 @@ ever returned the caller can still process it (content field is always populated
 from __future__ import annotations
 
 import gzip
+import json
 
 import pytest
 
@@ -56,6 +57,49 @@ _PRODUCT_HTML = """<html>
 <span data-product-id="TRAY-123"></span>
 </body>
 </html>""" + " " * 5000
+
+_PRODUCT_HTML_JSONLD_PROMO = """<html>
+<head>
+<meta property="og:title" content="Garden Storage Box" />
+<meta property="product:price:amount" content="49.99" />
+<meta property="product:price:currency" content="GBP" />
+<meta property="og:image" content="https://cdn.vonhaus.com/storage.jpg" />
+<script type="application/ld+json">
+""" + json.dumps({
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+        {"@type": "ListItem", "position": 1, "name": "Home"},
+        {"@type": "ListItem", "position": 2, "name": "Garden"},
+        {"@type": "ListItem", "position": 3, "name": "Storage"},
+    ],
+}) + """
+</script>
+<script type="application/ld+json">
+""" + json.dumps({
+    "@context": "https://schema.org",
+    "@type": "Product",
+    "name": "Garden Storage Box",
+    "sku": "GARDEN-BOX",
+    "aggregateRating": {
+        "@type": "AggregateRating",
+        "ratingValue": "4.6",
+        "reviewCount": "42",
+    },
+    "offers": {
+        "@type": "Offer",
+        "price": "49.99",
+        "priceCurrency": "GBP",
+        "description": "Summer sale save 20% with free delivery",
+    },
+}) + """
+</script>
+</head>
+<body>
+<h1>Garden Storage Box</h1>
+<span class="promotion-badge">Bundle deal: buy 2 save 15%</span>
+</body>
+</html>"""
 
 _CATEGORY_HTML = """<html>
 <head>
@@ -290,3 +334,22 @@ def test_vonhaus_counter_minimum(monkeypatch):
 
     crawler.crawl()
     assert crawler.counter.api_calls >= 1
+
+
+def test_vonhaus_parse_product_collects_jsonld_category_and_promotions():
+    from app.crawlers.vonhaus import VonHausCrawler
+
+    row = VonHausCrawler(_site())._parse_product(
+        _PRODUCT_HTML_JSONLD_PROMO,
+        "https://www.vonhaus.com/vh_en/garden/storage/garden-storage-box",
+    )
+
+    assert row is not None
+    assert row["sku"] == "GARDEN-BOX"
+    assert row["category_path"] == "Garden/Storage"
+    assert row["ratings"] == 4.6
+    assert row["review_count"] == 42
+    assert row["has_free_shipping"] is True
+    assert row["attributes"]["free_shipping_label"] == "Free delivery"
+    assert "Bundle deal: buy 2 save 15%" in row["attributes"]["promotions"]
+    assert any("Summer sale save 20%" in item for item in row["attributes"]["promotions"])

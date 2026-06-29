@@ -21,7 +21,7 @@ from ..runner import enqueue
 from ..site_metrics import load_site_metrics
 from .routes import (require_user, _current_workspace, _require_dashboard_user,
                      _is_super_admin, _workspace_site_names, public_router,
-                     _user_from_token, _currency_for_site)
+                     _user_from_token, _currency_for_site, _load_hidden_sites)
 
 import logging
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ def _metrics_for_sites(db: Session, sites: list[str]) -> dict[str, dict]:
     if not site_codes:
         return {}
     out = {site: _empty_metrics() for site in site_codes}
-    rows = load_site_metrics(db, site_codes)
+    rows = load_site_metrics(db, site_codes, collect_missing=True)
     for site, row in rows.items():
         last_updated = row.get("last_product_updated")
         out[site] = {
@@ -258,6 +258,14 @@ def _tracking_facets(db: Session, allowed: list[str]) -> dict:
     return {"markets": markets, "brands": brands, "statuses": statuses}
 
 
+def _visible_tracking_sites(db: Session, workspace_id: int) -> list[str]:
+    allowed = _workspace_site_names(db, workspace_id)
+    hidden = _load_hidden_sites()
+    if hidden:
+        allowed = [site for site in allowed if site not in hidden]
+    return allowed
+
+
 def tracking_row(db: Session, s: Site, metrics: dict | None = None,
                  latest_job: CrawlJob | None = None) -> dict:
     m = metrics if metrics is not None else _metrics(db, s.site)
@@ -321,7 +329,7 @@ def list_tracking(
     db: Session = Depends(get_db),
 ):
     ws = _current_workspace(user, db, x_workspace_id)
-    allowed = _workspace_site_names(db, ws.id)
+    allowed = _visible_tracking_sites(db, ws.id)
     q = db.query(Site).filter(Site.site.in_(allowed))
     q = _apply_tracking_filters(q, search, market, brand, status,
                                 db=db, allowed=allowed)
@@ -353,7 +361,7 @@ def export_tracking(
 
     u = _user_from_token(db, token)
     ws = _current_workspace(u.username, db, str(workspace_id) if workspace_id else None)
-    allowed = _workspace_site_names(db, ws.id)
+    allowed = _visible_tracking_sites(db, ws.id)
     q = db.query(Site).filter(Site.site.in_(allowed))
     q = _apply_tracking_filters(q, search, market, brand, status,
                                 db=db, allowed=allowed)

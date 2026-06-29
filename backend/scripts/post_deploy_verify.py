@@ -16,6 +16,20 @@ BASE_URL = os.environ.get("SMARTCRAWLER_BASE_URL", "http://127.0.0.1:8077").rstr
 API_KEY = os.environ.get("SMARTCRAWLER_API_KEY") or os.environ.get("API_KEY") or ""
 ADMIN_USERNAME = os.environ.get("SMARTCRAWLER_ADMIN_USERNAME") or os.environ.get("ADMIN_USERNAME") or ""
 ADMIN_PASSWORD = os.environ.get("SMARTCRAWLER_ADMIN_PASSWORD") or os.environ.get("ADMIN_PASSWORD") or ""
+STRICT_AOSEN_ACCEPTANCE = os.environ.get("STRICT_AOSEN_ACCEPTANCE", "").lower() in {
+    "1", "true", "yes", "on",
+}
+SKIP_API_KEY_VERIFY = os.environ.get("SKIP_API_KEY_VERIFY", "").lower() in {
+    "1", "true", "yes", "on",
+}
+AOSEN_REQUIRED_TEMPLATES = {
+    "product_field_fixes",
+    "sku_targets",
+    "promotion_signals",
+    "sales_signals",
+    "review_history",
+}
+AOSEN_DEFERRED_SITES = {"vidaxl_us", "vidaxl_ca"}
 
 
 def parse_response_body(raw: str) -> Any:
@@ -126,10 +140,79 @@ def verify_admin_surface(token: str) -> list[Result]:
         site = sites[0]["site"]
         status, overview, _ = request("GET", f"/api/sites/{site}/overview", token=token, workspace_id=workspace_id)
         results.append(Result("site_overview", status == 200 and isinstance(overview, dict), f"{status} site={site}"))
+    results.extend(verify_aosen_surface(token))
+    return results
+
+
+def verify_aosen_surface(token: str) -> list[Result]:
+    results: list[Result] = []
+    status, acceptance, _ = request(
+        "GET",
+        "/api/admin/spine/acceptance/aosen/field-quality",
+        token=token,
+        timeout=60,
+    )
+    acceptance_summary = acceptance.get("summary") if isinstance(acceptance, dict) else None
+    acceptance_items = acceptance.get("items") if isinstance(acceptance, dict) else None
+    deferred_in_items = sorted(
+        {
+            str(item.get("site"))
+            for item in acceptance_items or []
+            if isinstance(item, dict) and str(item.get("site")) in AOSEN_DEFERRED_SITES
+        }
+    )
+    results.append(Result(
+        "aosen_field_quality_endpoint",
+        (
+            status == 200
+            and isinstance(acceptance_summary, dict)
+            and isinstance(acceptance_items, list)
+            and not deferred_in_items
+            and acceptance.get("final_acceptance_scope") == "production"
+        ) if isinstance(acceptance, dict) else False,
+        f"{status} sites={acceptance_summary.get('sites') if isinstance(acceptance_summary, dict) else 'n/a'} "
+        f"deferred_in_items={deferred_in_items}",
+    ))
+
+    status, action_plan, _ = request(
+        "GET",
+        "/api/admin/spine/acceptance/aosen/action-plan?template_limit=3",
+        token=token,
+        timeout=60,
+    )
+    summary = action_plan.get("summary") if isinstance(action_plan, dict) else None
+    templates = action_plan.get("templates") if isinstance(action_plan, dict) else None
+    template_keys = set(templates) if isinstance(templates, dict) else set()
+    missing_templates = sorted(AOSEN_REQUIRED_TEMPLATES.difference(template_keys))
+    results.append(Result(
+        "aosen_action_plan_endpoint",
+        (
+            status == 200
+            and isinstance(summary, dict)
+            and isinstance(templates, dict)
+            and not missing_templates
+            and action_plan.get("final_acceptance_scope") == "production"
+        ) if isinstance(action_plan, dict) else False,
+        f"{status} status={action_plan.get('status') if isinstance(action_plan, dict) else 'n/a'} "
+        f"sites={summary.get('sites') if isinstance(summary, dict) else 'n/a'} "
+        f"missing_templates={missing_templates}",
+    ))
+    if status == 200 and isinstance(action_plan, dict):
+        ready = action_plan.get("status") == "ready"
+        results.append(Result(
+            "aosen_acceptance_ready",
+            ready or not STRICT_AOSEN_ACCEPTANCE,
+            (
+                f"status={action_plan.get('status')} strict={STRICT_AOSEN_ACCEPTANCE} "
+                f"summary={summary if isinstance(summary, dict) else {}}"
+            ),
+        ))
     return results
 
 
 def verify_api_key_surface() -> list[Result]:
+    if SKIP_API_KEY_VERIFY:
+        return [Result("api_key", True, "skipped (SKIP_API_KEY_VERIFY=1)")]
     if not API_KEY:
         return [Result("api_key", False, "SMARTCRAWLER_API_KEY/API_KEY not set")]
     results: list[Result] = []

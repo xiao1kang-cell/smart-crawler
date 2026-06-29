@@ -75,6 +75,7 @@ MAX_LIST_PAGES = int(os.environ.get("CDISCOUNT_MAX_LIST_PAGES", "0"))
 DISCOVERY_TARGET = int(os.environ.get("CDISCOUNT_DISCOVERY_TARGET", "0"))
 # 单 PDP 连续失败上限 → 重新握手 Baleen
 PDP_FAIL_RESET = int(os.environ.get("CDISCOUNT_PDP_FAIL_RESET", "5"))
+PROGRESS_EVERY = int(os.environ.get("CDISCOUNT_PROGRESS_EVERY", "50"))
 
 _HOME = "https://www.cdiscount.com/"
 _BALEEN_STORE_RE = re.compile(r"__blnChallengeStore\s*=\s*(\{.*?\});")
@@ -152,11 +153,48 @@ class CdiscountCrawler(BaseCrawler):
     def __init__(self, site):
         super().__init__(site)
         self.base = site.url.rstrip("/")
+        config = site.crawler_config if isinstance(site.crawler_config, dict) else {}
         # CDiscount 无公开全量 sitemap：limit 只控制详情解析量，不参与分母。
-        self.detail_limit = self._resolve_limit(
-            DEFAULT_LIMIT, honor_persisted=False)
+        # 生产环境通过站点 crawler_config 控制，避免默认全站无界扫描导致 worker
+        # 长时间运行但 UI 无进度。
+        self.detail_limit = self._cfg_int(
+            config, ("max_products", "detail_limit", "limit"), DEFAULT_LIMIT)
+        if self.detail_limit <= 0:
+            self.detail_limit = DEFAULT_LIMIT
+        self.max_elapsed_sec = self._cfg_float(
+            config, ("max_elapsed_sec", "max_runtime_sec"), MAX_ELAPSED_SEC)
+        self.pages_per_category = self._cfg_int(
+            config, ("pages_per_category", "pages_per_cat"), PAGES_PER_CATEGORY)
+        self.max_list_pages = self._cfg_int(
+            config, ("max_list_pages",), MAX_LIST_PAGES)
+        self.discovery_target = self._cfg_int(
+            config, ("discovery_target",), DISCOVERY_TARGET)
+        self.progress_every = max(1, self._cfg_int(
+            config, ("progress_every",), PROGRESS_EVERY))
         # Baleen cookie jar：key=name, value=value；握手后逐请求透传 Cookie 头
         self._baleen_cookies: dict[str, str] = {}
+
+    @staticmethod
+    def _cfg_int(config: dict, keys: tuple[str, ...], default: int) -> int:
+        for key in keys:
+            value = config.get(key)
+            if value not in (None, ""):
+                try:
+                    return max(0, int(value))
+                except (TypeError, ValueError):
+                    continue
+        return max(0, int(default))
+
+    @staticmethod
+    def _cfg_float(config: dict, keys: tuple[str, ...], default: float) -> float:
+        for key in keys:
+            value = config.get(key)
+            if value not in (None, ""):
+                try:
+                    return max(0.0, float(value))
+                except (TypeError, ValueError):
+                    continue
+        return max(0.0, float(default))
 
     # ------------------------------------------------------------------
     # headers
@@ -287,16 +325,21 @@ class CdiscountCrawler(BaseCrawler):
         result.notes.append(
             f"商品 URL 发现池：{len(product_urls)} 个"
             f"（详情解析上限 {self.detail_limit}）")
-        result.total_product_count = len(product_urls)
+        target_total = min(len(product_urls), self.detail_limit)
+        result.total_product_count = target_total
+        self.persist_job_progress(
+            products_count=0,
+            total_product_count=target_total,
+        )
 
         # Step 3: enrich —— 逐 PDP 解析 JSON-LD
         seen: set[str] = set()
         pdp_fails = 0
         ok = 0
         for idx, url in enumerate(product_urls, 1):
-            if MAX_ELAPSED_SEC > 0 and time.monotonic() - started >= MAX_ELAPSED_SEC:
+            if self.max_elapsed_sec > 0 and time.monotonic() - started >= self.max_elapsed_sec:
                 result.notes.append(
-                    f"达到 CDISCOUNT_MAX_ELAPSED_SEC={MAX_ELAPSED_SEC:g}s，"
+                    f"达到 CDISCOUNT_MAX_ELAPSED_SEC={self.max_elapsed_sec:g}s，"
                     f"提前返回已解析结果（ok={ok}, pdp_fails={pdp_fails}）")
                 break
             if len(result.products) >= self.detail_limit:
@@ -332,21 +375,33 @@ class CdiscountCrawler(BaseCrawler):
                     result.notes.append(
                         f"  · 进度 {ok} / 详情上限 {self.detail_limit}"
                         f"（已尝试 {idx}）")
+                if ok == 1 or ok % self.progress_every == 0:
+                    self.persist_job_progress(
+                        products_count=ok,
+                        total_product_count=target_total,
+                    )
             self.sleep()
 
+        self.persist_job_progress(
+            products_count=len(result.products),
+            total_product_count=target_total,
+        )
         result.notes.append(
-            f"采集 {len(result.products)} 商品（PDP 失败累计 {pdp_fails}）")
-        if len(result.products) < len(product_urls):
+            f"采集 {len(result.products)} / {target_total} 个目标商品"
+            f"（发现池 {len(product_urls)}，PDP 失败累计 {pdp_fails}）")
+        if len(result.products) < target_total:
             result.coverage_complete = False
             result.coverage_code = "incomplete_detail_parse"
             result.coverage_stage = "fetch"
             result.coverage_reason = (
                 f"CDiscount 已发现 {len(product_urls)} 个商品 URL，"
-                f"本次只完成 {len(result.products)} 个详情解析"
+                f"本次目标 {target_total} 个详情，"
+                f"只完成 {len(result.products)} 个详情解析"
             )
             result.coverage_retryable = True
             result.coverage_suggested_action = (
-                "移除详情解析上限或继续重跑，直到本次发现池全部入库"
+                "放宽 max_elapsed_sec/job_timeout_sec 后继续重跑，"
+                "直到本次目标详情全部入库"
             )
         return result
 
@@ -365,14 +420,14 @@ class CdiscountCrawler(BaseCrawler):
 
         list_queue: list[str] = list(seed_lists)
         list_seen: set[str] = set()
-        # DISCOVERY_TARGET 仅用于调试，默认 0 表示把可达列表池扫完。
-        target = DISCOVERY_TARGET
+        # discovery_target 仅用于调试/保护，默认 0 表示把可达列表池扫完。
+        target = self.discovery_target
         scanned_lists = 0
 
         while (
             list_queue
             and (target <= 0 or len(products) < target)
-            and (MAX_LIST_PAGES <= 0 or scanned_lists < MAX_LIST_PAGES)
+            and (self.max_list_pages <= 0 or scanned_lists < self.max_list_pages)
         ):
             list_path = list_queue.pop(0)
             if list_path in list_seen:
@@ -388,7 +443,7 @@ class CdiscountCrawler(BaseCrawler):
             while True:
                 if target > 0 and len(products) >= target:
                     break
-                if PAGES_PER_CATEGORY > 0 and page > PAGES_PER_CATEGORY:
+                if self.pages_per_category > 0 and page > self.pages_per_category:
                     break
                 url = full if page == 1 else f"{full}?page={page}"
                 try:
@@ -440,6 +495,10 @@ class CdiscountCrawler(BaseCrawler):
             if scanned_lists % 20 == 0:
                 result.notes.append(
                     f"  · 已扫 {scanned_lists} 列表页 → {len(products)} 商品 URL")
+                self.persist_job_progress(
+                    products_count=0,
+                    total_product_count=len(products),
+                )
 
         result.notes.append(
             f"discover 阶段：扫 {scanned_lists} 列表页 → "

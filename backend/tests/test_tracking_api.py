@@ -48,6 +48,29 @@ def test_tracking_list_excludes_configured_hidden_sites():
     assert "songmics_us" in listed
 
 
+def test_tracking_list_excludes_config_hidden_even_if_workspace_link_is_stale():
+    init_db()
+    from app.db import SessionLocal
+    from app.models import Workspace, WorkspaceSite
+
+    s = SessionLocal()
+    try:
+        ws = s.query(Workspace).filter_by(slug="internal").one()
+        link = (s.query(WorkspaceSite)
+                .filter_by(workspace_id=ws.id, site="walmart_us")
+                .one())
+        link.enabled = True
+        link.hidden = False
+        s.commit()
+    finally:
+        s.close()
+
+    client = TestClient(app)
+    body = client.get("/api/tracking?page_size=200", headers=_admin_headers()).json()
+    listed = {item["site"] for item in body["items"]}
+    assert "walmart_us" not in listed
+
+
 def test_seeded_sites_are_marked_as_yaml_source():
     init_db()
     from app.db import SessionLocal

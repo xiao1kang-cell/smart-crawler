@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
 from app.models import Product
+from app import pipeline
 from app.pipeline import normalize, to_price, upsert_products
 from app.runner import _detect_promotions
 
@@ -253,6 +254,111 @@ def test_detect_promotions_uses_explicit_offer_without_product_discount():
     assert rows[0].end_time.isoformat() == "2026-06-30T00:00:00"
 
 
+def test_detect_promotions_from_free_shipping_flag():
+    db = _session()
+    db.add(Product(site="x", sku="A", title="A", sale_price=100.0,
+                   original_price=100.0, status="on_sale",
+                   has_free_shipping=True))
+    db.commit()
+
+    n = _detect_promotions(db, "x")
+    db.flush()
+
+    from app.models import Promotion
+    row = db.query(Promotion).filter(Promotion.site == "x").one()
+    assert n == 1
+    assert row.promotion_type == "free_shipping"
+    assert row.promotion_name == "Free shipping"
+
+
+def test_detect_promotions_from_multibuy_bundle_text():
+    db = _session()
+    db.add(Product(site="x", sku="A", title="A", sale_price=100.0,
+                   original_price=100.0, status="on_sale",
+                   attributes={"promotions": ["Multi-buy bundle: buy 2 save 15%"]}))
+    db.commit()
+
+    n = _detect_promotions(db, "x")
+    db.flush()
+
+    from app.models import Promotion
+    row = db.query(Promotion).filter(Promotion.site == "x").one()
+    assert n == 1
+    assert row.promotion_type == "bundle"
+    assert row.discount_percent == 15
+
+
+def test_detect_promotions_expands_multiple_string_labels_and_free_shipping():
+    db = _session()
+    db.add(Product(
+        site="x", sku="A", title="A", sale_price=100.0,
+        original_price=100.0, status="on_sale",
+        has_free_shipping=True,
+        attributes={
+            "promotions": [
+                "Save 10% with code HOME10",
+                "Multi-buy bundle: buy 2 save 15%",
+            ],
+        },
+    ))
+    db.commit()
+
+    n = _detect_promotions(db, "x")
+    db.flush()
+
+    from app.models import Promotion
+    rows = (db.query(Promotion)
+            .filter(Promotion.site == "x", Promotion.sku == "A")
+            .order_by(Promotion.promotion_type, Promotion.promotion_name)
+            .all())
+    assert n == 3
+    assert {
+        (row.promotion_type, row.promotion_name, row.discount_percent)
+        for row in rows
+    } == {
+        ("bundle", "Multi-buy bundle: buy 2 save 15%", 15),
+        ("coupon", "Save 10% with code HOME10", 10),
+        ("free_shipping", "Free shipping", None),
+    }
+
+
+def test_detect_promotions_dedupes_free_shipping_flag_and_label():
+    db = _session()
+    db.add(Product(
+        site="x", sku="A", title="A", sale_price=100.0,
+        original_price=100.0, status="on_sale",
+        has_free_shipping=True,
+        attributes={"promotions": ["Free shipping on orders over $99"]},
+    ))
+    db.commit()
+
+    n = _detect_promotions(db, "x")
+    db.flush()
+
+    from app.models import Promotion
+    rows = db.query(Promotion).filter(Promotion.site == "x", Promotion.sku == "A").all()
+    assert n == 1
+    assert len(rows) == 1
+    assert rows[0].promotion_type == "free_shipping"
+    assert rows[0].promotion_name == "Free shipping on orders over $99"
+
+
+def test_detect_promotions_from_localized_free_delivery_text():
+    db = _session()
+    db.add(Product(site="x", sku="A", title="A", sale_price=100.0,
+                   original_price=100.0, status="on_sale",
+                   attributes={"delivery_label": "Livraison gratuite dès 50€"}))
+    db.commit()
+
+    n = _detect_promotions(db, "x")
+    db.flush()
+
+    from app.models import Promotion
+    row = db.query(Promotion).filter(Promotion.site == "x").one()
+    assert n == 1
+    assert row.promotion_type == "free_shipping"
+
+
 def test_upsert_preserves_better_existing_title_from_weak_update():
     db = _session()
     upsert_products(db, "x", [{
@@ -277,3 +383,33 @@ def test_upsert_preserves_better_existing_title_from_weak_update():
     assert row.title == "Premium Walnut Storage Cabinet with Doors"
     assert row.sale_price == 1399.0
     assert row.original_price is None
+
+
+def test_upsert_products_chunks_existing_sku_lookup(monkeypatch):
+    db = _session()
+    monkeypatch.setattr(pipeline, "_EXISTING_PRODUCT_LOOKUP_CHUNK_SIZE", 2)
+    db.add_all([
+        Product(site="x", sku="SKU-1", title="Old 1",
+                product_url="https://example.com/old-1"),
+        Product(site="x", sku="SKU-3", title="Old 3",
+                product_url="https://example.com/old-3"),
+    ])
+    db.commit()
+
+    stats = upsert_products(db, "x", [
+        {"site": "x", "sku": f"SKU-{idx}", "title": f"New {idx}",
+         "product_url": f"https://example.com/new-{idx}"}
+        for idx in range(1, 6)
+    ])
+    db.commit()
+
+    assert stats["updated"] == 2
+    assert stats["inserted"] == 3
+    rows = {p.sku: p.title for p in db.query(Product).filter(Product.site == "x")}
+    assert rows == {
+        "SKU-1": "New 1",
+        "SKU-2": "New 2",
+        "SKU-3": "New 3",
+        "SKU-4": "New 4",
+        "SKU-5": "New 5",
+    }

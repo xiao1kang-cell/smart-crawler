@@ -14,7 +14,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, case, exists, false, or_, text, update
+from sqlalchemy import and_, case, exists, false, func, or_, text, update
 
 from .antiban import BlockedError, in_cooldown, set_cooldown
 from .billing import record_usage
@@ -42,24 +42,30 @@ _PROMO_KEYWORDS = re.compile(
     r"\b("
     r"sale|deal|discount|promo|promotion|coupon|clearance|save|off|"
     r"black\s*friday|cyber\s*monday|flash|limited|"
+    r"bundle|multibuy|multi[-\s]?buy|buy\s+\d|gift|free\s+shipping|"
+    r"free\s+delivery|delivery\s+included|shipping\s+included|"
     r"rabatt|aktion|angebot|gutschein|"
-    r"remise|soldes|réduction|reduction|"
+    r"versandkostenfrei|kostenloser\s+versand|"
+    r"remise|soldes|réduction|reduction|livraison\s+gratuite|"
     r"sconto|offerta|descuento|oferta|cupon|cupón|"
-    r"korting|aanbieding|promoção|promocao|desconto|"
+    r"spedizione\s+gratuita|env[ií]o\s+gratis|"
+    r"korting|aanbieding|gratis\s+verzending|promoção|promocao|desconto|"
     r"rabat|zniżka|znizka|wyprzedaż|wyprzedaz|"
-    r"特价|促销|优惠|折扣|券"
+    r"darmowa\s+dostawa|特价|促销|优惠|折扣|券|包邮|免运费"
     r")\b",
     re.IGNORECASE,
 )
 _PROMO_ATTR_KEY = re.compile(
     r"(promo|promotion|coupon|discount|deal|sale|offer|badge|label|"
-    r"savings|saving)",
+    r"savings|saving|bundle|shipping|delivery|campaign|couponcode|"
+    r"coupon_code|voucher|markdown|was_price|rrp|msrp)",
     re.IGNORECASE,
 )
 _PERCENT_DISCOUNT_RE = re.compile(r"(\d{1,2}(?:\.\d+)?)\s*%\s*(?:off|discount|save)?", re.I)
 _PROMO_NAME_KEYS = (
     "promotion_name", "promo_name", "campaign_name", "offer_name",
     "coupon_name", "deal_name", "sale_name", "badge", "label",
+    "shipping_label", "delivery_label", "free_shipping_label",
 )
 _PROMO_TYPE_KEYS = (
     "promotion_type", "promo_type", "offer_type", "coupon_type",
@@ -87,6 +93,7 @@ AUTO_DEDUP_TRIGGERS = ("scheduled", "daily_refresh", "daily_delta")
 DEFAULT_PLATFORM_RUNNING_LIMITS = {"vidaxl": 3}
 NON_FATAL_PARTIAL_FAILURE_CODES = {
     "anti_bot_challenge",
+    "incomplete_detail_parse",
     "network_timeout",
     "http_429",
     "parse_no_jsonld",
@@ -96,6 +103,28 @@ NON_FATAL_PARTIAL_SITE_MIN_PRODUCTS = {
     "cdiscount_fr": 40,
 }
 NON_FATAL_PARTIAL_MIN_SUCCESS_RATE = 95.0
+AUTO_FAILED_PRODUCT_RETRY_LIMIT = int(os.environ.get(
+    "AUTO_FAILED_PRODUCT_RETRY_LIMIT", "500"))
+AUTO_FAILED_PRODUCT_RETRY_MAX_GAP = int(os.environ.get(
+    "AUTO_FAILED_PRODUCT_RETRY_MAX_GAP", "1000"))
+AUTO_FAILED_PRODUCT_RETRY_CHAIN_MAX = int(os.environ.get(
+    "AUTO_FAILED_PRODUCT_RETRY_CHAIN_MAX", "20"))
+AUTO_JOB_RETRY_TRIGGER = os.environ.get("AUTO_JOB_RETRY_TRIGGER", "admin_retry")
+AUTO_JOB_RETRY_MAX_PER_SITE_DAY = int(os.environ.get(
+    "AUTO_JOB_RETRY_MAX_PER_SITE_DAY", "2"))
+AUTO_JOB_RETRY_CODES = tuple(
+    code.strip() for code in os.environ.get(
+        "AUTO_JOB_RETRY_CODES",
+        "job_timeout,worker_interrupted,queue_stalled,resource_exhausted,"
+        "proxy_unavailable,network_timeout,http_429,http_5xx,anti_bot_challenge",
+    ).split(",")
+    if code.strip()
+)
+FAILED_PRODUCT_RETRY_NODES = tuple(
+    node.strip() for node in os.environ.get(
+        "FAILED_PRODUCT_RETRY_NODES", "nas").split(",")
+    if node.strip()
+)
 
 
 class FailedProductRetryError(RuntimeError):
@@ -103,6 +132,139 @@ class FailedProductRetryError(RuntimeError):
         super().__init__(info.detail)
         self.info = info
         self.status = status
+
+
+def _auto_enqueue_job_retry(s, job: CrawlJob, *, reason_code: str | None) -> int | None:
+    """Queue a bounded whole-site retry for transient infra failures."""
+    if not job or not job.site:
+        return None
+    code = (reason_code or job.failure_code or "").strip()
+    if code not in AUTO_JOB_RETRY_CODES:
+        return None
+    retry_trigger = (
+        FAILED_PRODUCT_RETRY_TRIGGER
+        if job.trigger == FAILED_PRODUCT_RETRY_TRIGGER
+        else AUTO_JOB_RETRY_TRIGGER
+    )
+    now = datetime.utcnow()
+    day_start = (job.created_at or now).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+    source_marker = f"[auto_job_retry] source_job={job.id} code={code}"
+
+    if getattr(getattr(s, "bind", None), "dialect", None) is not None:
+        if s.bind.dialect.name == "postgresql":
+            s.execute(
+                text("select pg_advisory_xact_lock(hashtext(:lock_key))"),
+                {"lock_key": f"crawl-auto-retry:{job.id}:{code}"},
+            )
+
+    existing_source_retry = (
+        s.query(CrawlJob)
+        .filter(
+            CrawlJob.site == job.site,
+            CrawlJob.id != job.id,
+            CrawlJob.created_at >= day_start,
+            CrawlJob.created_at < day_end,
+            CrawlJob.suggested_action == source_marker,
+        )
+        .order_by(CrawlJob.id.desc())
+        .first()
+    )
+    if existing_source_retry is not None:
+        job.suggested_action = (
+            f"系统已为源任务 #{job.id} 创建过自动重跑任务 "
+            f"#{existing_source_retry.id}，未重复创建。"
+        )
+        return existing_source_retry.id
+
+    newer_success_q = (
+        s.query(CrawlJob)
+        .filter(
+            CrawlJob.site == job.site,
+            CrawlJob.id != job.id,
+            CrawlJob.status == "success",
+            CrawlJob.created_at >= day_start,
+            CrawlJob.created_at < day_end,
+        )
+    )
+    if job.created_at is not None:
+        newer_success_q = newer_success_q.filter(
+            CrawlJob.created_at >= job.created_at)
+    newer_success = newer_success_q.order_by(CrawlJob.id.desc()).first()
+    if newer_success is not None:
+        job.suggested_action = (
+            f"系统检测到同站点当天已有更新成功任务 #{newer_success.id}，"
+            "未再创建自动整站重跑。"
+        )
+        return newer_success.id
+
+    existing = (
+        s.query(CrawlJob)
+        .filter(
+            CrawlJob.site == job.site,
+            CrawlJob.id != job.id,
+            CrawlJob.status.in_(("pending", "running")),
+        )
+        .order_by(CrawlJob.id.desc())
+        .first()
+    )
+    if existing is not None:
+        job.suggested_action = (
+            f"系统已检测到同站点任务 #{existing.id}"
+            f"（{existing.status}），未重复创建自动重跑。"
+        )
+        return existing.id
+
+    retries_today = (
+        s.query(CrawlJob.id)
+        .filter(
+            CrawlJob.site == job.site,
+            CrawlJob.created_at >= day_start,
+            CrawlJob.created_at < day_end,
+            CrawlJob.suggested_action.like("[auto_job_retry]%"),
+        )
+        .count()
+    )
+    if retries_today >= max(0, AUTO_JOB_RETRY_MAX_PER_SITE_DAY):
+        job.suggested_action = (
+            f"系统检测到 {code}，但 {job.site} 当日自动整站重跑已达到上限 "
+            f"{AUTO_JOB_RETRY_MAX_PER_SITE_DAY} 次；请人工确认后重跑。"
+        )
+        return None
+
+    retry_job = CrawlJob(
+        site=job.site,
+        status="pending",
+        trigger=retry_trigger,
+        created_at=now,
+        requested_by_workspace_id=job.requested_by_workspace_id,
+        requested_by_user_id=job.requested_by_user_id,
+        suggested_action=source_marker,
+    )
+    s.add(retry_job)
+    s.flush()
+    _enqueue_crawl_webhook(s, retry_job, event_type="job.triggered")
+    job.suggested_action = (
+        f"系统检测到 {code}，已自动创建整站重跑任务 #{retry_job.id}。"
+    )
+    return retry_job.id
+
+
+def _utc_day_window(value: datetime | None) -> tuple[datetime, datetime]:
+    """Return the UTC day window for a UTC-naive DB timestamp."""
+    base = value or datetime.utcnow()
+    start = base.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start, start + timedelta(days=1)
+
+
+def _today_crawl_url_predicate(start: datetime, end: datetime):
+    return or_(
+        and_(CrawlUrl.last_fetched_at >= start, CrawlUrl.last_fetched_at < end),
+        and_(CrawlUrl.last_fetched_at.is_(None),
+             CrawlUrl.first_seen_at >= start,
+             CrawlUrl.first_seen_at < end),
+    )
 
 
 def _platform_running_limits() -> dict[str, int]:
@@ -150,6 +312,42 @@ def _platform_limit_reached(s, site: Site | None) -> bool:
     return running >= limit
 
 
+def _platforms_at_running_limit(s) -> set[str]:
+    limits = _platform_running_limits()
+    if not limits:
+        return set()
+    if getattr(getattr(s, "bind", None), "dialect", None) is not None:
+        if s.bind.dialect.name == "postgresql":
+            for platform in sorted(limits):
+                s.execute(
+                    text("select pg_advisory_xact_lock(hashtext(:lock_key))"),
+                    {"lock_key": f"crawl-platform:{platform}"},
+                )
+    rows = (
+        s.query(func.lower(Site.platform), func.count(CrawlJob.id))
+        .join(Site, Site.site == CrawlJob.site)
+        .filter(CrawlJob.status == "running",
+                func.lower(Site.platform).in_(tuple(limits)))
+        .group_by(func.lower(Site.platform))
+        .all()
+    )
+    return {
+        platform for platform, running in rows
+        if platform and int(running or 0) >= limits.get(platform, 0)
+    }
+
+
+def _apply_platform_limit_filter(query, s):
+    over_limit = _platforms_at_running_limit(s)
+    if not over_limit:
+        return query
+    return (
+        query.join(Site, Site.site == CrawlJob.site)
+        .filter(or_(Site.platform.is_(None),
+                    ~func.lower(Site.platform).in_(tuple(over_limit))))
+    )
+
+
 def enqueue(site_name: str, trigger: str = "manual",
             requested_by_workspace_id: int | None = None,
             requested_by_user_id: int | None = None) -> int | None:
@@ -178,6 +376,20 @@ def enqueue(site_name: str, trigger: str = "manual",
         preflight = crawl_preflight_issue(site, trigger=trigger, session=s)
         if preflight is not None:
             _skip_job(s, job, preflight)
+        elif (
+            site.track_status == "error"
+            and trigger != FAILED_PRODUCT_RETRY_TRIGGER
+        ):
+            site.track_status = "tracking"
+        _enqueue_crawl_webhook(s, job, event_type="job.triggered")
+        if preflight is not None:
+            _enqueue_crawl_webhook(
+                s,
+                job,
+                event_type="job.completed",
+                error=preflight.detail,
+                result={"failure_code": preflight.code},
+            )
         return job.id
 
 
@@ -391,8 +603,13 @@ def assign_pending_jobs(distributor_id: str,
                 node for node in clean_nodes
                 if node_caps.get(node) is None or assigned_counts[node] < node_caps[node]
             )
+            if job.trigger == FAILED_PRODUCT_RETRY_TRIGGER and FAILED_PRODUCT_RETRY_NODES:
+                eligible_nodes = tuple(
+                    node for node in eligible_nodes
+                    if node in FAILED_PRODUCT_RETRY_NODES
+                )
             if not eligible_nodes:
-                break
+                continue
             node = min(
                 eligible_nodes,
                 key=lambda item: (
@@ -440,6 +657,7 @@ def claim_job(worker_id: str,
                 assigned_node=assigned_node,
                 assigned_only=assigned_only,
             )
+            query = _apply_platform_limit_filter(query, s)
             high_priority_touched_at = case(
                 (CrawlJob.trigger.in_(HIGH_PRIORITY_TRIGGERS), CrawlJob.created_at),
                 else_=datetime(1970, 1, 1),
@@ -454,8 +672,6 @@ def claim_job(worker_id: str,
                 return None
             for job in candidates:
                 site = s.query(Site).filter(Site.site == job.site).first()
-                if _platform_limit_reached(s, site):
-                    continue
                 preflight = crawl_preflight_issue(site, trigger=job.trigger,
                                                   session=s)
                 if preflight is not None:
@@ -509,19 +725,28 @@ def _crawl_failed_product_retry(crawler, job_id: int, site_name: str):
         raise FailedProductRetryError(info, status="failed")
 
     with session_scope() as s:
+        job = s.get(CrawlJob, job_id)
         now = datetime.utcnow()
+        retry_start, retry_end = _utc_day_window(job.created_at if job else None)
         limit = _failed_product_retry_limit(crawler)
         max_attempts = _failed_product_retry_max_attempts(crawler)
         rows = (s.query(CrawlUrl)
                 .filter(CrawlUrl.site == site_name,
                         CrawlUrl.kind == "product",
+                        CrawlUrl.url.isnot(None),
+                        _today_crawl_url_predicate(retry_start, retry_end),
                         CrawlUrl.attempts < max_attempts,
+                        or_(CrawlUrl.retryable.is_(None),
+                            CrawlUrl.retryable.is_(True)),
                         or_(CrawlUrl.next_retry_at.is_(None),
                             CrawlUrl.next_retry_at <= now))
                 .filter(or_(
                     and_(CrawlUrl.status == "pending",
                          CrawlUrl.priority <= 10),
                     CrawlUrl.status == "failed",
+                    CrawlUrl.status == "blocked",
+                    and_(CrawlUrl.status == "fetched",
+                         CrawlUrl.failure_code.isnot(None)),
                 ))
                 .order_by(CrawlUrl.priority.asc(),
                           CrawlUrl.attempts.asc(),
@@ -539,6 +764,120 @@ def _crawl_failed_product_retry(crawler, job_id: int, site_name: str):
         )
         raise FailedProductRetryError(info, status="skipped")
     return crawler.crawl_failed_products(urls)
+
+
+def _auto_enqueue_failed_product_retry(
+    s,
+    *,
+    job: CrawlJob,
+    crawler,
+) -> tuple[int | None, int]:
+    """Queue one URL-level retry for a retryable partial job.
+
+    The retry job itself never schedules another retry here; this keeps auto
+    recovery bounded and makes the follow-up visible in the normal job list.
+    """
+    if not hasattr(crawler, "crawl_failed_products"):
+        return None, 0
+    if job.trigger == FAILED_PRODUCT_RETRY_TRIGGER:
+        if job.status not in {"success", "partial"} or job.retryable is False:
+            return None, 0
+        chain_max = max(0, AUTO_FAILED_PRODUCT_RETRY_CHAIN_MAX)
+        if chain_max <= 0:
+            return None, 0
+        chain_cutoff = datetime.utcnow() - timedelta(days=1)
+        chain_count = (
+            s.query(CrawlJob.id)
+            .filter(
+                CrawlJob.site == job.site,
+                CrawlJob.trigger == FAILED_PRODUCT_RETRY_TRIGGER,
+                CrawlJob.created_at >= chain_cutoff,
+            )
+            .count()
+        )
+        if chain_count >= chain_max:
+            return None, 0
+    else:
+        if job.status != "partial" or job.retryable is False:
+            return None, 0
+        produced = int(job.products_count or 0)
+        total = int(job.total_product_count or 0)
+        gap = max(0, total - produced)
+        if total > 0 and gap > AUTO_FAILED_PRODUCT_RETRY_MAX_GAP:
+            return None, 0
+
+    existing = (
+        s.query(CrawlJob)
+        .filter(
+            CrawlJob.site == job.site,
+            CrawlJob.trigger == FAILED_PRODUCT_RETRY_TRIGGER,
+            CrawlJob.status.in_(("pending", "running")),
+        )
+        .order_by(CrawlJob.id.desc())
+        .first()
+    )
+    if existing is not None:
+        return existing.id, 0
+
+    now = datetime.utcnow()
+    retry_start, retry_end = _utc_day_window(job.created_at)
+    limit = max(1, min(AUTO_FAILED_PRODUCT_RETRY_LIMIT, 2000))
+    max_attempts = _failed_product_retry_max_attempts(crawler)
+    candidates = (
+        s.query(CrawlUrl)
+        .filter(
+            CrawlUrl.site == job.site,
+            CrawlUrl.kind == "product",
+            CrawlUrl.url.isnot(None),
+            _today_crawl_url_predicate(retry_start, retry_end),
+            CrawlUrl.attempts < max_attempts,
+            or_(CrawlUrl.retryable.is_(None), CrawlUrl.retryable.is_(True)),
+            or_(CrawlUrl.next_retry_at.is_(None), CrawlUrl.next_retry_at <= now),
+            or_(
+                and_(CrawlUrl.status == "pending",
+                     CrawlUrl.priority <= 10),
+                CrawlUrl.status.in_(("failed", "blocked")),
+                and_(CrawlUrl.status == "fetched",
+                     CrawlUrl.failure_code.isnot(None)),
+            ),
+        )
+        .order_by(
+            CrawlUrl.attempts.asc(),
+            CrawlUrl.last_fetched_at.asc().nullsfirst(),
+            CrawlUrl.id.asc(),
+        )
+        .limit(limit)
+        .all()
+    )
+    if not candidates:
+        return None, 0
+
+    for row in candidates:
+        row.status = "pending"
+        row.next_retry_at = None
+        row.failure_code = None
+        row.failure_stage = None
+        row.failure_detail = None
+        row.retryable = None
+        row.last_seen_at = now
+        row.priority = min(int(row.priority or 100), 10)
+
+    retry_job = CrawlJob(
+        site=job.site,
+        status="pending",
+        trigger=FAILED_PRODUCT_RETRY_TRIGGER,
+        created_at=now,
+        requested_by_workspace_id=job.requested_by_workspace_id,
+        requested_by_user_id=job.requested_by_user_id,
+    )
+    s.add(retry_job)
+    s.flush()
+    _enqueue_crawl_webhook(s, retry_job, event_type="job.triggered")
+    job.suggested_action = (
+        f"已自动创建失败商品补抓任务 #{retry_job.id}，"
+        f"本轮选择 {len(candidates)} 个失败 URL。"
+    )
+    return retry_job.id, len(candidates)
 
 
 def _record_crawl_usage(*, workspace_id, products_count, duration_sec,
@@ -564,6 +903,49 @@ def _record_crawl_usage(*, workspace_id, products_count, duration_sec,
         pass
 
 
+def _enqueue_crawl_webhook(s, job: CrawlJob | None, *,
+                           event_type: str,
+                           result: dict | None = None,
+                           error: str | None = None) -> None:
+    if job is None:
+        return
+    try:
+        from .webhooks import enqueue_delivery
+
+        payload = {
+            "site": job.site,
+            "trigger": job.trigger,
+            "products_count": job.products_count or 0,
+            "total_product_count": job.total_product_count,
+            "new_count": job.new_count or 0,
+            "promotion_count": job.promotion_count or 0,
+            "success_rate": job.success_rate,
+            "duration_sec": job.duration_sec,
+            "failure_code": job.failure_code,
+            "failure_stage": job.failure_stage,
+            "retryable": job.retryable,
+            "suggested_action": job.suggested_action,
+        }
+        if result:
+            payload.update(result)
+        enqueue_delivery(
+            s,
+            workspace_id=job.requested_by_workspace_id,
+            event_type=event_type,
+            job_kind="crawl",
+            job_id=job.id,
+            status=job.status or "pending",
+            site=job.site,
+            created_at=job.created_at,
+            finished_at=job.finished_at,
+            error=error if error is not None else job.error,
+            result=payload,
+        )
+    except Exception as exc:
+        logger.warning("enqueue crawl webhook failed job=%s: %s",
+                       getattr(job, "id", None), exc)
+
+
 def execute_job(job_id: int) -> dict:
     """执行一条已领取的任务。"""
     with session_scope() as s:
@@ -578,6 +960,13 @@ def execute_job(job_id: int) -> dict:
         preflight = crawl_preflight_issue(site, trigger=job.trigger, session=s)
         if preflight is not None:
             _skip_job(s, job, preflight)
+            _enqueue_crawl_webhook(
+                s,
+                job,
+                event_type="job.completed",
+                error=preflight.detail,
+                result={"failure_code": preflight.code},
+            )
             return {"job_id": job_id, "site": site_name, "status": "skipped",
                     "failure_code": preflight.code,
                     "error": preflight.detail,
@@ -592,6 +981,8 @@ def execute_job(job_id: int) -> dict:
             job.status = "skipped"
             job.finished_at = datetime.utcnow()
             job.error = "站点处于封禁冷却期，本次跳过"
+            _enqueue_crawl_webhook(s, job, event_type="job.completed",
+                                   error=job.error)
         return {"job_id": job_id, "site": site_name, "status": "skipped"}
 
     started = datetime.utcnow()
@@ -608,6 +999,13 @@ def execute_job(job_id: int) -> dict:
             job.duration_sec = (datetime.utcnow() - started).total_seconds()
             job.error = exc.info.detail
             record_failure(s, site=site_name, job_id=job_id, info=exc.info)
+            _enqueue_crawl_webhook(
+                s,
+                job,
+                event_type="job.completed",
+                error=exc.info.detail,
+                result={"failure_code": exc.info.code},
+            )
         return {"job_id": job_id, "site": site_name, "status": exc.status,
                 "failure_code": exc.info.code,
                 "error": exc.info.detail,
@@ -622,6 +1020,9 @@ def execute_job(job_id: int) -> dict:
             job.duration_sec = (datetime.utcnow() - started).total_seconds()
             job.error = f"熔断：{exc}（站点已进入冷却期）"
             record_failure(s, site=site_name, job_id=job_id, info=info)
+            _enqueue_crawl_webhook(s, job, event_type="job.completed",
+                                   error=job.error,
+                                   result={"failure_code": info.code})
         return {"job_id": job_id, "site": site_name, "status": "blocked",
                 "error": str(exc)}
     except Exception as exc:                     # 采集失败 —— C-005
@@ -636,6 +1037,9 @@ def execute_job(job_id: int) -> dict:
             _fsite = s.query(Site).filter(Site.site == site_name).first()
             if _fsite and _fsite.track_status != "paused":
                 _fsite.track_status = "error"
+            _enqueue_crawl_webhook(s, job, event_type="job.completed",
+                                   error=str(exc),
+                                   result={"failure_code": info.code})
         return {"job_id": job_id, "site": site_name, "status": "failed",
                 "error": str(exc)}
 
@@ -714,8 +1118,23 @@ def execute_job(job_id: int) -> dict:
                 "; ".join(result.notes[-3:]) if result.notes else "",
             )
             record_failure(s, site=site_name, job_id=job_id, info=info)
+        non_fatal_partial = produced > 0 and _is_non_fatal_partial(job, produced)
+        coverage_code = (
+            getattr(result, "coverage_code", None)
+            or "incomplete_discovery"
+        )
+        non_fatal_coverage = produced > 0 and _is_non_fatal_partial(
+            job,
+            produced,
+            code_override=coverage_code,
+        )
+        non_fatal_detail_gap = produced > 0 and _is_non_fatal_partial(
+            job,
+            produced,
+            code_override="incomplete_detail_parse",
+        )
         if produced > 0 and job.failure_code:
-            if _is_non_fatal_partial(job, produced):
+            if non_fatal_partial:
                 result.notes.append(
                     f"忽略非致命采集噪音: {job.failure_code}"
                 )
@@ -727,30 +1146,31 @@ def execute_job(job_id: int) -> dict:
             else:
                 job.status = "partial"
         if produced > 0 and not getattr(result, "coverage_complete", True):
-            job.status = "partial"
-            if not job.failure_code:
-                job.failure_code = (
-                    getattr(result, "coverage_code", None)
-                    or "incomplete_discovery"
-                )
-                job.failure_stage = (
-                    getattr(result, "coverage_stage", None)
-                    or "discovery"
-                )
-                job.failure_detail = (
-                    getattr(result, "coverage_reason", None)
-                    or "本次采集未能证明商品全量覆盖"
-                )
-                retryable = getattr(result, "coverage_retryable", None)
-                job.retryable = True if retryable is None else bool(retryable)
-                job.suggested_action = (
-                    getattr(result, "coverage_suggested_action", None)
-                    or "补充官方 sitemap/feed 或配置明确的全量发现入口后重跑"
-                )
+            if non_fatal_coverage:
+                result.notes.append("忽略高覆盖率的非致命覆盖噪音")
+            else:
+                job.status = "partial"
+                if not job.failure_code:
+                    job.failure_code = coverage_code
+                    job.failure_stage = (
+                        getattr(result, "coverage_stage", None)
+                        or "discovery"
+                    )
+                    job.failure_detail = (
+                        getattr(result, "coverage_reason", None)
+                        or "本次采集未能证明商品全量覆盖"
+                    )
+                    retryable = getattr(result, "coverage_retryable", None)
+                    job.retryable = True if retryable is None else bool(retryable)
+                    job.suggested_action = (
+                        getattr(result, "coverage_suggested_action", None)
+                        or "补充官方 sitemap/feed 或配置明确的全量发现入口后重跑"
+                    )
         if (
             produced > 0
             and crawl_total > produced
             and job.status == "success"
+            and not non_fatal_detail_gap
         ):
             job.status = "partial"
             job.failure_code = "incomplete_detail_parse"
@@ -761,7 +1181,54 @@ def execute_job(job_id: int) -> dict:
             )
             job.retryable = True
             job.suggested_action = "继续分批重跑或移除采集上限，直到本次分母全量覆盖。"
+        auto_retry_job_id = None
+        auto_retry_url_count = 0
+        try:
+            if job.status == "partial":
+                auto_retry_job_id, auto_retry_url_count = _auto_enqueue_failed_product_retry(
+                    s,
+                    job=job,
+                    crawler=crawler,
+                )
+            elif job.status in {"failed", "blocked"}:
+                auto_retry_job_id = _auto_enqueue_job_retry(
+                    s,
+                    job,
+                    reason_code=job.failure_code,
+                )
+        except Exception as exc:
+            auto_retry_job_id, auto_retry_url_count = None, 0
+            result.notes.append(f"auto_retry_enqueue_failed: {exc}")
+        if auto_retry_job_id:
+            if job.status == "partial":
+                result.notes.append(
+                    f"auto_failed_product_retry_job={auto_retry_job_id}, "
+                    f"selected_urls={auto_retry_url_count}"
+                )
+            else:
+                result.notes.append(
+                    f"auto_job_retry={auto_retry_job_id}, selected_urls=0"
+                )
         ws_id = job.requested_by_workspace_id
+        webhook_result = {
+            "products": produced,
+            "new": stats["new"],
+            "promotions": promo_count,
+            "notes": list(result.notes or []),
+        }
+        if auto_retry_job_id:
+            webhook_result["auto_retry_job_id"] = auto_retry_job_id
+            webhook_result["auto_retry_url_count"] = auto_retry_url_count
+        _enqueue_crawl_webhook(
+            s,
+            job,
+            event_type="job.completed",
+            error=(
+                job.failure_detail or job.error or "; ".join(result.notes[-3:])
+                if job.status != "success" else None
+            ),
+            result=webhook_result,
+        )
 
     try:
         with session_scope() as metric_session:
@@ -793,17 +1260,25 @@ def execute_job(job_id: int) -> dict:
         payload["failure_stage"] = job.failure_stage
         payload["retryable"] = job.retryable
         payload["suggested_action"] = job.suggested_action
+        if auto_retry_job_id:
+            payload["auto_retry_job_id"] = auto_retry_job_id
+            payload["auto_retry_url_count"] = auto_retry_url_count
     return payload
 
 
-def _is_non_fatal_partial(job: CrawlJob, produced: int) -> bool:
+def _is_non_fatal_partial(
+    job: CrawlJob,
+    produced: int,
+    *,
+    code_override: str | None = None,
+) -> bool:
     min_products = NON_FATAL_PARTIAL_SITE_MIN_PRODUCTS.get(
         job.site,
         NON_FATAL_PARTIAL_MIN_PRODUCTS,
     )
     if produced < min_products:
         return False
-    code = (job.failure_code or "").strip()
+    code = (code_override if code_override is not None else job.failure_code or "").strip()
     if code not in NON_FATAL_PARTIAL_FAILURE_CODES:
         return False
     try:
@@ -860,6 +1335,7 @@ def _detect_promotions(s, site_name: str) -> int:
                 Product.label.isnot(None),
                 Product.tags.isnot(None),
                 Product.attributes.isnot(None),
+                Product.has_free_shipping.is_(True),
             ))
             .all())
     count = 0
@@ -869,18 +1345,28 @@ def _detect_promotions(s, site_name: str) -> int:
             and p.original_price > p.sale_price
         )
         label = _promotion_label(p)
+        meta_entries = _promotion_meta_entries(p)
+        if p.has_free_shipping and not any(
+            _promotion_meta_is_free_shipping(meta) for meta in meta_entries
+        ):
+            meta_entries.append({
+                "promotion_name": "Free shipping",
+                "promotion_type": "free_shipping",
+                "_label": "Free shipping",
+            })
         if not has_price_promo and not label:
-            continue
+            if not meta_entries:
+                continue
         discount = None
         if has_price_promo and p.original_price:
             discount = round((p.original_price - p.sale_price) / p.original_price * 100)
         if discount is None and label:
             discount = _discount_from_text(label)
-        meta_entries = _promotion_meta_entries(p)
         if not has_price_promo and not label and not meta_entries:
             continue
         meta_entries = meta_entries or [_promotion_meta(p)]
         img = p.image_urls[0] if p.image_urls else None
+        seen_promos: set[tuple[str, str, str | None]] = set()
         for meta in meta_entries:
             meta_label = meta.get("_label") or label
             meta_original = meta.get("original_price")
@@ -891,13 +1377,26 @@ def _detect_promotions(s, site_name: str) -> int:
                 else _promotion_type_from_text(str(meta_label or ""))
             )
             promo_name = meta.get("promotion_name") or meta_label or promo_type
+            effective_discount = (
+                None if promo_type == "free_shipping" and meta_discount is None
+                else meta_discount if meta_discount is not None
+                else discount
+            )
+            dedupe_key = (
+                str(promo_type or "").lower(),
+                str(promo_name or "").strip().lower(),
+                meta.get("threshold"),
+            )
+            if dedupe_key in seen_promos:
+                continue
+            seen_promos.add(dedupe_key)
             s.add(Promotion(
                 sku=p.sku, site=site_name,
                 promotion_type=promo_type,
                 promotion_name=str(promo_name)[:160],
                 original_price=meta_original if meta_original is not None else p.original_price,
                 promotion_price=meta_promo_price if meta_promo_price is not None else p.sale_price,
-                discount_percent=meta_discount if meta_discount is not None else discount,
+                discount_percent=effective_discount,
                 threshold=meta.get("threshold"),
                 start_time=meta.get("start_time"),
                 end_time=meta.get("end_time"),
@@ -1009,23 +1508,44 @@ def _explicit_promotion_items(product: Product) -> list[dict]:
         if isinstance(value, dict):
             for key, item in value.items():
                 key_text = str(key or "").lower()
-                if isinstance(item, list) and (
+                is_promo_key = bool(
                     _PROMO_ATTR_KEY.search(key_text)
                     or key_text in {"promotions", "promotion", "offers", "coupons", "deals"}
-                ):
+                )
+                if is_promo_key and isinstance(item, list):
                     for child in item:
                         if isinstance(child, dict):
                             items.append(child)
+                        elif _value_has_promo_signal(child):
+                            items.append({"promotion_name": str(child).strip()})
                 elif isinstance(item, dict):
                     scan(item)
         elif isinstance(value, list):
             for child in value:
                 if isinstance(child, dict) and _entry_label(child):
                     items.append(child)
+                elif _value_has_promo_signal(child):
+                    items.append({"promotion_name": str(child).strip()})
 
     scan(product.attributes or {})
     scan(product.tags or {})
     return items
+
+
+def _value_has_promo_signal(value) -> bool:
+    if value in (None, "", [], {}):
+        return False
+    return isinstance(value, (str, int, float)) and bool(
+        _PROMO_KEYWORDS.search(str(value))
+    )
+
+
+def _promotion_meta_is_free_shipping(meta: dict) -> bool:
+    promo_type = str(meta.get("promotion_type") or "").lower()
+    label = " ".join(str(meta.get(key) or "") for key in (
+        "promotion_name", "_label", "threshold",
+    ))
+    return promo_type == "free_shipping" or _promotion_type_from_text(label) == "free_shipping"
 
 
 def _promotion_meta_has_signal(meta: dict) -> bool:
@@ -1121,11 +1641,25 @@ def _first_discount_percent(data: dict[str, object], label: str | None = None) -
 def _promotion_type_from_text(text: str | None) -> str:
     lowered = (text or "").lower()
     if (
+        "free shipping" in lowered or "free delivery" in lowered
+        or "delivery included" in lowered or "shipping included" in lowered
+        or "versandkostenfrei" in lowered or "kostenloser versand" in lowered
+        or "livraison gratuite" in lowered or "spedizione gratuita" in lowered
+        or "envío gratis" in lowered or "envio gratis" in lowered
+        or "gratis verzending" in lowered or "darmowa dostawa" in lowered
+        or "包邮" in lowered or "免运费" in lowered
+    ):
+        return "free_shipping"
+    if (
         "coupon" in lowered or "code" in lowered or "gutschein" in lowered
         or "cupón" in lowered or "cupon" in lowered or "券" in lowered
     ):
         return "coupon"
-    if "bundle" in lowered or "buy" in lowered:
+    if (
+        "bundle" in lowered or "multibuy" in lowered
+        or "multi-buy" in lowered or "multi buy" in lowered
+        or "buy " in lowered or "gift" in lowered
+    ):
         return "bundle"
     if "clearance" in lowered or "wyprzeda" in lowered or "soldes" in lowered:
         return "clearance"

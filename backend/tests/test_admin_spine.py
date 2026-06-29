@@ -461,6 +461,61 @@ def test_jobs_list_detail_retry_enqueue():
     s.close()
 
 
+def test_jobs_list_merges_failed_product_retry_progress_for_crawl_queue():
+    init_db()
+    from datetime import datetime, timedelta
+    from app.api import admin_spine
+    from app.db import SessionLocal
+    from app.models import CrawlJob
+
+    s = SessionLocal()
+    s.query(CrawlJob).delete()
+    created_at = datetime(2026, 6, 28, 2, 0, 0)
+    parent = CrawlJob(
+        site="article_us",
+        status="partial",
+        trigger="scheduled",
+        products_count=740,
+        total_product_count=741,
+        failure_code="superseded",
+        created_at=created_at,
+        finished_at=created_at + timedelta(hours=1),
+    )
+    retry = CrawlJob(
+        site="article_us",
+        status="success",
+        trigger="failed_product_retry",
+        products_count=1,
+        total_product_count=1,
+        created_at=created_at + timedelta(hours=6),
+        finished_at=created_at + timedelta(hours=6, minutes=1),
+    )
+    s.add_all([parent, retry])
+    s.commit()
+
+    out = admin_spine.jobs_list(
+        status=None,
+        dataset=None,
+        tenant=None,
+        source="crawl",
+        page=1,
+        size=20,
+        failure_code=None,
+        created_from="2026-06-28T00:00:00+00:00",
+        created_to="2026-06-28T23:59:59+00:00",
+        user="admin",
+        db=s,
+    )
+
+    assert out["total"] == 1
+    row = out["items"][0]
+    assert row["id"] == retry.id
+    assert row["products_count"] == 741
+    assert row["total_product_count"] == 741
+    assert row["total_product_count_source"] == "crawl_retry_merged"
+    s.close()
+
+
 def test_jobs_stats_aggregates_all_queue_tables():
     init_db()
     from datetime import datetime, timedelta

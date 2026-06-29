@@ -6,7 +6,8 @@ import os
 import re
 import secrets
 import unicodedata
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -29,8 +30,10 @@ from ..models import (ApiKey, Category, CrawlFailure, CrawlJob, CrawlUrl,
                       Keyword, PriceHistory, ProxyHealth,
                       Product, Promotion, Review, ShoppingResult, Site, Trend,
                       User, UserSession, InviteCode, Workspace,
-                      WorkspaceMember, WorkspaceSite, ReportConfig)
+                      WorkspaceMember, WorkspaceSite, ReportConfig,
+                      WebhookConfig, WebhookDelivery)
 from ..proxy import pool_status
+from ..webhooks import generate_secret, validate_webhook_url
 try:
     from ..runner import FAILED_PRODUCT_RETRY_TRIGGER, enqueue
 except ImportError:
@@ -95,7 +98,13 @@ def _crawl_job_live_progress(
     total_count = int(getattr(job, "total_product_count", None) or 0)
     total_source = "crawl_stats_total" if total_count > 0 else None
 
-    if include_live_progress and (job.status or "").lower() in {"pending", "running"} and job.created_at:
+    needs_frontier_progress = fetched_count <= 0 or total_count <= 0
+    if (
+        include_live_progress
+        and needs_frontier_progress
+        and (job.status or "").lower() in {"pending", "running"}
+        and job.created_at
+    ):
         run_urls = (
             db.query(CrawlUrl)
             .filter(CrawlUrl.site == job.site)
@@ -126,17 +135,128 @@ def _crawl_job_live_progress(
         total_count = fetched_count
         total_source = total_source or "crawl_stats_total"
 
+    if (
+        (job.trigger or "") == FAILED_PRODUCT_RETRY_TRIGGER
+        and job.site
+        and (job.created_at or job.started_at or job.finished_at)
+    ):
+        base_time = job.created_at or job.started_at or job.finished_at
+        beijing_day = (base_time + timedelta(hours=8)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        day_start = beijing_day - timedelta(hours=8)
+        day_end = day_start + timedelta(days=1)
+        parent = (
+            db.query(CrawlJob)
+            .filter(
+                CrawlJob.site == job.site,
+                CrawlJob.id != job.id,
+                CrawlJob.trigger != FAILED_PRODUCT_RETRY_TRIGGER,
+                CrawlJob.created_at >= day_start,
+                CrawlJob.created_at < day_end,
+            )
+            .order_by(
+                func.coalesce(CrawlJob.total_product_count, 0).desc(),
+                func.coalesce(CrawlJob.products_count, 0).desc(),
+                CrawlJob.id.desc(),
+            )
+            .first()
+        )
+        if parent is not None:
+            parent_fetched = int(parent.products_count or 0)
+            parent_total = int(parent.total_product_count or 0)
+            if parent_total > 0:
+                retry_fetched = max(0, int(job.products_count or 0))
+                fetched_count = min(parent_total, parent_fetched + retry_fetched)
+                total_count = parent_total
+                total_source = "crawl_retry_merged"
+            elif parent_fetched > fetched_count:
+                fetched_count = parent_fetched
+                total_count = max(total_count, fetched_count)
+                total_source = "crawl_retry_merged"
+
     return fetched_count, (total_count if total_count > 0 else None), total_source
+
+
+def _site_scope_summary(db: Session, site_names: list[str] | None = None) -> dict:
+    """Return the visible benchmark-site scope for a jobs view."""
+    q = db.query(Site)
+    q = q.filter(exists().where(
+        WorkspaceSite.site == Site.site
+    ).where(
+        WorkspaceSite.enabled.is_(True),
+        WorkspaceSite.hidden.is_(False),
+    ))
+    if site_names is not None:
+        if not site_names:
+            return {
+                "total": 0,
+                "tracking": 0,
+                "paused": 0,
+                "error": 0,
+                "trackable": 0,
+            }
+        q = q.filter(Site.site.in_(site_names))
+    rows = q.with_entities(Site.track_status, func.count(Site.id)).group_by(
+        Site.track_status
+    ).all()
+    counts = {str(status or "tracking").lower(): int(count or 0)
+              for status, count in rows}
+    total = sum(counts.values())
+    tracking = counts.get("tracking", 0)
+    return {
+        "total": total,
+        "tracking": tracking,
+        "paused": counts.get("paused", 0),
+        "error": counts.get("error", 0),
+        "trackable": tracking,
+    }
+
+
+def _filter_trackable_crawl_jobs(q):
+    """Hide jobs for sites not actively tracked in benchmark tracking."""
+    return (
+        q.filter(exists().where(
+            Site.site == CrawlJob.site
+        ).where(or_(
+            Site.track_status.is_(None),
+            Site.track_status == "tracking",
+            Site.track_status == "error",
+        )))
+        .filter(exists().where(
+            WorkspaceSite.site == CrawlJob.site
+        ).where(
+            WorkspaceSite.enabled.is_(True),
+            WorkspaceSite.hidden.is_(False),
+        ))
+        .filter(or_(
+            CrawlJob.failure_code.is_(None),
+            ~CrawlJob.failure_code.in_(("workspace_hidden", "superseded")),
+        ))
+    )
 
 
 def _daily_crawl_job_display_query(q):
     """Collapse the task board to one visible job per site per created day."""
-    job_day = func.date(
-        func.coalesce(CrawlJob.created_at, CrawlJob.started_at, CrawlJob.finished_at)
+    job_time = func.coalesce(
+        CrawlJob.created_at, CrawlJob.started_at, CrawlJob.finished_at
     )
+    if IS_SQLITE:
+        job_day = func.date(job_time, "+8 hours")
+    else:
+        job_day = func.date(job_time + text("interval '8 hours'"))
     active_rank = case(
         (CrawlJob.status.in_(_CRAWL_JOB_ACTIVE_DISPLAY_STATUSES), 0),
         else_=1,
+    )
+    retry_rank = case(
+        (CrawlJob.trigger == FAILED_PRODUCT_RETRY_TRIGGER, 1),
+        else_=0,
+    )
+    status_rank = case(
+        (CrawlJob.status.in_(("success", "completed")), 0),
+        (CrawlJob.status == "partial", 1),
+        else_=2,
     )
     ranked = (
         q.with_entities(
@@ -144,7 +264,14 @@ def _daily_crawl_job_display_query(q):
             func.row_number()
             .over(
                 partition_by=(CrawlJob.site, job_day),
-                order_by=(active_rank, CrawlJob.id.desc()),
+                order_by=(
+                    active_rank,
+                    retry_rank,
+                    status_rank,
+                    func.coalesce(CrawlJob.total_product_count, 0).desc(),
+                    func.coalesce(CrawlJob.products_count, 0).desc(),
+                    CrawlJob.id.desc(),
+                ),
             )
             .label("daily_rank"),
         )
@@ -436,6 +563,43 @@ def _require_report_editor(user: str, db: Session, ws: Workspace) -> User:
     if not _can_edit_workspace_report(db, u, ws.id):
         raise HTTPException(403, "需要报表编辑权限")
     return u
+
+
+def _require_webhook_editor(user: str, db: Session, ws: Workspace) -> User:
+    if user.startswith("apikey:"):
+        raise HTTPException(403, "API 密钥不能管理 webhook 配置")
+    u = _require_dashboard_user(user, db)
+    if not _can_edit_workspace_report(db, u, ws.id):
+        raise HTTPException(403, "无权管理该 workspace 的 webhook")
+    return u
+
+
+def _webhook_config_payload(cfg: WebhookConfig | None,
+                            deliveries: list[WebhookDelivery] | None = None) -> dict:
+    payload = {
+        "configured": bool(cfg),
+        "id": cfg.id if cfg else None,
+        "workspace_id": cfg.workspace_id if cfg else None,
+        "url": cfg.url if cfg else "",
+        "active": bool(cfg.active) if cfg else False,
+        "secret_prefix": (cfg.secret[:12] + "...") if cfg and cfg.secret else "",
+        "created_at": cfg.created_at.isoformat() if cfg and cfg.created_at else None,
+        "updated_at": cfg.updated_at.isoformat() if cfg and cfg.updated_at else None,
+    }
+    if deliveries is not None:
+        payload["deliveries"] = [{
+            "id": d.id,
+            "event_type": d.event_type,
+            "job_kind": d.job_kind,
+            "job_id": d.job_id,
+            "status": d.status,
+            "retries": d.retries or 0,
+            "http_status": d.http_status,
+            "response_snippet": d.response_snippet,
+            "created_at": d.created_at.isoformat() if d.created_at else None,
+            "finished_at": d.finished_at.isoformat() if d.finished_at else None,
+        } for d in deliveries]
+    return payload
 
 
 def _workspace_site_names(
@@ -737,6 +901,72 @@ def update_me(payload: dict, user: str = Depends(require_user),
     return _public_user(u)
 
 
+@router.get("/settings/webhook")
+def get_webhook_config(user: str = Depends(require_user),
+                       x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
+                       db: Session = Depends(get_db)):
+    ws = _current_workspace(user, db, x_workspace_id)
+    _require_webhook_editor(user, db, ws)
+    cfg = (db.query(WebhookConfig)
+           .filter(WebhookConfig.workspace_id == ws.id)
+           .first())
+    deliveries = []
+    if cfg:
+        deliveries = (db.query(WebhookDelivery)
+                      .filter(WebhookDelivery.config_id == cfg.id)
+                      .order_by(WebhookDelivery.id.desc())
+                      .limit(20)
+                      .all())
+    return _webhook_config_payload(cfg, deliveries)
+
+
+@router.put("/settings/webhook")
+def save_webhook_config(payload: dict = Body(...),
+                        user: str = Depends(require_user),
+                        x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
+                        db: Session = Depends(get_db)):
+    ws = _current_workspace(user, db, x_workspace_id)
+    _require_webhook_editor(user, db, ws)
+    url = validate_webhook_url(str((payload or {}).get("url") or ""))
+    active = bool((payload or {}).get("active", True))
+    rotate_secret = bool((payload or {}).get("rotate_secret"))
+    secret = str((payload or {}).get("secret") or "").strip()
+    cfg = (db.query(WebhookConfig)
+           .filter(WebhookConfig.workspace_id == ws.id)
+           .first())
+    now = datetime.utcnow()
+    if cfg is None:
+        cfg = WebhookConfig(workspace_id=ws.id, url=url,
+                            secret=secret or generate_secret(),
+                            active=active, created_at=now, updated_at=now)
+        db.add(cfg)
+    else:
+        cfg.url = url
+        cfg.active = active
+        if rotate_secret or secret:
+            cfg.secret = secret or generate_secret()
+        cfg.updated_at = now
+    db.commit()
+    db.refresh(cfg)
+    return _webhook_config_payload(cfg, [])
+
+
+@router.delete("/settings/webhook")
+def delete_webhook_config(user: str = Depends(require_user),
+                          x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
+                          db: Session = Depends(get_db)):
+    ws = _current_workspace(user, db, x_workspace_id)
+    _require_webhook_editor(user, db, ws)
+    cfg = (db.query(WebhookConfig)
+           .filter(WebhookConfig.workspace_id == ws.id)
+           .first())
+    if cfg:
+        cfg.active = False
+        cfg.updated_at = datetime.utcnow()
+        db.commit()
+    return {"ok": True}
+
+
 @router.get("/workspaces")
 def list_my_workspaces(user: str = Depends(require_user),
                        db: Session = Depends(get_db)):
@@ -765,6 +995,12 @@ def site_dict(s: Site) -> dict:
 
 def product_dict(p: Product) -> dict:
     currency = _display_currency(p.currency, p.site)
+    new_cutoff = datetime.utcnow() - timedelta(days=NEW_PRODUCT_DAYS)
+    explicit_label = str(p.label or "").strip().upper()
+    is_recent_new = bool(
+        explicit_label == "NEW"
+        or (p.published_at and p.published_at >= new_cutoff)
+    )
     return {
         "id": p.id, "sku": p.sku, "spu": p.spu, "variant_id": p.variant_id,
         "title": p.title,
@@ -777,7 +1013,7 @@ def product_dict(p: Product) -> dict:
         "inventory": p.inventory, "has_video": p.has_video,
         "has_free_shipping": p.has_free_shipping, "label": p.label,
         "tags": p.tags, "product_url": p.product_url,
-        "product_type": p.product_type, "is_new": p.is_new,
+        "product_type": p.product_type, "is_new": is_recent_new,
         "is_bestseller": p.is_bestseller,
         "published_at": p.published_at.isoformat() if p.published_at else None,
         "created_time": p.created_time.isoformat() if p.created_time else None,
@@ -821,9 +1057,12 @@ def _parse_iso_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
         return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
 
 
 def _parse_iso_datetime_end(value: str | None) -> datetime | None:
@@ -831,6 +1070,14 @@ def _parse_iso_datetime_end(value: str | None) -> datetime | None:
     if parsed and value and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip()):
         return parsed + timedelta(days=1) - timedelta(microseconds=1)
     return parsed
+
+
+def _default_jobs_day_window() -> tuple[datetime, datetime]:
+    """Default job board to the current Beijing business day."""
+    local_start = datetime.now(ZoneInfo("Asia/Shanghai")).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    utc_start = local_start.astimezone(timezone.utc).replace(tzinfo=None)
+    return utc_start, utc_start + timedelta(days=1)
 
 
 def _filtered_products_query(
@@ -868,11 +1115,11 @@ def _filtered_products_query(
     if tab == "bestseller":
         q = q.filter(Product.is_bestseller.is_(True))
     elif tab == "new":
-        # “最新产品”展示站点最近采集到的新品列表。
-        # 有些历史站点只有 updated_time，不能因此把 tab 变成空表。
-        q = q.filter(or_(Product.created_time.isnot(None),
-                         Product.published_at.isnot(None),
-                         Product.updated_time.isnot(None)))
+        new_cutoff = datetime.utcnow() - timedelta(days=NEW_PRODUCT_DAYS)
+        q = q.filter(or_(
+            Product.published_at >= new_cutoff,
+            func.upper(func.trim(func.coalesce(Product.label, ""))) == "NEW",
+        ))
     if search:
         like = f"%{search}%"
         q = q.filter(or_(Product.title.ilike(like), Product.sku.ilike(like),
@@ -2096,6 +2343,9 @@ def update_report_config(config_id: int, payload: dict,
 def list_jobs(limit: int = 30, page: int = 1, status: str | None = None,
               ids: str | None = None, include_live_progress: bool = False,
               all_workspaces: bool = False,
+              created_from: str | None = None,
+              created_to: str | None = None,
+              collapse_daily: bool = True,
               user: str = Depends(require_user),
               x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
               db: Session = Depends(get_db)):
@@ -2104,17 +2354,23 @@ def list_jobs(limit: int = 30, page: int = 1, status: str | None = None,
     if actor is None and user == "admin":
         actor = User(username="admin", role="admin", global_role="super_admin")
     global_view = bool(all_workspaces and _is_super_admin(actor))
+    scoped_sites: list[str] | None = None
     if global_view:
-        q = db.query(CrawlJob)
+        q = _filter_trackable_crawl_jobs(db.query(CrawlJob))
     else:
         allowed_sites = _workspace_site_names(db, ws.id)
-        q = (db.query(CrawlJob)
+        scoped_sites = allowed_sites
+        q = (_filter_trackable_crawl_jobs(db.query(CrawlJob))
              .filter(or_(CrawlJob.requested_by_workspace_id == ws.id,
                          CrawlJob.site.in_(allowed_sites))))
-    if status:
-        statuses = [s.strip() for s in status.split(",") if s.strip()]
-        if statuses:
-            q = q.filter(CrawlJob.status.in_(statuses))
+    parsed_from = _parse_iso_datetime(created_from)
+    parsed_to = _parse_iso_datetime_end(created_to)
+    if not ids and parsed_from is None and parsed_to is None:
+        parsed_from, parsed_to = _default_jobs_day_window()
+    if parsed_from:
+        q = q.filter(CrawlJob.created_at >= parsed_from)
+    if parsed_to:
+        q = q.filter(CrawlJob.created_at <= parsed_to)
     if ids:
         job_ids = []
         for raw in ids.split(","):
@@ -2126,8 +2382,13 @@ def list_jobs(limit: int = 30, page: int = 1, status: str | None = None,
         else:
             return {"total": 0, "page": page, "page_size": limit,
                     "items": [], "jobs": [], "summary": {}}
-    else:
+    elif collapse_daily:
         q = _daily_crawl_job_display_query(q)
+    summary_q = q
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+        if statuses:
+            q = q.filter(CrawlJob.status.in_(statuses))
     limit = max(1, min(int(limit or 30), 500))
     page = max(1, int(page or 1))
     total = q.count()
@@ -2140,6 +2401,19 @@ def list_jobs(limit: int = 30, page: int = 1, status: str | None = None,
     summary["success"] = summary.get("success", 0) + summary.get("completed", 0)
     summary["failed"] = summary.get("failed", 0)
     summary["active"] = summary["running"] + summary["queued"]
+    all_status_rows = status_rows
+    if status:
+        all_status_rows = (summary_q.with_entities(
+            CrawlJob.status, func.count(CrawlJob.id))
+            .group_by(CrawlJob.status).all())
+    summary_all = {str(status or "unknown"): int(count or 0)
+                   for status, count in all_status_rows}
+    summary_all["running"] = summary_all.get("running", 0)
+    summary_all["queued"] = summary_all.get("queued", 0) + summary_all.get("pending", 0)
+    summary_all["success"] = summary_all.get("success", 0) + summary_all.get("completed", 0)
+    summary_all["failed"] = summary_all.get("failed", 0)
+    summary_all["active"] = summary_all["running"] + summary_all["queued"]
+    summary_all["total"] = sum(int(count or 0) for _, count in all_status_rows)
     rows = (q.order_by(CrawlJob.id.desc())
             .offset((page - 1) * limit)
             .limit(limit)
@@ -2184,6 +2458,9 @@ def list_jobs(limit: int = 30, page: int = 1, status: str | None = None,
         })
     return {"total": total, "page": page, "page_size": limit,
             "items": items, "jobs": items, "summary": summary,
+            "summary_all_statuses": summary_all,
+            "total_all_statuses": summary_all["total"],
+            "site_scope": _site_scope_summary(db, scoped_sites),
             "global_view": global_view}
 
 
@@ -2251,7 +2528,24 @@ def _failed_products_base_query(db: Session, site: str):
             .filter(CrawlUrl.site == site,
                     CrawlUrl.kind == "product")
             .filter(or_(CrawlUrl.failure_code.isnot(None),
-                        CrawlUrl.status.in_(("failed", "blocked")))))
+                        CrawlUrl.status.in_(("failed", "blocked")),
+                        and_(CrawlUrl.status == "fetched",
+                             CrawlUrl.failure_code.isnot(None)))))
+
+
+def _utc_day_window(value: datetime | None) -> tuple[datetime, datetime]:
+    base = value or datetime.utcnow()
+    start = base.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start, start + timedelta(days=1)
+
+
+def _crawl_url_day_predicate(start: datetime, end: datetime):
+    return or_(
+        and_(CrawlUrl.last_fetched_at >= start, CrawlUrl.last_fetched_at < end),
+        and_(CrawlUrl.last_fetched_at.is_(None),
+             CrawlUrl.first_seen_at >= start,
+             CrawlUrl.first_seen_at < end),
+    )
 
 
 def _supports_failed_product_retry(db: Session, site_name: str) -> bool:
@@ -2381,17 +2675,23 @@ def retry_failed_products(
         if not job or job.site != site or job.site not in allowed:
             raise HTTPException(404, "任务不存在或不在当前工作区")
 
+    now = datetime.utcnow()
+    retry_day_source = job.created_at if job_id else now
+    retry_start, retry_end = _utc_day_window(retry_day_source)
     selected: list[CrawlUrl] = []
     if urls:
         hashes = [hash_url(u) for u in urls]
         selected = (db.query(CrawlUrl)
                     .filter(CrawlUrl.site == site,
                             CrawlUrl.kind == "product",
-                            CrawlUrl.url_hash.in_(hashes))
+                            CrawlUrl.url_hash.in_(hashes),
+                            _crawl_url_day_predicate(retry_start, retry_end))
                     .limit(limit)
                     .all())
     else:
-        q = _failed_products_base_query(db, site)
+        q = _failed_products_base_query(db, site).filter(
+            _crawl_url_day_predicate(retry_start, retry_end)
+        )
         if failure_code:
             q = q.filter(CrawlUrl.failure_code == failure_code)
         if job_id:
@@ -2415,7 +2715,6 @@ def retry_failed_products(
                     .all())
     if not selected:
         raise HTTPException(404, "没有匹配的失败商品 URL")
-    now = datetime.utcnow()
     for row in selected:
         row.status = "pending"
         row.next_retry_at = None
@@ -2423,6 +2722,7 @@ def retry_failed_products(
         row.failure_stage = None
         row.failure_detail = None
         row.retryable = None
+        row.attempts = 0
         row.last_seen_at = now
         row.priority = min(int(row.priority or 100), 10)
     db.commit()
@@ -2447,6 +2747,8 @@ def retry_failed_products(
 def crawl_diagnostics(
     site: str | None = None,
     limit: int = 20,
+    created_from: str | None = None,
+    created_to: str | None = None,
     user: str = Depends(require_user),
     x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
     db: Session = Depends(get_db),
@@ -2457,15 +2759,24 @@ def crawl_diagnostics(
     if site and site not in allowed:
         raise HTTPException(404, "站点不存在或不在当前工作区")
     sites = [site] if site else sorted(allowed)
+    if not sites:
+        return {"sites": [], "failures": [], "failure_counts": {}}
 
     target_counts = _workspace_site_targets(db, ws.id, include_hidden=True)
     metric_rows = load_site_metrics(db, sites, collect_missing=IS_SQLITE)
     latest_jobs: dict[str, CrawlJob] = {}
-    for job in (db.query(CrawlJob)
-                .filter(CrawlJob.site.in_(sites))
-                .order_by(CrawlJob.site, CrawlJob.id.desc())
-                .all()):
-        latest_jobs.setdefault(job.site, job)
+    latest_job_ids = (
+        db.query(CrawlJob.site.label("site"), func.max(CrawlJob.id).label("job_id"))
+        .filter(CrawlJob.site.in_(sites))
+        .group_by(CrawlJob.site)
+        .subquery()
+    )
+    for job in (
+        db.query(CrawlJob)
+        .join(latest_job_ids, CrawlJob.id == latest_job_ids.c.job_id)
+        .all()
+    ):
+        latest_jobs[job.site] = job
     by_site: dict[str, dict] = {}
     for site_name in sites:
         metric = metric_rows.get(site_name, {})
@@ -2513,8 +2824,14 @@ def crawl_diagnostics(
             } if latest_job else None,
         }
 
-    failures = (db.query(CrawlFailure)
-                .filter(CrawlFailure.site.in_(sites))
+    parsed_from = _parse_iso_datetime(created_from)
+    parsed_to = _parse_iso_datetime_end(created_to)
+    failure_q = db.query(CrawlFailure).filter(CrawlFailure.site.in_(sites))
+    if parsed_from:
+        failure_q = failure_q.filter(CrawlFailure.occurred_at >= parsed_from)
+    if parsed_to:
+        failure_q = failure_q.filter(CrawlFailure.occurred_at <= parsed_to)
+    failures = (failure_q
                 .order_by(CrawlFailure.id.desc())
                 .limit(max(1, min(limit, 100)))
                 .all())
@@ -2534,8 +2851,8 @@ def crawl_diagnostics(
         "occurred_at": f.occurred_at.isoformat() if f.occurred_at else None,
     } for f in failures]
 
-    failure_counts = (db.query(CrawlFailure.code, func.count(CrawlFailure.id))
-                      .filter(CrawlFailure.site.in_(sites))
+    failure_counts = (failure_q.with_entities(
+                          CrawlFailure.code, func.count(CrawlFailure.id))
                       .group_by(CrawlFailure.code).all())
     return {
         "sites": list(by_site.values()),
@@ -3782,6 +4099,43 @@ def _load_hidden_sites() -> set[str]:
         return set()
 
 
+def _missing_category(value: object) -> bool:
+    text = str(value or "").strip()
+    return not text or text.lower() in {"none", "null", "uncategorized", "unknown"}
+
+
+def _missing_image(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple, set)):
+        return not any(str(item or "").strip() for item in value)
+    return False
+
+
+def _field_presence_counts(db: Session, site_codes: list[str]) -> dict[str, dict[str, int]]:
+    counts = {
+        site: {"category_missing_count": 0, "image_missing_count": 0}
+        for site in site_codes
+    }
+    if not site_codes:
+        return counts
+    for site, category_path, image_urls in (
+            db.query(Product.site, Product.category_path, Product.image_urls)
+            .filter(Product.site.in_(site_codes))
+            .all()):
+        bucket = counts.setdefault(site, {
+            "category_missing_count": 0,
+            "image_missing_count": 0,
+        })
+        if _missing_category(category_path):
+            bucket["category_missing_count"] += 1
+        if _missing_image(image_urls):
+            bucket["image_missing_count"] += 1
+    return counts
+
+
 def _latest_successful_job_counts(db: Session, sites: list[str]) -> dict[str, int]:
     site_codes = sorted({site for site in sites if site})
     if not site_codes:
@@ -3971,18 +4325,26 @@ def data_coverage(
         sitemap_product_count = sitemap_total
         discovered_product_count = int(metric.get("discovered_product_url_count") or 0)
         listing_product_count = int(metric.get("product_listing_count") or 0)
+        count_consistency_issues = []
+        if report_product_count > sku_count:
+            count_consistency_issues.append("detail_sku_gt_sku_count")
         rows.append({
             "site": s.site, "brand": s.brand, "country": s.country,
             "url": s.url, "platform": s.platform,
             "current": cur, "current_raw": cur_raw, "estimated_full": est,
             "actual_product_count": display_counts["actual_product_count"],
             "actual_product_count_source": display_counts["actual_product_count_source"],
+            "sku_count": sku_count,
+            "spu_count": listing_product_count,
             "sitemap_product_count": sitemap_product_count,
             "discovered_product_url_count": discovered_product_count,
             "product_listing_count": listing_product_count,
             "metadata_product_count": display_counts["metadata_product_count"],
             "product_detail_count": display_counts["product_detail_count"],
+            "detail_sku_count": display_counts["product_detail_count"],
             "report_product_count": display_counts["report_product_count"],
+            "count_consistency_issues": count_consistency_issues,
+            "count_consistency_status": "warning" if count_consistency_issues else "ok",
             "latest_success_job_product_count": int(latest_success_counts.get(s.site) or 0),
             "target_sku_count": target_sku,
             "target_sku_source": target_source,
@@ -4072,6 +4434,8 @@ _RERUN_CANDIDATE_ISSUES = {
     "coverage_low",
     "sku_deviation_high",
     "title_weak",
+    "category_missing",
+    "image_missing",
     "price_missing",
     "pdp_price_required",
     "currency_missing",
@@ -4193,6 +4557,10 @@ def _data_quality_suggestion(*, status: str, issues: list[str],
         return "检查标题/价格解析与 PDP enrich；修复 selector 或配置可用住宅代理后重跑"
     if "title_weak" in issues:
         return "检查列表/PDP 标题解析；弱标题站点需要补抓详情页或修复 selector 后重跑"
+    if "category_missing" in issues:
+        return "检查分类面包屑/列表分类映射；补齐 category_path 后再验收 SKU/SPU 与品类口径"
+    if "image_missing" in issues:
+        return "检查主图解析和图片 JSON 字段；缺主图商品需补列表图或 PDP 图后再导出"
     if "currency_mismatch" in issues or "currency_missing" in issues:
         return "检查站点币种映射和历史商品 currency 字段；先做币种回填/修正后再导出报表"
     if "price_missing" in issues:
@@ -4226,6 +4594,7 @@ def _build_data_quality_payload(
 
     sitemap_totals = _load_sitemap_totals()
     metric_rows = load_site_metrics(db, site_codes, collect_missing=IS_SQLITE)
+    field_counts = _field_presence_counts(db, site_codes)
     expected_currency_by_site = {
         site: _currency_for_site(site) for site in site_codes
     }
@@ -4345,6 +4714,9 @@ def _build_data_quality_payload(
         weak_title_count = int(product.get("weak_title_count") or 0)
         currency_missing_count = int(product.get("currency_missing_count") or 0)
         currency_mismatch_count = int(product.get("currency_mismatch_count") or 0)
+        field_quality = field_counts.get(s.site, {})
+        category_missing_count = int(field_quality.get("category_missing_count") or 0)
+        image_missing_count = int(field_quality.get("image_missing_count") or 0)
         promotion_count = int(product.get("promotion_count") or 0)
         traffic_signal_count = int(product.get("traffic_signal_count") or 0)
         conversion_signal_count = int(product.get("conversion_signal_count") or 0)
@@ -4380,6 +4752,10 @@ def _build_data_quality_payload(
             issues.append("conversion_missing")
         if sku_count > 0 and weak_title_count > 0:
             issues.append("title_weak")
+        if sku_count > 0 and category_missing_count > 0:
+            issues.append("category_missing")
+        if sku_count > 0 and image_missing_count > 0:
+            issues.append("image_missing")
         if sku_count > 0 and currency_missing_count > 0:
             issues.append("currency_missing")
         if sku_count > 0 and currency_mismatch_count > 0:
@@ -4469,12 +4845,16 @@ def _build_data_quality_payload(
             "review_signal_count": review_signal_count,
             "review_history_signal_count": review_history_signal_count,
             "weak_title_count": weak_title_count,
+            "category_missing_count": category_missing_count,
+            "image_missing_count": image_missing_count,
             "expected_currency": expected_currency_by_site.get(s.site),
             "currency_missing_count": currency_missing_count,
             "currency_mismatch_count": currency_mismatch_count,
             "traffic_signal_count": traffic_signal_count,
             "conversion_signal_count": conversion_signal_count,
             "title_quality_pct": round((sku_count - weak_title_count) / sku_count * 100, 2) if sku_count else 0,
+            "category_signal_pct": round((sku_count - category_missing_count) / sku_count * 100, 2) if sku_count else 0,
+            "image_signal_pct": round((sku_count - image_missing_count) / sku_count * 100, 2) if sku_count else 0,
             "price_signal_pct": round(price_signal_count / sku_count * 100, 2) if sku_count else 0,
             "sales_signal_pct": round(sales_signal_count / sku_count * 100, 2) if sku_count else 0,
             "revenue_signal_pct": round(revenue_signal_count / sku_count * 100, 2) if sku_count else 0,
@@ -4549,6 +4929,8 @@ def _build_data_quality_payload(
         "no_products": sum(1 for r in items if "no_products" in r["issues"]),
         "never_crawled": sum(1 for r in items if "never_crawled" in r["issues"]),
         "weak_titles": sum(1 for r in items if "title_weak" in r["issues"]),
+        "missing_categories": sum(1 for r in items if "category_missing" in r["issues"]),
+        "missing_images": sum(1 for r in items if "image_missing" in r["issues"]),
         "currency_missing": sum(1 for r in items if "currency_missing" in r["issues"]),
         "currency_mismatch": sum(1 for r in items if "currency_mismatch" in r["issues"]),
         "currency_issues": sum(1 for r in items if (

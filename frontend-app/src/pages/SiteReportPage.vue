@@ -185,7 +185,7 @@ const productPageButtons = computed(() => paginationPages(page.value, totalPages
 const promoPageButtons = computed(() => paginationPages(promoPage.value, promoTotalPages.value))
 const allProductCount = computed(() => subTab.value === 'all' ? total.value : Number(cards.value.sku_count ?? cards.value.total_products ?? 0))
 const bestsellerProductCount = computed(() => subTab.value === 'bestseller' ? total.value : Number(cards.value.bestseller_count ?? 0))
-const latestProductCount = computed(() => subTab.value === 'new' ? total.value : Number(cards.value.latest_product_count ?? cards.value.new_product_count ?? 0))
+const latestProductCount = computed(() => subTab.value === 'new' ? total.value : Number(cards.value.new_product_count ?? 0))
 const initialReportLoading = computed(() => loading.value && !overview.value && !products.value.length && !promotions.value.length)
 const granularity = ref<'day' | 'week' | 'month'>('month')
 const aggregatedTrends = computed<Record<string, any>[]>(() => trends.value)

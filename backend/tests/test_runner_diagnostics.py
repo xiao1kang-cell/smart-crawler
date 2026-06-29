@@ -13,7 +13,13 @@ from app.crawl_diagnostics import (
 from app.crawlers.base import CrawlResult
 from app.db import SessionLocal, init_db
 from app.models import CrawlFailure, CrawlJob, Product, Site, Workspace, WorkspaceSite
-from app.runner import claim_job, enqueue, execute_job, _is_non_fatal_partial
+from app.runner import (
+    _auto_enqueue_job_retry,
+    _is_non_fatal_partial,
+    claim_job,
+    enqueue,
+    execute_job,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -77,6 +83,30 @@ class _PartialCrawler:
         return out
 
 
+class _ProxyUnavailableCrawler:
+    job_id: int | None = None
+
+    def crawl(self) -> CrawlResult:
+        s = SessionLocal()
+        try:
+            record_failure(
+                s,
+                site="runner_proxy_fail_probe",
+                job_id=self.job_id,
+                info=FailureInfo(
+                    "proxy_unavailable",
+                    "fetch",
+                    "no available proxy lease",
+                    True,
+                    "检查代理池后重跑",
+                ),
+            )
+            s.commit()
+        finally:
+            s.close()
+        return CrawlResult()
+
+
 class _HighYieldTransientCrawler:
     job_id: int | None = None
 
@@ -133,7 +163,8 @@ def test_execute_job_zero_products_preserves_specific_failure(monkeypatch):
         assert result["status"] == "failed"
         assert result["error"] == "sitemap timeout"
         assert result["failure_code"] == "network_timeout"
-        assert result["suggested_action"] == "检查代理后重跑"
+        assert result["auto_retry_job_id"] is not None
+        assert "已自动创建整站重跑任务" in result["suggested_action"]
         assert job.status == "failed"
         assert job.failure_code == "network_timeout"
         assert job.products_count == 0
@@ -171,6 +202,105 @@ def test_execute_job_products_with_failure_becomes_partial(monkeypatch):
         assert job.failure_code == "http_429"
         assert job.failure_stage == "fetch"
     finally:
+        s.close()
+
+
+def test_execute_job_failed_result_auto_retries(monkeypatch):
+    init_db()
+    s = SessionLocal()
+    try:
+        if not s.query(Site).filter(Site.site == "runner_proxy_fail_probe").first():
+            s.add(Site(site="runner_proxy_fail_probe", brand="Probe", country="US",
+                       url="https://example.com", platform="generic",
+                       proxy_tier="none"))
+            s.commit()
+    finally:
+        s.close()
+
+    monkeypatch.setattr("app.runner.get_crawler", lambda site: _ProxyUnavailableCrawler())
+    job_id = enqueue("runner_proxy_fail_probe")
+
+    result = execute_job(job_id)
+
+    s = SessionLocal()
+    try:
+        job = s.get(CrawlJob, job_id)
+        retry_job = (s.query(CrawlJob)
+                     .filter(CrawlJob.site == "runner_proxy_fail_probe",
+                             CrawlJob.id != job_id)
+                     .order_by(CrawlJob.id.desc())
+                     .first())
+        assert result["status"] == "failed"
+        assert result["failure_code"] == "proxy_unavailable"
+        assert job.status == "failed"
+        assert job.failure_code == "proxy_unavailable"
+        assert retry_job is not None
+        assert retry_job.status == "pending"
+        assert retry_job.trigger == "admin_retry"
+    finally:
+        s.close()
+
+
+def test_auto_job_retry_is_idempotent_per_source_job():
+    init_db()
+    s = SessionLocal()
+    site_name = "runner_auto_retry_idempotent"
+    try:
+        if not s.query(Site).filter(Site.site == site_name).first():
+            s.add(Site(site=site_name, brand="Probe", country="US",
+                       url="https://example.com", platform="generic",
+                       proxy_tier="none"))
+        s.query(CrawlJob).filter(CrawlJob.site == site_name).delete()
+        source = CrawlJob(site=site_name, status="failed", trigger="manual",
+                          failure_code="job_timeout",
+                          created_at=datetime(2026, 6, 25, 8, 0))
+        s.add(source)
+        s.flush()
+
+        first_id = _auto_enqueue_job_retry(s, source, reason_code="job_timeout")
+        second_id = _auto_enqueue_job_retry(s, source, reason_code="job_timeout")
+
+        assert first_id == second_id
+        retries = (s.query(CrawlJob)
+                   .filter(CrawlJob.site == site_name,
+                           CrawlJob.suggested_action.like("[auto_job_retry]%"))
+                   .all())
+        assert len(retries) == 1
+        assert f"#{first_id}" in source.suggested_action
+    finally:
+        s.rollback()
+        s.close()
+
+
+def test_auto_job_retry_skips_when_newer_success_exists():
+    init_db()
+    s = SessionLocal()
+    site_name = "runner_auto_retry_has_success"
+    try:
+        if not s.query(Site).filter(Site.site == site_name).first():
+            s.add(Site(site=site_name, brand="Probe", country="US",
+                       url="https://example.com", platform="generic",
+                       proxy_tier="none"))
+        s.query(CrawlJob).filter(CrawlJob.site == site_name).delete()
+        source = CrawlJob(site=site_name, status="failed", trigger="manual",
+                          failure_code="job_timeout",
+                          created_at=datetime(2026, 6, 25, 8, 0))
+        success = CrawlJob(site=site_name, status="success", trigger="manual",
+                           created_at=datetime(2026, 6, 25, 9, 0))
+        s.add_all([source, success])
+        s.flush()
+
+        retry_id = _auto_enqueue_job_retry(s, source, reason_code="job_timeout")
+
+        assert retry_id == success.id
+        assert "已有更新成功任务" in source.suggested_action
+        retries = (s.query(CrawlJob)
+                   .filter(CrawlJob.site == site_name,
+                           CrawlJob.suggested_action.like("[auto_job_retry]%"))
+                   .count())
+        assert retries == 0
+    finally:
+        s.rollback()
         s.close()
 
 
@@ -213,10 +343,14 @@ def test_non_fatal_partial_uses_cdiscount_site_threshold():
                        success_rate=100.0)
     parse_noise = CrawlJob(site="vidaxl_ro", failure_code="parse_no_jsonld",
                            success_rate=100.0)
+    coverage_noise = CrawlJob(site="costway_uk",
+                              failure_code="incomplete_detail_parse",
+                              success_rate=99.9)
 
     assert _is_non_fatal_partial(cdiscount, 48) is True
     assert _is_non_fatal_partial(generic, 48) is False
     assert _is_non_fatal_partial(parse_noise, 199) is True
+    assert _is_non_fatal_partial(coverage_noise, 9939) is True
 
 
 def test_execute_job_applies_configured_price_feed(monkeypatch, tmp_path):
@@ -399,6 +533,60 @@ def test_auto_enqueue_does_not_create_job_for_paused_tracking_site(monkeypatch):
         s.close()
 
 
+def test_enqueue_admin_retry_restores_error_site_tracking():
+    init_db()
+    site_name = "runner_retry_restores_tracking"
+    s = SessionLocal()
+    try:
+        s.query(CrawlJob).filter(CrawlJob.site == site_name).delete()
+        s.query(Site).filter(Site.site == site_name).delete()
+        s.add(Site(site=site_name, brand="Probe", country="US",
+                   url="https://example.com", platform="generic",
+                   proxy_tier="none", track_status="error"))
+        s.commit()
+    finally:
+        s.close()
+
+    job_id = enqueue(site_name, trigger="admin_retry")
+
+    s = SessionLocal()
+    try:
+        site = s.query(Site).filter(Site.site == site_name).one()
+        job = s.get(CrawlJob, job_id)
+        assert job.status == "pending"
+        assert site.track_status == "tracking"
+    finally:
+        s.close()
+
+
+def test_enqueue_failed_product_retry_does_not_restore_error_site_tracking():
+    from app.runner import FAILED_PRODUCT_RETRY_TRIGGER
+
+    init_db()
+    site_name = "runner_url_retry_keeps_error"
+    s = SessionLocal()
+    try:
+        s.query(CrawlJob).filter(CrawlJob.site == site_name).delete()
+        s.query(Site).filter(Site.site == site_name).delete()
+        s.add(Site(site=site_name, brand="Probe", country="US",
+                   url="https://example.com", platform="generic",
+                   proxy_tier="none", track_status="error"))
+        s.commit()
+    finally:
+        s.close()
+
+    job_id = enqueue(site_name, trigger=FAILED_PRODUCT_RETRY_TRIGGER)
+
+    s = SessionLocal()
+    try:
+        site = s.query(Site).filter(Site.site == site_name).one()
+        job = s.get(CrawlJob, job_id)
+        assert job.status == "pending"
+        assert site.track_status == "error"
+    finally:
+        s.close()
+
+
 def test_claim_job_skips_paused_tracking_site_and_claims_next():
     init_db()
     now = datetime.utcnow()
@@ -495,6 +683,59 @@ def test_claim_job_respects_platform_running_limit(monkeypatch):
         ready = s.get(CrawlJob, ready_id)
         assert blocked.status == "pending"
         assert ready.status == "running"
+    finally:
+        s.close()
+
+
+def test_platform_running_limit_does_not_starve_other_platforms(monkeypatch):
+    from app.runner import claim_job
+
+    init_db()
+    monkeypatch.setenv("CRAWL_PLATFORM_RUNNING_LIMITS", "vidaxl:3")
+    now = datetime.utcnow()
+    s = SessionLocal()
+    prefix = "runner_platform_starve_"
+    try:
+        s.query(CrawlJob).delete()
+        s.query(Site).filter(Site.site.like(f"{prefix}%")).delete(
+            synchronize_session=False)
+        active_sites = [f"{prefix}active_{idx}" for idx in range(3)]
+        blocked_sites = [f"{prefix}blocked_{idx:02d}" for idx in range(55)]
+        ready_site = f"{prefix}generic"
+        for site_name in active_sites + blocked_sites:
+            s.add(Site(site=site_name, brand="VidaXL", country="NL",
+                       url="https://example.com", platform="vidaxl",
+                       proxy_tier="none"))
+        s.add(Site(site=ready_site, brand="Probe", country="US",
+                   url="https://example.com", platform="generic",
+                   proxy_tier="none"))
+        s.flush()
+        for site_name in active_sites:
+            s.add(CrawlJob(site=site_name, status="running",
+                           trigger="scheduled", created_at=now,
+                           started_at=now, heartbeat_at=now))
+        for site_name in blocked_sites:
+            s.add(CrawlJob(site=site_name, status="pending",
+                           trigger="scheduled", created_at=now))
+        ready = CrawlJob(site=ready_site, status="pending",
+                         trigger="scheduled", created_at=now)
+        s.add(ready)
+        s.commit()
+        ready_id = ready.id
+    finally:
+        s.close()
+
+    assert claim_job("worker-test") == ready_id
+
+    s = SessionLocal()
+    try:
+        ready = s.get(CrawlJob, ready_id)
+        blocked_count = (s.query(CrawlJob)
+                         .filter(CrawlJob.site.like(f"{prefix}blocked_%"),
+                                 CrawlJob.status == "pending")
+                         .count())
+        assert ready.status == "running"
+        assert blocked_count == 55
     finally:
         s.close()
 

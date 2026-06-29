@@ -296,7 +296,7 @@ button,input,select,textarea{font-family:inherit}
 .overview-section{margin-top:16px;padding:14px}
 .section-title{font-size:.95rem;color:var(--ui-heading);font-weight:800;margin-bottom:10px}
 
-.report-tile{display:flex;flex-direction:column;min-height:176px;padding:12px}
+.report-tile{display:flex;flex-direction:column;min-height:192px;padding:12px}
 .report-tile.empty{background:linear-gradient(180deg,#ffffff,#fcfaff)}
 .report-tile.ready{border-color:var(--ui-border-strong)}
 .report-tile.warning{border-color:rgba(251,191,36,.35)}
@@ -309,7 +309,7 @@ button,input,select,textarea{font-family:inherit}
 .report-tile .badge.critical{background:rgba(248,113,113,.16);color:#be123c;border:1px solid rgba(248,113,113,.35)}
 .report-tile .badge.pending{background:#f7f2ff;color:#7c3aed;border:1px solid #e9d5ff}
 .report-tile .country{font-size:.64rem;color:var(--ui-muted);letter-spacing:1px;margin-bottom:8px;min-height:20px;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.report-tile .nums{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;margin-bottom:0;align-items:start}
+.report-tile .nums{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:0;align-items:start}
 .report-tile .nums .item{min-width:0;padding:3px 0;display:grid;grid-template-rows:16px 24px;align-items:start}
 .report-tile .nums .lbl{height:16px;display:flex;align-items:center;font-size:.58rem;color:var(--ui-muted);letter-spacing:.6px;margin-bottom:0;text-transform:uppercase;line-height:1}
 .report-metric-label{display:flex;align-items:center;gap:4px;line-height:1}
@@ -322,6 +322,8 @@ button,input,select,textarea{font-family:inherit}
 .report-source-icon{width:12px;height:12px;stroke-width:2.2}
 .report-tile .nums .v{height:24px;display:flex;align-items:flex-start;font-size:.92rem;font-weight:900;color:var(--ui-heading);line-height:1.2}
 .report-tile .nums .v.dim{color:var(--ui-dim);font-weight:700}
+.report-tile .nums .v.warn{color:#be123c}
+.count-warning{margin-top:6px;padding:5px 7px;border-radius:6px;background:rgba(248,113,113,.10);border:1px solid rgba(248,113,113,.28);color:#be123c;font-size:.64rem;line-height:1.35}
 .report-tile .covbar{height:5px;background:#eee6f7;border-radius:3px;overflow:hidden;margin-bottom:10px}
 .report-tile .covbar > i{display:block;height:100%;background:linear-gradient(90deg,#a78bfa,#7c3aed)}
 .report-tile .covbar.warning > i{background:linear-gradient(90deg,#fcd34d,#fbbf24)}
@@ -771,6 +773,8 @@ html[data-theme="dark"] .sub,html[data-theme="dark"] .inf-empty-note,html[data-t
 html[data-theme="dark"] .meta,html[data-theme="dark"] .key-row .meta,html[data-theme="dark"] .stat .lbl,html[data-theme="dark"] .ask-input-row,html[data-theme="dark"] .trace h4,html[data-theme="dark"] .cov-tile .country,html[data-theme="dark"] .report-tile .country,html[data-theme="dark"] .report-tile .nums .lbl,html[data-theme="dark"] .job-row.head,html[data-theme="dark"] .cat-table th,html[data-theme="dark"] .sc-table th,html[data-theme="dark"] .od-table th{color:#9f95b6}
 html[data-theme="dark"] .report-tile .country,html[data-theme="dark"] .report-tile .nums .lbl{color:#b9aecf}
 html[data-theme="dark"] .report-tile .nums .v.dim{color:#b0a6c7}
+html[data-theme="dark"] .report-tile .nums .v.warn{color:#fda4af}
+html[data-theme="dark"] .count-warning{background:rgba(248,113,113,.14);border-color:rgba(248,113,113,.34);color:#fda4af}
 html[data-theme="dark"] .cat-table td,html[data-theme="dark"] .sc-table td,html[data-theme="dark"] .od-table td,html[data-theme="dark"] .job-row,html[data-theme="dark"] .inf-bio,html[data-theme="dark"] .post-info .cap{color:#edf0fb}
 html[data-theme="dark"] input,html[data-theme="dark"] select,html[data-theme="dark"] textarea{color:#fff}
 html[data-theme="dark"] input::placeholder,html[data-theme="dark"] textarea::placeholder{color:#aab4c8}

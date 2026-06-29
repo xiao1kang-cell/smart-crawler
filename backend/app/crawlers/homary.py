@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import gzip
+import json
 import os
 import re
 import time
@@ -24,6 +25,8 @@ from .base import BaseCrawler, CrawlResult
 
 _ID_RE = re.compile(r"-(\d+)\.html")
 _PRICE_RE = re.compile(r"[\d,]+\.?\d*")
+_LD_RE = re.compile(
+    r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', re.S)
 DEFAULT_LIMIT = int(os.environ.get("HOMARY_LIMIT", "999999"))
 if DEFAULT_LIMIT <= 0 or DEFAULT_LIMIT == 2000:
     DEFAULT_LIMIT = 999999
@@ -321,6 +324,10 @@ class HomaryCrawler(BaseCrawler):
                 seen.add(c)
                 path.append(c)
         category_path = "/".join(path[:3]) or None
+        if not category_path:
+            category_path = self._jsonld_breadcrumb(tree) or self._jsonld_category(tree)
+        if not sale and not category_path:
+            return None
 
         images = []
         for img in tree.css("img"):
@@ -331,6 +338,14 @@ class HomaryCrawler(BaseCrawler):
             images.insert(0, image)
 
         out_of_stock = bool(re.search(r"out of stock|sold out", html, re.I))
+        promo_labels = self._promotion_labels(tree)
+        has_free_shipping = bool(re.search(
+            r"free\s+(?:shipping|delivery)|livraison\s+gratuite|"
+            r"spedizione\s+gratuita|env[ií]o\s+gratis|gratis\s+verzending|"
+            r"kostenloser\s+versand|versandkostenfrei|包邮|免运费",
+            html,
+            re.I,
+        ))
 
         return {
             "sku": pid,
@@ -342,9 +357,16 @@ class HomaryCrawler(BaseCrawler):
             "sale_price": sale,
             "original_price": original,
             "currency": _CURRENCY.get(self.site.country, "USD"),
+            "ratings": self._jsonld_rating_value(tree),
+            "review_count": self._review_count(tree, html),
             "status": "out_of_stock" if out_of_stock else "on_sale",
             "has_video": "<video" in html,
+            "has_free_shipping": has_free_shipping,
             "label": "BEST SELLER" if pid in best_ids else None,
+            "attributes": {
+                "promotions": promo_labels,
+                "free_shipping_label": "Free shipping" if has_free_shipping else None,
+            },
             "product_url": url,
             "site": self.site.site,
             "brand": self.site.brand,
@@ -409,6 +431,148 @@ class HomaryCrawler(BaseCrawler):
                 s = s.replace(",", "")                        # 美式 94,995
         try:
             return float(s)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _promotion_labels(tree: HTMLParser) -> list[str]:
+        selectors = (
+            "[class*=coupon]", "[class*=promo]", "[class*=promotion]",
+            "[class*=discount]", "[class*=sale]", "[class*=deal]",
+            "[class*=campaign]", "[class*=offer]", "[class*=shipping]",
+            "[class*=delivery]", ".tag", ".badge",
+        )
+        labels: list[str] = []
+        seen: set[str] = set()
+        promo_re = re.compile(
+            r"sale|deal|discount|coupon|promo|save|off|bundle|"
+            r"free\s+(?:shipping|delivery)|code|"
+            r"rabatt|gutschein|remise|soldes|sconto|descuento|korting|"
+            r"包邮|免运费|优惠|折扣|券",
+            re.I,
+        )
+        for selector in selectors:
+            for node in tree.css(selector):
+                text = re.sub(r"\s+", " ", node.text(separator=" ", strip=True))
+                if not text or len(text) > 180 or not promo_re.search(text):
+                    continue
+                if text not in seen:
+                    seen.add(text)
+                    labels.append(text)
+                if len(labels) >= 6:
+                    return labels
+        return labels
+
+    @classmethod
+    def _jsonld_blocks(cls, tree: HTMLParser) -> list[dict]:
+        blocks: list[dict] = []
+        for node in tree.css('script[type="application/ld+json"]'):
+            raw = node.text(strip=True)
+            if not raw:
+                continue
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            stack = parsed if isinstance(parsed, list) else [parsed]
+            while stack:
+                item = stack.pop(0)
+                if not isinstance(item, dict):
+                    continue
+                graph = item.get("@graph")
+                if isinstance(graph, list):
+                    stack.extend(graph)
+                blocks.append(item)
+        return blocks
+
+    @classmethod
+    def _jsonld_breadcrumb(cls, tree: HTMLParser) -> str | None:
+        for node in cls._jsonld_blocks(tree):
+            raw_type = node.get("@type")
+            types = raw_type if isinstance(raw_type, list) else [raw_type]
+            if not any(str(t).lower() == "breadcrumblist" for t in types if t):
+                continue
+            names: list[str] = []
+            for elem in node.get("itemListElement") or []:
+                if not isinstance(elem, dict):
+                    continue
+                item = elem.get("item")
+                name = item.get("name") if isinstance(item, dict) else None
+                name = name or elem.get("name")
+                if not name:
+                    continue
+                text = str(name).strip()
+                if not text or text.lower() in {"home", "homary"}:
+                    continue
+                names.append(text)
+            if names:
+                return "/".join(names[:3])
+        return None
+
+    @classmethod
+    def _jsonld_category(cls, tree: HTMLParser) -> str | None:
+        for node in cls._jsonld_blocks(tree):
+            raw_type = node.get("@type")
+            types = raw_type if isinstance(raw_type, list) else [raw_type]
+            if not any(str(t).lower() == "product" for t in types if t):
+                continue
+            value = node.get("category")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, dict):
+                name = value.get("name")
+                if isinstance(name, str) and name.strip():
+                    return name.strip()
+        return None
+
+    @classmethod
+    def _jsonld_rating_value(cls, tree: HTMLParser):
+        for node in cls._jsonld_blocks(tree):
+            rating = node.get("aggregateRating") if isinstance(node, dict) else None
+            if isinstance(rating, dict):
+                try:
+                    return float(rating.get("ratingValue"))
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    @classmethod
+    def _jsonld_review_count(cls, tree: HTMLParser) -> int | None:
+        for node in cls._jsonld_blocks(tree):
+            rating = node.get("aggregateRating") if isinstance(node, dict) else None
+            if isinstance(rating, dict):
+                count = rating.get("reviewCount") or rating.get("ratingCount")
+                try:
+                    return int(float(count))
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    @classmethod
+    def _review_count(cls, tree: HTMLParser, html: str) -> int | None:
+        jsonld = cls._jsonld_review_count(tree)
+        if jsonld is not None:
+            return jsonld
+        for selector in (
+            "[class*=review-count]", "[class*=reviews-count]",
+            "[class*=reviewCount]", "[data-review-count]",
+        ):
+            for node in tree.css(selector):
+                text = node.attributes.get("data-review-count") or node.text(" ", strip=True)
+                count = cls._count_from_text(text)
+                if count is not None:
+                    return count
+        return cls._count_from_text(html)
+
+    @staticmethod
+    def _count_from_text(text: str | None) -> int | None:
+        if not text:
+            return None
+        match = re.search(r"(\d[\d,\s]*)\s*(?:reviews?|ratings?|avis|bewertungen)", text, re.I)
+        if not match:
+            return None
+        try:
+            return int(match.group(1).replace(",", "").replace(" ", ""))
         except ValueError:
             return None
 

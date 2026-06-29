@@ -26,13 +26,14 @@ import {
 } from '../api/admin'
 import { fmtDate, fmtNumber } from '../api/client'
 import StatCard from '../components/common/StatCard.vue'
+import { useToastStore } from '../stores/toast'
 
 const info = ref<Record<string, any>>({})
 const route = useRoute()
+const toast = useToastStore()
 const loading = ref(false)
 const busy = ref('')
 const error = ref('')
-const message = ref('')
 const antiBot = ref<Record<string, any>>({})
 const EGRESS_CHECK_URL = 'https://api.ipify.org'
 const EMPTY_SELECT = '__empty__'
@@ -230,14 +231,13 @@ async function load() {
 async function runAction(label: string, fn: () => Promise<any>, okText: string) {
   busy.value = label
   error.value = ''
-  message.value = ''
   try {
     const data = await fn()
     info.value = data || {}
-    message.value = okText
+    if (okText) toast.success(okText)
     return data
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    toast.error(err instanceof Error ? err.message : String(err))
   } finally {
     busy.value = ''
   }
@@ -258,16 +258,15 @@ function doCheck() {
 async function checkAntiBotSites() {
   busy.value = 'anti-bot-check'
   error.value = ''
-  message.value = ''
   try {
     antiBot.value = await proxyAntiBotCheck({
       limit: 10,
       timeout: probeForm.value.timeout || 8,
     })
-    message.value = `反爬站点预检完成：通过 ${fmtNumber(antiBot.value.ok || 0)}，失败 ${fmtNumber(antiBot.value.failed || 0)}`
+    toast.success(`反爬站点预检完成：通过 ${fmtNumber(antiBot.value.ok || 0)}，失败 ${fmtNumber(antiBot.value.failed || 0)}`)
     info.value = await proxies()
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    toast.error(err instanceof Error ? err.message : String(err))
   } finally {
     busy.value = ''
   }
@@ -276,13 +275,12 @@ async function checkAntiBotSites() {
 async function applyAntiBotRules() {
   busy.value = 'anti-bot-apply'
   error.value = ''
-  message.value = ''
   try {
     antiBot.value = await proxyAntiBotApplyRules({})
-    message.value = `已应用 ${fmtNumber(antiBot.value.applied_count || 0)} 条反爬推荐规则`
+    toast.success(`已应用 ${fmtNumber(antiBot.value.applied_count || 0)} 条反爬推荐规则`)
     info.value = await proxies()
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    toast.error(err instanceof Error ? err.message : String(err))
   } finally {
     busy.value = ''
   }
@@ -335,10 +333,10 @@ function createEndpoint() {
 
 function bulkUpsertEndpoints() {
   const payload = { ...bulkForm.value }
-  return runAction('endpoint:bulk', () => proxyEndpointBulkUpsert(payload), '代理端点已批量同步').then((data: any) => {
+  return runAction('endpoint:bulk', () => proxyEndpointBulkUpsert(payload), '').then((data: any) => {
     if (!data) return
     const detail = data?.bulk || {}
-    message.value = `批量同步完成：新增 ${fmtNumber(detail.added || 0)}，更新 ${fmtNumber(detail.updated || 0)}，停用重复 ${fmtNumber(detail.disabled_duplicate_variants || 0)}，跳过 ${fmtNumber(detail.skipped || 0)}`
+    toast.success(`批量同步完成：新增 ${fmtNumber(detail.added || 0)}，更新 ${fmtNumber(detail.updated || 0)}，停用重复 ${fmtNumber(detail.disabled_duplicate_variants || 0)}，跳过 ${fmtNumber(detail.skipped || 0)}`)
     if (!detail.error_count) {
       bulkForm.value.text = ''
     }
@@ -571,7 +569,6 @@ watch(() => route.fullPath, applyRouteContext)
     </div>
 
     <div v-if="error" class="error">{{ error }}</div>
-    <div v-if="message" class="message">{{ message }}</div>
     <div v-if="routeIssue || routeSite" class="context-panel">
       <div>
         <b>来自数据质量</b>
@@ -1195,13 +1192,8 @@ watch(() => route.fullPath, applyRouteContext)
   cursor: not-allowed;
 }
 
-.message,
 .error {
   font-size: 13px;
-}
-
-.message {
-  color: #10b981;
 }
 
 .error,

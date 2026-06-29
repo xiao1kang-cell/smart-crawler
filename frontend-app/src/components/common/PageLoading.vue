@@ -1,59 +1,60 @@
 <script setup lang="ts">
+import PathLoader from './PathLoader.vue'
+
 withDefaults(defineProps<{
   title?: string
   note?: string
   compact?: boolean
-  rows?: number
 }>(), {
   title: '加载中...',
   note: '',
   compact: false,
-  rows: 4,
 })
 </script>
 
 <template>
-  <div class="page-skeleton" :class="{ compact }" role="status" aria-live="polite" :aria-label="note || title">
+  <div class="page-loading" :class="{ compact }" role="status" aria-live="polite" :aria-label="note || title">
     <span class="sr-only">{{ note || title }}</span>
-
-    <template v-if="compact">
-      <div v-for="i in rows" :key="i" class="sk-row">
-        <i class="sk-avatar" />
-        <div class="sk-copy">
-          <i class="sk-line w-lg" />
-          <i class="sk-line w-md" />
-        </div>
-        <i class="sk-pill" />
-      </div>
-    </template>
-
-    <template v-else>
-      <div class="sk-stat-grid">
-        <div v-for="i in 3" :key="`stat-${i}`" class="sk-card">
-          <i class="sk-line w-sm" />
-          <i class="sk-line w-xl tall" />
-          <i class="sk-line w-md" />
-        </div>
-      </div>
-      <div class="sk-panel">
-        <i class="sk-line w-lg" />
-        <i class="sk-line w-full tall" />
-        <i class="sk-line w-full" />
-        <i class="sk-line w-xxl" />
-      </div>
-    </template>
+    <div class="page-loading-mark">
+      <PathLoader :size="compact ? 54 : 72" :label="title" />
+      <span v-if="note" class="page-loading-note">{{ note }}</span>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.page-skeleton {
-  display: grid;
-  gap: 14px;
+.page-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin: 12px 0;
 }
-.page-skeleton.compact {
-  gap: 10px;
+.page-loading.compact {
   margin: 8px 0;
+}
+.page-loading-mark {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 132px;
+  padding: 22px 16px;
+  border: 1px solid rgba(216, 180, 254, .42);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 50% 20%, rgba(167, 139, 250, .10), transparent 46%),
+    linear-gradient(180deg, rgba(255, 255, 255, .76), rgba(251, 249, 255, .90));
+}
+.page-loading.compact .page-loading-mark {
+  min-height: 92px;
+  padding: 16px 12px;
+}
+.page-loading-note {
+  color: var(--ui-muted, #64748b);
+  font-size: .74rem;
+  font-weight: 700;
 }
 .sr-only {
   position: absolute;
@@ -66,75 +67,14 @@ withDefaults(defineProps<{
   white-space: nowrap;
   border: 0;
 }
-.sk-stat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
+:global(html[data-theme="dark"] .page-loading-mark) {
+  border-color: rgba(185, 148, 255, .30) !important;
+  background-color: #100b1a !important;
+  background:
+    radial-gradient(circle at 50% 20%, rgba(185, 148, 255, .12), transparent 46%),
+    linear-gradient(180deg, rgba(21, 16, 31, .88), rgba(16, 11, 26, .96)) !important;
 }
-.sk-card,
-.sk-panel,
-.sk-row {
-  border: 1px solid var(--ui-border, rgba(148, 163, 184, .18));
-  background: var(--ui-card, rgba(255, 255, 255, .04));
-}
-.sk-card {
-  min-height: 112px;
-  border-radius: 8px;
-  padding: 16px;
-}
-.sk-panel {
-  min-height: 150px;
-  border-radius: 8px;
-  padding: 18px;
-}
-.sk-row {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) 72px;
-  align-items: center;
-  gap: 12px;
-  min-height: 58px;
-  border-radius: 7px;
-  padding: 12px;
-}
-.sk-copy {
-  display: grid;
-  gap: 8px;
-}
-.sk-avatar,
-.sk-pill,
-.sk-line {
-  display: block;
-  overflow: hidden;
-  position: relative;
-  background: linear-gradient(90deg, rgba(148, 163, 184, .12), rgba(148, 163, 184, .26), rgba(148, 163, 184, .12));
-  background-size: 220% 100%;
-  animation: skeleton-shimmer 1.15s ease-in-out infinite;
-}
-.sk-avatar {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-}
-.sk-pill {
-  width: 64px;
-  height: 22px;
-  border-radius: 999px;
-}
-.sk-line {
-  height: 12px;
-  border-radius: 999px;
-}
-.sk-line.tall {
-  height: 26px;
-}
-.w-sm { width: 38%; }
-.w-md { width: 56%; }
-.w-lg { width: 72%; }
-.w-xl { width: 48%; }
-.w-xxl { width: 86%; }
-.w-full { width: 100%; }
-@keyframes skeleton-shimmer {
-  0% { background-position: 120% 0; }
-  100% { background-position: -120% 0; }
+:global(html[data-theme="dark"] .page-loading-note) {
+  color: var(--ui-muted, #b5bfd2) !important;
 }
 </style>

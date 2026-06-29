@@ -251,6 +251,7 @@ def test_sephora_fr_routes_through_make_fetcher_and_counts(monkeypatch):
     """sephora _crawl_fr 经统一入口计数，且解析出 ≥1 商品。"""
     from app.crawlers.sephora import SephoraCrawler
 
+    monkeypatch.setenv("SEPHORA_FR_HTML", "1")
     monkeypatch.setattr("app.crawlers.base.get_sites", lambda: [])
     monkeypatch.setattr("app.crawlers.base.get_settings", lambda: {})
     monkeypatch.setattr("app.crawlers.sephora.SephoraCrawler.snapshot", lambda self, *a, **kw: None)
@@ -307,6 +308,7 @@ def test_sephora_fr_blocked_raises_error(monkeypatch):
     from app.crawlers.sephora import SephoraCrawler
     from app.antiban import BlockedError
 
+    monkeypatch.setenv("SEPHORA_FR_HTML", "1")
     monkeypatch.setattr("app.crawlers.base.get_sites", lambda: [])
     monkeypatch.setattr("app.crawlers.base.get_settings", lambda: {})
 

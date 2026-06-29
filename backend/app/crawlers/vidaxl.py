@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import gzip
 import csv
+import html as html_lib
 import io
 import json
 import os
+import queue
 import re
 import threading
 import time
@@ -28,6 +30,7 @@ import zipfile
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from xml.etree import ElementTree as ET
 
 from curl_cffi import requests as creq
@@ -76,6 +79,7 @@ class VidaxlCrawler(BaseCrawler):
         self.base = site.url.rstrip("/")
         self.currency = _CURRENCY.get(site.country, "EUR")
         self._crawler_config = site.crawler_config or {}
+        self._category_hint_by_url: dict[str, str] = {}
         self.api_email = os.environ.get("VIDAXL_API_EMAIL") or self._config_value(
             "api_email", "vidaxl_api_email")
         self.api_token = os.environ.get("VIDAXL_API_TOKEN") or self._config_value(
@@ -295,7 +299,7 @@ class VidaxlCrawler(BaseCrawler):
             "title": title,
             "description": _first(it, "description", "desc", "long_description"),
             "image_urls": images,
-            "category_path": _first(it, "category", "category_path", "taxonomy"),
+            "category_path": _category_path_from_mapping(it),
             "sale_price": price,
             "original_price": srp if srp is not None else price,
             "currency": _first(it, "currency", "price_currency") or self.currency,
@@ -303,6 +307,8 @@ class VidaxlCrawler(BaseCrawler):
             "inventory": stock,
             "status": "on_sale" if stock is None or stock > 0 else "out_of_stock",
             "brand": _first(it, "brand", "manufacturer") or self.site.brand,
+            "has_free_shipping": _shipping_is_free(it),
+            "attributes": _promotion_attributes_from_mapping(it),
             "product_url": url,
             "site": self.site.site,
         }
@@ -317,7 +323,7 @@ class VidaxlCrawler(BaseCrawler):
             "description": it.get("description"),
             "image_urls": it.get("images") or (
                 [it.get("main_image")] if it.get("main_image") else []),
-            "category_path": it.get("category"),
+            "category_path": _category_path_from_mapping(it),
             "sale_price": _num(it.get("price") or it.get("b2b_price")),
             "original_price": _num(it.get("srp") or it.get("retail_price")
                                    or it.get("price")),
@@ -326,12 +332,18 @@ class VidaxlCrawler(BaseCrawler):
             "inventory": it.get("stock"),
             "status": "on_sale" if (it.get("stock") or 0) else "out_of_stock",
             "brand": it.get("brand") or self.site.brand,
+            "has_free_shipping": _shipping_is_free(it),
+            "attributes": _promotion_attributes_from_mapping(it),
             "product_url": it.get("url"),
             "site": self.site.site,
         }
 
     # ---------- 路径2/3：storefront 爬取 ----------
     def _crawl_storefront(self) -> CrawlResult:
+        category_urls = self._configured_category_urls()
+        if category_urls:
+            return self._crawl_storefront_categories(category_urls)
+
         result = CrawlResult()
         # sitemap_index + sub-sitemap 用统一 fetcher；proxy_tier 由 ProxyMiddleware 处理
         sitemap_fetcher = self.make_fetcher(kind="sitemap", source="vidaxl",
@@ -520,6 +532,1097 @@ class VidaxlCrawler(BaseCrawler):
             print(f"[vidaxl/{self.site.site}] note: {n}", flush=True)
         return result
 
+    def _configured_category_urls(self) -> list[str]:
+        config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
+        raw = (
+            config.get("category_urls")
+            or config.get("storefront_category_urls")
+            or config.get("category_url")
+        )
+        if not raw:
+            return []
+        if isinstance(raw, str):
+            values = [v.strip() for v in re.split(r"[\n,]+", raw) if v.strip()]
+        elif isinstance(raw, (list, tuple, set)):
+            values = [str(v).strip() for v in raw if str(v).strip()]
+        else:
+            return []
+        return [urljoin(self.base + "/", value) for value in values]
+
+    def _crawl_storefront_categories(self, category_urls: list[str]) -> CrawlResult:
+        if self._category_stream_pdp_enabled():
+            return self._crawl_storefront_categories_streaming(category_urls)
+
+        result = CrawlResult()
+        listing_fetcher = self.make_fetcher(
+            kind="listing",
+            source="vidaxl_category",
+            timeout=30,
+            use_proxy=False,
+            rate_interval_sec=float(os.environ.get("VIDAXL_CATEGORY_RATE_INTERVAL_SEC", "0.1")),
+        )
+        targets, expected_total, notes = self._collect_category_targets(
+            listing_fetcher,
+            category_urls,
+        )
+        result.notes.extend(notes)
+        total = max(len(targets), expected_total or 0)
+        result.total_product_count = total
+        _persist_sitemap_total(self.site.site, total)
+        _persist_job_progress(self.job_id, products_count=0,
+                              total_product_count=total)
+
+        run_limit = min(self.limit, RUN_TARGET_LIMIT) if RUN_TARGET_LIMIT > 0 else self.limit
+        planned = targets[:run_limit]
+        if len(planned) <= FRONTIER_REGISTER_MAX_URLS:
+            _register_frontier_targets(self.site.site, planned)
+        else:
+            result.notes.append(
+                f"跳过 frontier 预注册：{len(planned)} 个分类 URL 超过 "
+                f"VIDAXL_FRONTIER_REGISTER_MAX_URLS={FRONTIER_REGISTER_MAX_URLS}。"
+            )
+        if len(planned) < len(targets):
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "category"
+            result.coverage_reason = (
+                f"VidaXL 分类页共发现 {len(targets)} 个商品 URL，"
+                f"本次只计划抓取 {len(planned)} 个"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = (
+                "调大 max_products / VIDAXL_RUN_TARGET_LIMIT 后重跑。"
+            )
+
+        result.notes.append(
+            f"路径2 storefront/category：{len(category_urls)} 个分类入口 · "
+            f"分类标称 {expected_total or 0} · 发现商品 URL {len(targets)} · "
+            f"实际计划抓取 {len(planned)}"
+        )
+        pdp_result = self._crawl_storefront_targets(
+            planned,
+            source="vidaxl_category",
+            retry_mode=False,
+            progress_total=total,
+        )
+        if not pdp_result.products_already_persisted:
+            result.products.extend(pdp_result.products)
+        result.notes.extend(pdp_result.notes)
+        result.products_already_persisted = pdp_result.products_already_persisted
+        result.persisted_products_count = pdp_result.persisted_products_count
+        result.persisted_upsert_stats = pdp_result.persisted_upsert_stats
+        latest_note = pdp_result.notes[-1] if pdp_result.notes else ""
+        print(f"[vidaxl/{self.site.site}] {latest_note}", flush=True)
+        for n in result.notes:
+            print(f"[vidaxl/{self.site.site}] note: {n}", flush=True)
+        return result
+
+    def _crawl_storefront_categories_streaming(self, category_urls: list[str]) -> CrawlResult:
+        result = CrawlResult()
+        category_pages, expected_total, load_notes = self._load_category_pages(category_urls)
+        result.notes.extend(load_notes)
+        total = max(0, expected_total or 0)
+        result.total_product_count = total
+        _persist_sitemap_total(self.site.site, total)
+        _persist_job_progress(self.job_id, products_count=0,
+                              total_product_count=total)
+
+        if not category_pages:
+            result.notes.append("Vidaxl 分类页目标为空")
+            return result
+
+        max_workers = self._storefront_concurrency(retry_mode=False)
+        retries = self._storefront_retries()
+        progress_every = max(1, int(os.environ.get(
+            "VIDAXL_PROGRESS_UPDATE_EVERY", "200")))
+        batch_size = self._category_stream_batch_size()
+        queue_size = self._category_stream_queue_size(max_workers)
+        url_queue: queue.Queue[object] = queue.Queue(maxsize=queue_size)
+        stop_token = object()
+
+        self._proxy_thread_local = threading.local()
+        self._proxy_lease_handles: list = []
+        self._proxy_lease_handles_lock = threading.Lock()
+        self._reuse_proxy_leases = self._reuse_proxy_leases_per_thread()
+
+        counters = {"discovered": 0, "completed": 0, "ok": 0, "http_4xx": 0,
+                    "http_404": 0, "http_5xx": 0, "timeout": 0,
+                    "parse_none": 0, "proxy_unavailable": 0,
+                    "redirected_non_product": 0, "exception": 0}
+        counters_lock = threading.Lock()
+        batch: list[dict] = []
+        batch_lock = threading.Lock()
+        stats_lock = threading.Lock()
+        persisted_stats = {"total": 0, "inserted": 0, "updated": 0,
+                           "skipped": 0, "new": 0, "changed": 0}
+        stream_persist = bool(self.job_id)
+        result.products_already_persisted = stream_persist
+
+        def _inc(key: str, amount: int = 1) -> int:
+            with counters_lock:
+                counters[key] = counters.get(key, 0) + amount
+                return int(counters[key])
+
+        def _counter_value(key: str) -> int:
+            with counters_lock:
+                return int(counters.get(key, 0))
+
+        def _effective_display_total() -> int:
+            parsed = _counter_value("ok")
+            return max(parsed, int(total or 0))
+
+        def _merge_stats(stats: dict) -> None:
+            with stats_lock:
+                for key in persisted_stats:
+                    persisted_stats[key] += int(stats.get(key, 0) or 0)
+                result.persisted_upsert_stats = dict(persisted_stats)
+
+        def _persist_items(items: list[dict]) -> None:
+            if not items:
+                return
+            stats = _persist_products_batch(
+                self.site.site,
+                items,
+                counter=getattr(self, "counter", None),
+            )
+            _merge_stats(stats)
+            parsed = _counter_value("ok")
+            result.persisted_products_count = parsed
+            _persist_job_progress(
+                self.job_id,
+                products_count=parsed,
+                total_product_count=_effective_display_total(),
+            )
+
+        def _append_row(row: dict) -> None:
+            if not stream_persist:
+                result.products.append(row)
+                return
+            flush_items: list[dict] | None = None
+            with batch_lock:
+                batch.append(row)
+                if len(batch) >= batch_size:
+                    flush_items = list(batch)
+                    batch.clear()
+            if flush_items:
+                _persist_items(flush_items)
+
+        def _flush_batch() -> None:
+            if not stream_persist:
+                return
+            with batch_lock:
+                flush_items = list(batch)
+                batch.clear()
+            _persist_items(flush_items)
+
+        def _fetch_one(url: str) -> dict | None:
+            last = _PdpFetchResult(status=0)
+            for _attempt in range(retries + 1):
+                last = self._try_fetch_storefront_pdp(url)
+                status = last.status
+                if status == 200 and last.html:
+                    self.snapshot(url.rstrip("/").split("/")[-1], last.html)
+                    row = self._parse_jsonld(last.html, url)
+                    if row:
+                        self._apply_category_hint(row, url)
+                        _log_fetched(self.site.site, url, 200,
+                                     parsed=True, job_id=self.job_id,
+                                     source="vidaxl_category_stream")
+                        with counters_lock:
+                            self.counter.api_calls += 1
+                            counters["ok"] = counters.get("ok", 0) + 1
+                        return row
+                    if self._is_redirected_non_product_page(last.html):
+                        _log_fetched(self.site.site, url, 200,
+                                     skipped=True, job_id=self.job_id,
+                                     source="vidaxl_category_stream")
+                        _inc("redirected_non_product")
+                        return None
+                    _log_fetched(self.site.site, url, 200,
+                                 parse_failed=True, job_id=self.job_id,
+                                 source="vidaxl_category_stream")
+                    _inc("parse_none")
+                    return None
+                if last.failure and last.failure.code == PROXY_UNAVAILABLE:
+                    _log_fetched(self.site.site, url, 0,
+                                 job_id=self.job_id, source="vidaxl_category_stream",
+                                 failure=last.failure)
+                    _inc("proxy_unavailable")
+                    return None
+                if status == -1 or status >= 500:
+                    continue
+                if 400 <= status < 500:
+                    if status == 404:
+                        _log_fetched(self.site.site, url, status,
+                                     skipped=True, job_id=self.job_id,
+                                     source="vidaxl_category_stream")
+                        _inc("http_404")
+                    else:
+                        _log_fetched(self.site.site, url, status,
+                                     job_id=self.job_id,
+                                     source="vidaxl_category_stream")
+                        _inc("http_4xx")
+                    return None
+            _log_fetched(
+                self.site.site,
+                url,
+                last.status if last.status > 0 else 0,
+                job_id=self.job_id,
+                source="vidaxl_category_stream",
+                failure=last.failure,
+            )
+            if last.status == -1:
+                _inc("timeout")
+            elif last.status >= 500:
+                _inc("http_5xx")
+            else:
+                _inc("exception")
+            return None
+
+        def _pdp_worker() -> None:
+            while True:
+                item = url_queue.get()
+                try:
+                    if item is stop_token:
+                        return
+                    url = str(item)
+                    try:
+                        row = _fetch_one(url)
+                    except Exception:
+                        _inc("exception")
+                        row = None
+                    completed = _inc("completed")
+                    if row:
+                        _append_row(row)
+                    if completed % progress_every == 0:
+                        parsed = (_counter_value("ok") if stream_persist
+                                  else len(result.products))
+                        _persist_job_progress(
+                            self.job_id,
+                            products_count=parsed,
+                            total_product_count=_effective_display_total(),
+                        )
+                finally:
+                    url_queue.task_done()
+
+        def _emit_url(url: str) -> None:
+            if not url:
+                return
+            discovered = _inc("discovered")
+            if discovered % 1000 == 0:
+                print(
+                    f"[vidaxl/{self.site.site}] 分类URL流式发现 discovered={discovered} "
+                    f"pdp_done={_counter_value('completed')} ok={_counter_value('ok')}",
+                    flush=True,
+                )
+            url_queue.put(url)
+
+        category_parallelism = min(len(category_pages), self._category_parallelism())
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as pdp_pool:
+                pdp_futures = [pdp_pool.submit(_pdp_worker) for _ in range(max_workers)]
+                with ThreadPoolExecutor(max_workers=max(1, category_parallelism)) as category_pool:
+                    future_map = {
+                        category_pool.submit(
+                            self._stream_category_targets,
+                            category_url,
+                            html,
+                            _emit_url,
+                        ): category_url
+                        for category_url, html in category_pages
+                    }
+                    for fut, category_url in list(future_map.items()):
+                        try:
+                            found = fut.result()
+                            result.notes.append(
+                                f"分类流式分页 {category_url}: 投递 {found} 个商品 URL"
+                            )
+                        except Exception as exc:
+                            result.notes.append(f"分类流式分页 {category_url} 失败: {exc}")
+                for _ in range(max_workers):
+                    url_queue.put(stop_token)
+                url_queue.join()
+                for fut in pdp_futures:
+                    fut.result()
+            _flush_batch()
+        finally:
+            self._release_cached_proxy_leases()
+
+        parsed = (_counter_value("ok") if stream_persist else len(result.products))
+        result.persisted_products_count = parsed
+        result.total_product_count = _effective_display_total()
+        result.persisted_upsert_stats = dict(persisted_stats)
+        result.notes.append(
+            f"路径2 storefront/category stream：{len(category_urls)} 个分类入口 · "
+            f"分类标称 {expected_total or 0} · 流式发现 URL {_counter_value('discovered')} · "
+            f"PDP 并发 {max_workers}·重试 {retries} · "
+            f"成功 {_counter_value('ok')}/{_counter_value('completed')} · "
+            f"404={_counter_value('http_404')} 4xx={_counter_value('http_4xx')} "
+            f"5xx={_counter_value('http_5xx')} timeout={_counter_value('timeout')} "
+            f"proxy_unavailable={_counter_value('proxy_unavailable')} "
+            f"redirected_non_product={_counter_value('redirected_non_product')} "
+            f"parse_none={_counter_value('parse_none')} exc={_counter_value('exception')}"
+        )
+        latest_note = result.notes[-1] if result.notes else ""
+        print(f"[vidaxl/{self.site.site}] {latest_note}", flush=True)
+        for n in result.notes:
+            print(f"[vidaxl/{self.site.site}] note: {n}", flush=True)
+        return result
+
+    def _collect_category_targets(self, fetcher, category_urls: list[str]) -> tuple[list[str], int, list[str]]:
+        seen: set[str] = set()
+        targets: list[str] = []
+        expected_total = 0
+        notes: list[str] = []
+        category_pages: list[tuple[str, str]] = []
+
+        def load_category_page(category_url: str) -> tuple[str, int, str, str | None]:
+            category_session = self._category_listing_session()
+            try:
+                status, html = self._fetch_category_listing_html(
+                    category_session,
+                    category_url,
+                    timeout=40,
+                )
+            except Exception as exc:
+                return category_url, 0, "", str(exc)
+            return category_url, status, html, None
+
+        category_parallelism = min(len(category_urls), self._category_parallelism())
+        if category_parallelism > 1:
+            with ThreadPoolExecutor(max_workers=category_parallelism) as ex:
+                futures = [ex.submit(load_category_page, url) for url in category_urls]
+                loaded = []
+                for category_url, fut in zip(category_urls, futures):
+                    try:
+                        loaded.append(fut.result())
+                    except Exception as exc:
+                        loaded.append((category_url, 0, "", str(exc)))
+        else:
+            loaded = [load_category_page(url) for url in category_urls]
+
+        for category_url, status, html, error in loaded:
+            if error:
+                notes.append(f"分类页不可达 {category_url}: {error}")
+                continue
+            if status != 200 or not html:
+                notes.append(f"分类页不可达 {category_url}: HTTP {status}")
+                continue
+            expected_total += self._category_total_from_html(html)
+            category_pages.append((category_url, html))
+
+        if expected_total:
+            _persist_job_total_product_count(self.job_id, expected_total)
+
+        def discover_category(category_url: str, html: str) -> tuple[str, list[str], list[str], int]:
+            local_seen: set[str] = set()
+            local_targets: list[str] = []
+            local_notes: list[str] = []
+            category_session = self._category_listing_session()
+            grid_url = self._category_grid_url(html, category_url)
+            if grid_url:
+                found = self._collect_category_grid_targets(
+                    category_session,
+                    grid_url,
+                    html,
+                    category_url,
+                    local_seen,
+                    local_targets,
+                )
+                local_notes.append(f"分类分页 {category_url}: 发现 {found} 个商品 URL")
+                return category_url, local_targets, local_notes, 0
+
+            ajax_url = self._category_ajax_url(html, category_url)
+            if ajax_url:
+                found, total_hint = self._collect_category_ajax_targets(
+                    category_session,
+                    ajax_url,
+                    local_seen,
+                    local_targets,
+                )
+                local_notes.append(f"分类 Ajax {category_url}: 发现 {found} 个商品 URL")
+                return category_url, local_targets, local_notes, total_hint
+
+            found = self._add_listing_product_urls(html, category_url, local_seen, local_targets)
+            local_notes.append(f"分类页 {category_url}: 发现 {found} 个商品 URL")
+            return category_url, local_targets, local_notes, 0
+
+        if category_parallelism > 1 and len(category_pages) > 1:
+            with ThreadPoolExecutor(max_workers=category_parallelism) as ex:
+                futures = [ex.submit(discover_category, url, html) for url, html in category_pages]
+                discovered = []
+                for (category_url, _html), fut in zip(category_pages, futures):
+                    try:
+                        discovered.append(fut.result())
+                    except Exception as exc:
+                        discovered.append((
+                            category_url,
+                            [],
+                            [f"分类 {category_url} 并发失败: {exc}"],
+                            0,
+                        ))
+        else:
+            discovered = [discover_category(url, html) for url, html in category_pages]
+
+        for _category_url, local_targets, local_notes, total_hint in discovered:
+            notes.extend(local_notes)
+            if total_hint and not expected_total:
+                expected_total += total_hint
+                _persist_job_total_product_count(self.job_id, expected_total)
+            for url in local_targets:
+                if url in seen:
+                    continue
+                seen.add(url)
+                targets.append(url)
+        return targets, expected_total, notes
+
+    def _load_category_pages(self, category_urls: list[str]) -> tuple[list[tuple[str, str]], int, list[str]]:
+        expected_total = 0
+        notes: list[str] = []
+        category_pages: list[tuple[str, str]] = []
+
+        def load_category_page(category_url: str) -> tuple[str, int, str, str | None]:
+            category_session = self._category_listing_session()
+            try:
+                status, html = self._fetch_category_listing_html(
+                    category_session,
+                    category_url,
+                    timeout=40,
+                )
+            except Exception as exc:
+                return category_url, 0, "", str(exc)
+            return category_url, status, html, None
+
+        category_parallelism = min(len(category_urls), self._category_parallelism())
+        if category_parallelism > 1:
+            with ThreadPoolExecutor(max_workers=category_parallelism) as ex:
+                futures = [ex.submit(load_category_page, url) for url in category_urls]
+                loaded = []
+                for category_url, fut in zip(category_urls, futures):
+                    try:
+                        loaded.append(fut.result())
+                    except Exception as exc:
+                        loaded.append((category_url, 0, "", str(exc)))
+        else:
+            loaded = [load_category_page(url) for url in category_urls]
+
+        for category_url, status, html, error in loaded:
+            if error:
+                notes.append(f"分类页不可达 {category_url}: {error}")
+                continue
+            if status != 200 or not html:
+                notes.append(f"分类页不可达 {category_url}: HTTP {status}")
+                continue
+            expected_total += self._category_total_from_html(html)
+            category_pages.append((category_url, html))
+
+        if expected_total:
+            _persist_job_total_product_count(self.job_id, expected_total)
+        return category_pages, expected_total, notes
+
+    def _stream_category_targets(
+        self,
+        category_url: str,
+        html: str,
+        emit_url,
+    ) -> int:
+        def emit_with_category_hint(url: str) -> None:
+            self._remember_category_hint(url, category_url, html)
+            emit_url(url)
+
+        category_session = self._category_listing_session()
+        grid_url = self._category_grid_url(html, category_url)
+        if grid_url:
+            return self._stream_category_grid_targets(
+                category_session,
+                grid_url,
+                html,
+                category_url,
+                emit_with_category_hint,
+            )
+
+        ajax_url = self._category_ajax_url(html, category_url)
+        if ajax_url:
+            return self._stream_category_ajax_targets(
+                category_session,
+                ajax_url,
+                emit_with_category_hint,
+            )
+
+        urls = self._listing_product_urls(html, category_url)
+        for url in urls:
+            emit_with_category_hint(url)
+        return len(urls)
+
+    def _stream_category_grid_targets(
+        self,
+        category_session,
+        grid_url: str,
+        first_html: str,
+        base_url: str,
+        emit_url,
+    ) -> int:
+        page_limit = self._category_page_limit()
+        found = 0
+        first_grid_html = ""
+        first_grid_url = self._grid_page_url(grid_url, page=1)
+        sample_page_added = 0
+        start_page = 2
+        try:
+            status, first_grid_html = self._fetch_category_listing_html(
+                category_session,
+                first_grid_url,
+                timeout=40,
+            )
+            if status != 200:
+                first_grid_html = ""
+        except Exception:
+            first_grid_html = ""
+        first_urls = self._grid_product_urls(first_grid_html or first_html, first_grid_url)
+        for url in first_urls:
+            emit_url(url)
+        first_page_added = len(first_urls)
+
+        second_grid_url = self._grid_page_url(grid_url, page=2)
+        try:
+            status, second_grid_html = self._fetch_category_listing_html(
+                category_session,
+                second_grid_url,
+                timeout=40,
+            )
+            if status == 200 and second_grid_html:
+                second_urls = self._grid_product_urls(second_grid_html, second_grid_url)
+                for url in second_urls:
+                    emit_url(url)
+                sample_page_added = len(second_urls)
+                start_page = 3
+        except Exception:
+            pass
+        found += first_page_added + sample_page_added
+
+        total = self._category_total_from_html(first_html)
+        last_page = self._category_last_page(first_html)
+        grid_page_size = self._category_grid_page_size()
+        page_sample = sample_page_added or first_page_added or grid_page_size
+        if grid_page_size:
+            page_sample = min(page_sample, grid_page_size)
+        if total and page_sample:
+            estimated_last_page = (total + page_sample - 1) // page_sample
+            last_page = max(last_page, estimated_last_page)
+        if page_limit:
+            last_page = min(last_page or page_limit, page_limit)
+        if not last_page:
+            page_size = max(1, self._category_page_size())
+            last_page = max(1, (total + page_size - 1) // page_size) if total else 1
+            if page_limit:
+                last_page = min(last_page, page_limit)
+
+        concurrency = self._category_discovery_concurrency()
+        if concurrency > 1 and last_page >= start_page:
+            completed = 0
+            total_pages = last_page - start_page + 1
+            next_page = start_page
+            pending = {}
+            page_session_local = threading.local()
+
+            def page_session():
+                sess = getattr(page_session_local, "session", None)
+                if sess is None:
+                    sess = self._category_listing_session()
+                    page_session_local.session = sess
+                return sess
+
+            def fetch_page(page: int) -> tuple[int, int, str]:
+                page_url = self._grid_page_url(grid_url, page=page)
+                status, page_html = self._fetch_category_listing_html(
+                    page_session(),
+                    page_url,
+                    timeout=40,
+                )
+                return page, status, page_html
+
+            with ThreadPoolExecutor(max_workers=concurrency) as ex:
+                while next_page <= last_page or pending:
+                    while next_page <= last_page and len(pending) < concurrency * 4:
+                        fut = ex.submit(fetch_page, next_page)
+                        pending[fut] = next_page
+                        next_page += 1
+                    done, _ = wait(set(pending), return_when=FIRST_COMPLETED)
+                    for fut in done:
+                        page = pending.pop(fut)
+                        completed += 1
+                        try:
+                            page, status, page_html = fut.result()
+                        except Exception:
+                            status, page_html = 0, ""
+                        if status == 200 and page_html:
+                            page_url = self._grid_page_url(grid_url, page=page)
+                            urls = self._grid_product_urls(page_html, page_url)
+                            for url in urls:
+                                emit_url(url)
+                            found += len(urls)
+                        if completed % 250 == 0 or completed == total_pages:
+                            print(
+                                f"[vidaxl/{self.site.site}] 分类分页流式发现 "
+                                f"{base_url} pages={completed}/{total_pages} "
+                                f"投递={found}",
+                                flush=True,
+                            )
+            return found
+
+        for page in range(start_page, last_page + 1):
+            page_url = self._grid_page_url(grid_url, page=page)
+            try:
+                status, page_html = self._fetch_category_listing_html(
+                    category_session,
+                    page_url,
+                    timeout=40,
+                )
+            except Exception:
+                break
+            if status != 200 or not page_html:
+                break
+            urls = self._grid_product_urls(page_html, page_url)
+            if not urls:
+                break
+            for url in urls:
+                emit_url(url)
+            found += len(urls)
+            if page % 250 == 0 or page == last_page:
+                print(
+                    f"[vidaxl/{self.site.site}] 分类分页流式发现 "
+                    f"{base_url} page={page}/{last_page} 投递={found}",
+                    flush=True,
+                )
+        return found
+
+    def _stream_category_ajax_targets(self, category_session, ajax_url: str, emit_url) -> int:
+        page_size = self._category_page_size()
+        page_limit = self._category_page_limit()
+        start = 0
+        pages = 0
+        total_found = 0
+        total_hint = 0
+        while True:
+            if page_limit and pages >= page_limit:
+                break
+            page_url = self._ajax_page_url(ajax_url, start=start, size=page_size)
+            try:
+                status, html = self._fetch_category_listing_html(
+                    category_session,
+                    page_url,
+                    timeout=40,
+                )
+            except Exception:
+                break
+            if status != 200 or not html:
+                break
+            if not total_hint:
+                total_hint = self._category_total_from_html(html)
+            urls = self._listing_product_urls(html, page_url)
+            if not urls:
+                break
+            for url in urls:
+                emit_url(url)
+            total_found += len(urls)
+            pages += 1
+            start += page_size
+            if total_hint and start >= total_hint:
+                break
+        return total_found
+
+    def _collect_category_grid_targets(
+        self,
+        category_session,
+        grid_url: str,
+        first_html: str,
+        base_url: str,
+        seen: set[str],
+        targets: list[str],
+    ) -> int:
+        page_limit = self._category_page_limit()
+        before = len(targets)
+        first_grid_html = ""
+        first_grid_url = self._grid_page_url(grid_url, page=1)
+        sample_page_added = 0
+        start_page = 2
+        try:
+            status, first_grid_html = self._fetch_category_listing_html(
+                category_session,
+                first_grid_url,
+                timeout=40,
+            )
+            if status != 200:
+                first_grid_html = ""
+        except Exception:
+            first_grid_html = ""
+        self._add_grid_product_urls(first_grid_html or first_html, first_grid_url, seen, targets)
+        first_page_added = len(targets) - before
+        second_grid_url = self._grid_page_url(grid_url, page=2)
+        try:
+            status, second_grid_html = self._fetch_category_listing_html(
+                category_session,
+                second_grid_url,
+                timeout=40,
+            )
+            if status == 200 and second_grid_html:
+                second_before = len(targets)
+                self._add_grid_product_urls(second_grid_html, second_grid_url, seen, targets)
+                sample_page_added = len(targets) - second_before
+                start_page = 3
+        except Exception:
+            pass
+        total = self._category_total_from_html(first_html)
+        last_page = self._category_last_page(first_html)
+        grid_page_size = self._category_grid_page_size()
+        page_sample = sample_page_added or first_page_added or grid_page_size
+        if grid_page_size:
+            page_sample = min(page_sample, grid_page_size)
+        if total and page_sample:
+            estimated_last_page = (total + page_sample - 1) // page_sample
+            last_page = max(last_page, estimated_last_page)
+        if page_limit:
+            last_page = min(last_page or page_limit, page_limit)
+        if not last_page:
+            page_size = max(1, self._category_page_size())
+            last_page = max(1, (total + page_size - 1) // page_size) if total else 1
+            if page_limit:
+                last_page = min(last_page, page_limit)
+        concurrency = self._category_discovery_concurrency()
+        if concurrency > 1 and last_page >= start_page:
+            completed = 0
+            total_pages = last_page - start_page + 1
+            next_page = start_page
+            pending = {}
+            page_session_local = threading.local()
+
+            def page_session():
+                sess = getattr(page_session_local, "session", None)
+                if sess is None:
+                    sess = self._category_listing_session()
+                    page_session_local.session = sess
+                return sess
+
+            def fetch_page(page: int) -> tuple[int, int, str]:
+                page_url = self._grid_page_url(grid_url, page=page)
+                status, html = self._fetch_category_listing_html(
+                    page_session(),
+                    page_url,
+                    timeout=40,
+                )
+                return page, status, html
+
+            with ThreadPoolExecutor(max_workers=concurrency) as ex:
+                while next_page <= last_page or pending:
+                    while next_page <= last_page and len(pending) < concurrency * 4:
+                        fut = ex.submit(fetch_page, next_page)
+                        pending[fut] = next_page
+                        next_page += 1
+                    done, _ = wait(set(pending), return_when=FIRST_COMPLETED)
+                    for fut in done:
+                        page = pending.pop(fut)
+                        completed += 1
+                        try:
+                            page, status, html = fut.result()
+                        except Exception:
+                            status, html = 0, ""
+                        if status == 200 and html:
+                            page_url = self._grid_page_url(grid_url, page=page)
+                            self._add_grid_product_urls(html, page_url, seen, targets)
+                        if completed % 250 == 0 or completed == total_pages:
+                            print(
+                                f"[vidaxl/{self.site.site}] 分类分页发现 "
+                                f"{base_url} pages={completed}/{total_pages} "
+                                f"新增={len(targets) - before}",
+                                flush=True,
+                            )
+            return len(targets) - before
+        for page in range(start_page, last_page + 1):
+            page_url = self._grid_page_url(grid_url, page=page)
+            try:
+                status, html = self._fetch_category_listing_html(
+                    category_session,
+                    page_url,
+                    timeout=40,
+                )
+            except Exception:
+                break
+            if status != 200 or not html:
+                break
+            added = self._add_grid_product_urls(html, page_url, seen, targets)
+            if added == 0:
+                break
+            if page % 250 == 0 or page == last_page:
+                print(
+                    f"[vidaxl/{self.site.site}] 分类分页发现 "
+                    f"{base_url} page={page}/{last_page} "
+                    f"新增={len(targets) - before}",
+                    flush=True,
+                )
+        return len(targets) - before
+
+    def _collect_category_ajax_targets(self, category_session, ajax_url: str, seen: set[str], targets: list[str]) -> tuple[int, int]:
+        page_size = self._category_page_size()
+        page_limit = self._category_page_limit()
+        start = 0
+        pages = 0
+        total_found = 0
+        total_hint = 0
+        while True:
+            if page_limit and pages >= page_limit:
+                break
+            page_url = self._ajax_page_url(ajax_url, start=start, size=page_size)
+            try:
+                status, html = self._fetch_category_listing_html(
+                    category_session,
+                    page_url,
+                    timeout=40,
+                )
+            except Exception:
+                break
+            if status != 200 or not html:
+                break
+            if not total_hint:
+                total_hint = self._category_total_from_html(html)
+            added = self._add_listing_product_urls(html, page_url, seen, targets)
+            if added == 0:
+                break
+            total_found += added
+            pages += 1
+            start += page_size
+            if total_hint and start >= total_hint:
+                break
+        return total_found, total_hint
+
+    def _category_listing_session(self):
+        sess = creq.Session(impersonate="chrome")
+        headers = getattr(sess, "headers", None)
+        if headers is not None:
+            headers.update({
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            })
+        return sess
+
+    def _fetch_category_listing_html(self, session, url: str, *, timeout: int = 40) -> tuple[int, str]:
+        interval = self._category_rate_interval_sec()
+        if interval > 0:
+            time.sleep(interval)
+        res = session.get(url, timeout=timeout)
+        return int(getattr(res, "status_code", 0) or 0), getattr(res, "text", "") or ""
+
+    def _category_rate_interval_sec(self) -> float:
+        config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
+        raw = config.get("category_rate_interval_sec")
+        if raw is None:
+            raw = os.environ.get("VIDAXL_CATEGORY_RATE_INTERVAL_SEC", "0.02")
+        try:
+            return max(0.0, min(float(raw), 5.0))
+        except (TypeError, ValueError):
+            return 0.02
+
+    def _category_discovery_concurrency(self) -> int:
+        config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
+        raw = config.get("category_discovery_concurrency")
+        if raw is None:
+            raw = os.environ.get("VIDAXL_CATEGORY_DISCOVERY_CONCURRENCY", "8")
+        return _bounded_int(raw, 1, 20, 8)
+
+    def _category_parallelism(self) -> int:
+        config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
+        raw = (
+            config.get("category_parallelism")
+            or config.get("category_concurrency")
+            or config.get("listing_concurrency")
+        )
+        if raw is None:
+            raw = os.environ.get("VIDAXL_CATEGORY_PARALLELISM", "2")
+        return _bounded_int(raw, 1, 6, 2)
+
+    def _category_stream_pdp_enabled(self) -> bool:
+        config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
+        raw = config.get("category_stream_pdp")
+        if raw is None:
+            raw = os.environ.get("VIDAXL_CATEGORY_STREAM_PDP", "1")
+        return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+    def _category_stream_queue_size(self, max_workers: int) -> int:
+        config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
+        raw = config.get("category_stream_queue_size")
+        if raw is None:
+            raw = os.environ.get("VIDAXL_CATEGORY_STREAM_QUEUE_SIZE")
+        if raw in (None, ""):
+            return max(50000, max_workers * 5000)
+        return _bounded_int(raw, 100, 200000, max(50000, max_workers * 5000))
+
+    def _category_stream_batch_size(self) -> int:
+        config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
+        raw = config.get("category_stream_batch_size")
+        if raw is None:
+            raw = os.environ.get("VIDAXL_CATEGORY_STREAM_BATCH_SIZE")
+        if raw in (None, ""):
+            return min(max(1, STREAM_UPSERT_BATCH_SIZE), 100)
+        return _bounded_int(raw, 1, STREAM_UPSERT_BATCH_SIZE, 100)
+
+    def _category_grid_page_size(self) -> int:
+        config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
+        raw = config.get("category_grid_page_size")
+        if raw is None:
+            raw = os.environ.get("VIDAXL_CATEGORY_GRID_PAGE_SIZE", "20")
+        return _bounded_int(raw, 1, 100, 20)
+
+    def _category_page_size(self) -> int:
+        config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
+        raw = config.get("category_page_size") or os.environ.get("VIDAXL_CATEGORY_PAGE_SIZE") or 100
+        return _bounded_int(raw, 20, 200, 100)
+
+    def _category_page_limit(self) -> int:
+        config = self._crawler_config if isinstance(self._crawler_config, dict) else {}
+        raw = config.get("category_page_limit") or os.environ.get("VIDAXL_CATEGORY_PAGE_LIMIT") or 0
+        return _bounded_int(raw, 0, 10000, 0)
+
+    @staticmethod
+    def _ajax_page_url(url: str, *, start: int, size: int) -> str:
+        parts = urlsplit(html_lib.unescape(url))
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query["start"] = str(max(0, start))
+        query["sz"] = str(max(1, size))
+        return urlunsplit(parts._replace(query=urlencode(query)))
+
+    @staticmethod
+    def _grid_page_url(url: str, *, page: int) -> str:
+        parts = urlsplit(html_lib.unescape(url))
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query["page"] = str(max(1, page))
+        return urlunsplit(parts._replace(query=urlencode(query)))
+
+    @staticmethod
+    def _category_grid_url(html: str, base_url: str) -> str | None:
+        for pattern in (
+            r'data-url="([^"]*Search-UpdateGrid[^"]*)"',
+            r'value="1"[^>]*data-url="([^"]*Search-UpdateGrid[^"]*)"',
+        ):
+            for match in re.finditer(pattern, html):
+                url = html_lib.unescape(match.group(1))
+                if "cgid=" in url:
+                    return urljoin(base_url, url)
+        return None
+
+    @staticmethod
+    def _category_last_page(html: str) -> int:
+        pages = []
+        for match in re.finditer(r'Search-UpdateGrid[^"\']*[?&]page=(\d+)', html):
+            try:
+                pages.append(int(match.group(1)))
+            except ValueError:
+                pass
+        return max(pages) if pages else 0
+
+    @staticmethod
+    def _category_ajax_url(html: str, base_url: str) -> str | None:
+        for match in re.finditer(r'data-url="([^"]*Search-ShowAjax[^"]*)"', html):
+            url = html_lib.unescape(match.group(1))
+            if "cgid=" in url:
+                return urljoin(base_url, url)
+        return None
+
+    def _category_total_from_html(self, html: str) -> int:
+        for block in _LD_RE.findall(html):
+            try:
+                doc = json.loads(block.strip())
+            except json.JSONDecodeError:
+                continue
+            graph = (doc if isinstance(doc, list)
+                     else doc.get("@graph", [doc]) if isinstance(doc, dict)
+                     else [])
+            for node in graph:
+                if not isinstance(node, dict):
+                    continue
+                main = node.get("mainEntity") or {}
+                if isinstance(main, dict):
+                    total = _int(main.get("numberOfItems"))
+                    if total:
+                        return total
+        return 0
+
+    def _add_listing_product_urls(
+        self,
+        html: str,
+        base_url: str,
+        seen: set[str],
+        targets: list[str],
+    ) -> int:
+        before = len(targets)
+        for url in self._listing_product_urls(html, base_url):
+            if url in seen:
+                continue
+            seen.add(url)
+            self._remember_category_hint(url, base_url, html)
+            targets.append(url)
+        return len(targets) - before
+
+    def _add_grid_product_urls(
+        self,
+        html: str,
+        base_url: str,
+        seen: set[str],
+        targets: list[str],
+    ) -> int:
+        before = len(targets)
+        for url in self._grid_product_urls(html, base_url):
+            if url in seen:
+                continue
+            seen.add(url)
+            self._remember_category_hint(url, base_url, html)
+            targets.append(url)
+        return len(targets) - before
+
+    def _listing_product_urls(self, html: str, base_url: str) -> list[str]:
+        urls: list[str] = []
+        seen: set[str] = set()
+        for block in _LD_RE.findall(html):
+            try:
+                doc = json.loads(block.strip())
+            except json.JSONDecodeError:
+                continue
+            graph = (doc if isinstance(doc, list)
+                     else doc.get("@graph", [doc]) if isinstance(doc, dict)
+                     else [])
+            for node in graph:
+                if not isinstance(node, dict):
+                    continue
+                main = node.get("mainEntity") or {}
+                elements = main.get("itemListElement") if isinstance(main, dict) else []
+                for elem in elements or []:
+                    if not isinstance(elem, dict):
+                        continue
+                    self._append_category_url(elem.get("url"), base_url, seen, urls)
+        for match in re.finditer(r'(?:href|data-url)="([^"]*/e/[^"]+?\.html)', html):
+            self._append_category_url(match.group(1), base_url, seen, urls)
+        return urls
+
+    def _grid_product_urls(self, html: str, base_url: str) -> list[str]:
+        urls: list[str] = []
+        seen: set[str] = set()
+        for match in re.finditer(r'href="([^"]*/e/[^"]+?\.html)', html):
+            self._append_category_url(match.group(1), base_url, seen, urls)
+        return urls
+
+    @staticmethod
+    def _add_category_url(raw: object, base_url: str, seen: set[str], targets: list[str]) -> None:
+        VidaxlCrawler._append_category_url(raw, base_url, seen, targets)
+
+    @staticmethod
+    def _append_category_url(raw: object, base_url: str, seen: set[str], targets: list[str]) -> None:
+        if not isinstance(raw, str) or "/e/" not in raw:
+            return
+        url = html_lib.unescape(raw).split("#", 1)[0]
+        url = urljoin(base_url, url)
+        if url in seen:
+            return
+        seen.add(url)
+        targets.append(url)
+
     def crawl_failed_products(self, urls: list[str]) -> CrawlResult:
         targets = [u for u in urls if u]
         result = self._crawl_storefront_targets(
@@ -609,6 +1712,7 @@ class VidaxlCrawler(BaseCrawler):
                     self.snapshot(url.rstrip("/").split("/")[-1], last.html)
                     row = self._parse_jsonld(last.html, url)
                     if row:
+                        self._apply_category_hint(row, url)
                         _log_fetched(self.site.site, url, 200,
                                      parsed=True, job_id=self.job_id,
                                      source=source)
@@ -781,6 +1885,11 @@ class VidaxlCrawler(BaseCrawler):
         except Exception as exc:
             failure = classify_exception(exc, stage=STAGE_FETCH)
             proxy_pool.report_failure(proxy_url)
+            if not release_after_fetch:
+                self._discard_thread_cached_proxy_lease(
+                    success=False,
+                    failure_code=failure.code if failure else None,
+                )
             return _PdpFetchResult(-1, "", failure)
         finally:
             if handle and handle.lease_token and release_after_fetch:
@@ -924,7 +2033,73 @@ class VidaxlCrawler(BaseCrawler):
         raw = config.get("pdp_timeout_sec") or os.environ.get("VIDAXL_PDP_TIMEOUT_SEC") or 30
         return _bounded_int(raw, 5, 120, 30)
 
+    @staticmethod
+    def _jsonld_type(node: dict) -> set[str]:
+        raw = node.get("@type")
+        values = raw if isinstance(raw, list) else [raw]
+        return {str(v).lower() for v in values if v}
+
+    @classmethod
+    def _breadcrumb_path(cls, node: dict | None) -> str | None:
+        if not isinstance(node, dict):
+            return None
+        if "breadcrumb" in node:
+            breadcrumb = node.get("breadcrumb")
+            if isinstance(breadcrumb, list):
+                for candidate in breadcrumb:
+                    path = cls._breadcrumb_path(candidate)
+                    if path:
+                        return path
+                return None
+            return cls._breadcrumb_path(breadcrumb)
+        if "breadcrumblist" not in cls._jsonld_type(node):
+            return None
+
+        names: list[str] = []
+        for elem in node.get("itemListElement") or []:
+            if not isinstance(elem, dict):
+                continue
+            item = elem.get("item")
+            item_type = cls._jsonld_type(item) if isinstance(item, dict) else set()
+            name = None
+            if isinstance(item, dict):
+                name = item.get("name")
+            if not name:
+                name = elem.get("name")
+            if not name and isinstance(item, dict):
+                name = _category_from_url_path(str(item.get("@id") or ""))
+            if not name:
+                continue
+            name = str(name).strip()
+            if not name:
+                continue
+            if item_type & {"itempage", "product"}:
+                continue
+            root_names = {"frontpage", "homepage", "home", "startseite", "vidaxl"}
+            if name.lower() in root_names:
+                continue
+            names.append(name)
+        return "/".join(names) or None
+
+    @staticmethod
+    def _category_value(value) -> str | None:
+        if isinstance(value, str):
+            return value.strip() or None
+        if isinstance(value, dict):
+            for key in ("name", "category", "label"):
+                text = value.get(key)
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+        if isinstance(value, list):
+            for item in value:
+                text = VidaxlCrawler._category_value(item)
+                if text:
+                    return text
+        return None
+
     def _parse_jsonld(self, html: str, url: str) -> dict | None:
+        product_doc: dict | None = None
+        category_path: str | None = None
         for block in _LD_RE.findall(html):
             try:
                 doc = json.loads(block.strip())
@@ -943,40 +2118,91 @@ class VidaxlCrawler(BaseCrawler):
             for it in expanded:
                 if not isinstance(it, dict):
                     continue
-                t = it.get("@type")
-                if t != "Product" and not (isinstance(t, list) and "Product" in t):
+                category_path = category_path or self._breadcrumb_path(it)
+                if "product" not in self._jsonld_type(it):
                     continue
-                offers = it.get("offers") or {}
-                if isinstance(offers, list):
-                    offers = offers[0] if offers else {}
-                brand = it.get("brand")
-                if isinstance(brand, dict):
-                    brand = brand.get("name")
-                rating = it.get("aggregateRating") or {}
-                imgs = it.get("image")
-                imgs = [imgs] if isinstance(imgs, str) else (imgs or [])
-                avail = str(offers.get("availability", "")).lower()
-                price = _num(offers.get("price"))
-                return {
-                    "sku": it.get("sku") or it.get("mpn")
-                    or url.rstrip("/").split("/")[-1].replace(".html", ""),
-                    "spu": it.get("sku") or it.get("mpn"),
-                    "title": it.get("name"),
-                    "description": it.get("description"),
-                    "image_urls": imgs,
-                    "sale_price": price, "original_price": price,
-                    "currency": offers.get("priceCurrency") or self.currency,
-                    "gtin": it.get("gtin13") or it.get("gtin"),
-                    "mpn": it.get("mpn"),
-                    "ratings": _num(rating.get("ratingValue")),
-                    "review_count": _int(rating.get("reviewCount")),
-                    "status": "out_of_stock" if "outofstock" in avail
-                    else "on_sale",
-                    "brand": brand or self.site.brand,
-                    "product_url": url,
-                    "site": self.site.site,
-                }
-        return None
+                if product_doc is None:
+                    product_doc = it
+        if product_doc is None:
+            return None
+
+        offers = product_doc.get("offers") or {}
+        if isinstance(offers, list):
+            offers = offers[0] if offers else {}
+        brand = product_doc.get("brand")
+        if isinstance(brand, dict):
+            brand = brand.get("name")
+        rating = product_doc.get("aggregateRating") or {}
+        imgs = product_doc.get("image")
+        imgs = [imgs] if isinstance(imgs, str) else (imgs or [])
+        avail = str(offers.get("availability", "")).lower()
+        price = _num(offers.get("price"))
+        high_price = _num(
+            offers.get("highPrice")
+            or offers.get("high_price")
+            or offers.get("listPrice")
+            or offers.get("rrp")
+            or offers.get("msrp")
+        )
+        original_price = high_price if high_price and price and high_price > price else price
+        attributes = _promotion_attributes_from_mapping({
+            **(offers if isinstance(offers, dict) else {}),
+            **(product_doc if isinstance(product_doc, dict) else {}),
+        })
+        html_attributes = _promotion_attributes_from_html(html)
+        attributes = _merge_promotion_attributes(attributes, html_attributes)
+        return {
+            "sku": product_doc.get("sku") or product_doc.get("mpn")
+            or url.rstrip("/").split("/")[-1].replace(".html", ""),
+            "spu": product_doc.get("sku") or product_doc.get("mpn"),
+            "title": product_doc.get("name"),
+            "description": product_doc.get("description"),
+            "image_urls": imgs,
+            "category_path": category_path
+            or self._category_value(product_doc.get("category")),
+            "sale_price": price, "original_price": original_price,
+            "currency": offers.get("priceCurrency") or self.currency,
+            "gtin": product_doc.get("gtin13") or product_doc.get("gtin"),
+            "mpn": product_doc.get("mpn"),
+            "ratings": _num(rating.get("ratingValue")),
+            "review_count": _int(rating.get("reviewCount")),
+            "status": "out_of_stock" if "outofstock" in avail
+            else "on_sale",
+            "brand": brand or self.site.brand,
+            "has_free_shipping": _boolish(attributes.get("free_shipping")),
+            "attributes": attributes,
+            "product_url": url,
+            "site": self.site.site,
+        }
+
+    def _apply_category_hint(self, row: dict, url: str) -> None:
+        if not isinstance(row, dict) or row.get("category_path"):
+            return
+        hint = self._category_hint_by_url.get(url)
+        if hint:
+            row["category_path"] = hint
+
+    def _remember_category_hint(self, product_url: str, category_url: str, html: str = "") -> None:
+        hint = self._category_hint_from_context(category_url, html)
+        if hint:
+            self._category_hint_by_url[product_url] = hint
+
+    def _category_hint_from_context(self, category_url: str, html: str = "") -> str | None:
+        for block in _LD_RE.findall(html or ""):
+            try:
+                doc = json.loads(block.strip())
+            except json.JSONDecodeError:
+                continue
+            graph = (doc if isinstance(doc, list)
+                     else doc.get("@graph", [doc]) if isinstance(doc, dict)
+                     else [])
+            for node in graph:
+                if not isinstance(node, dict):
+                    continue
+                name = self._category_value(node.get("name"))
+                if name and "product" not in self._jsonld_type(node):
+                    return name
+        return _category_from_url_path(category_url)
 
     @staticmethod
     def _is_redirected_non_product_page(html: str) -> bool:
@@ -1352,6 +2578,203 @@ def _split_values(value) -> list[str]:
     text = str(value)
     parts = re.split(r"\s*[|,]\s*", text)
     return [p for p in (part.strip() for part in parts) if p]
+
+
+def _category_path_from_mapping(data: dict) -> str | None:
+    value = _first(
+        data,
+        "category_path", "categorypath", "category_breadcrumb",
+        "breadcrumb", "taxonomy", "google_product_category",
+        "product_category", "category_tree", "categories",
+    )
+    if value in (None, "", [], {}):
+        value = _first(data, "category", "category_name", "categoryname")
+    if isinstance(value, list):
+        nested = [
+            VidaxlCrawler._category_value(item)
+            for item in value
+        ]
+        nested = [item for item in nested if item]
+        if nested:
+            return "/".join(nested[:4])
+    parts = _split_values(value)
+    if parts:
+        return "/".join(parts[:4])
+    if isinstance(value, dict):
+        nested = VidaxlCrawler._category_value(value)
+        return nested.strip() if nested else None
+    text = str(value or "").strip()
+    return text or None
+
+
+def _shipping_is_free(data: dict) -> bool:
+    value = _first(
+        data,
+        "free_shipping", "free_delivery", "shipping_included",
+        "delivery_included",
+    )
+    if _boolish(value):
+        return True
+    text = " ".join(
+        str(_first(data, key) or "")
+        for key in (
+            "shipping", "shipping_label", "shipping_text", "delivery",
+            "delivery_label", "delivery_text", "freight", "logistics",
+        )
+    )
+    return bool(re.search(
+        r"free\s+(?:shipping|delivery)|shipping\s+included|"
+        r"delivery\s+included|gratis\s+verzending|livraison\s+gratuite|"
+        r"spedizione\s+gratuita|env[ií]o\s+gratis|kostenloser\s+versand|"
+        r"versandkostenfrei|env[ií]o\s+gr[aá]tis|entrega\s+gr[aá]tis|"
+        r"portes\s+gr[aá]tis",
+        text,
+        re.I,
+    ))
+
+
+def _promotion_attributes_from_mapping(data: dict) -> dict:
+    """Collect offer/promo fields from API/feed/JSON-LD without trusting names."""
+    if not isinstance(data, dict):
+        return {}
+    labels: list[str] = []
+    promo_keys = (
+        "promotion", "promotions", "promo", "campaign", "campaign_name",
+        "discount", "discount_percent", "coupon", "coupon_code", "voucher",
+        "deal", "offer", "sale", "label", "badge", "shipping", "delivery",
+        "free_shipping", "free_delivery",
+    )
+    for key, value in data.items():
+        key_text = str(key or "").lower()
+        if value in (None, "", [], {}):
+            continue
+        if any(token in key_text for token in promo_keys):
+            if isinstance(value, (list, tuple, set)):
+                labels.extend(str(v).strip() for v in value if str(v).strip())
+            elif isinstance(value, dict):
+                label = (
+                    value.get("name")
+                    or value.get("label")
+                    or value.get("description")
+                    or value.get("text")
+                )
+                if label:
+                    labels.append(str(label).strip())
+            else:
+                labels.append(str(value).strip())
+    free_shipping = _shipping_is_free(data)
+    out = {
+        "promotions": _dedupe(labels)[:8],
+        "coupon": _first(data, "coupon", "coupon_code", "voucher", "code"),
+        "discount_percent": _first(data, "discount_percent", "discount"),
+        "campaign_name": _first(data, "campaign_name", "promotion_name", "promo_name"),
+        "threshold": _first(data, "threshold", "min_order", "minimum_order"),
+        "free_shipping": free_shipping,
+        "free_shipping_label": "Free shipping" if free_shipping else None,
+    }
+    return {key: value for key, value in out.items() if value not in (None, "", [], {})}
+
+
+def _promotion_attributes_from_html(html: str) -> dict:
+    if not html:
+        return {}
+    text = re.sub(r"<script\b.*?</script>", " ", html, flags=re.I | re.S)
+    text = re.sub(r"<style\b.*?</style>", " ", text, flags=re.I | re.S)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_lib.unescape(re.sub(r"\s+", " ", text)).strip()
+    if not text:
+        return {}
+    promo_re = re.compile(
+        r"((?:"
+        r"\bfree\s+(?:shipping|delivery)\b|\bshipping\s+included\b|\bdelivery\s+included\b"
+        r"|\b(?:sale|deals?|discount|coupon|promo|bundle)\b|\bsave\s+\d+%?\b"
+        r"|gratis\s+verzending|livraison\s+gratuite|spedizione\s+gratuita|"
+        r"env[ií]o\s+(?:gratis|gr[aá]tis|gratuito)|entrega\s+gr[aá]tis|"
+        r"portes\s+gr[aá]tis|"
+        r"kostenloser\s+versand|versandkostenfrei|darmowa\s+dostawa|"
+        r"livrare\s+gratuit[ăa]|transport\s+gratuit)"
+        r"[^.!?]{0,100})",
+        re.I,
+    )
+    labels = [
+        re.sub(r"\s+", " ", match.group(1)).strip(" -:;,.")
+        for match in promo_re.finditer(text)
+    ]
+    labels = [label for label in labels if 3 <= len(label) <= 160]
+    free_shipping = bool(re.search(
+        r"free\s+(?:shipping|delivery)|shipping\s+included|delivery\s+included|"
+        r"gratis\s+verzending|livraison\s+gratuite|spedizione\s+gratu(?:i|ì)ta|"
+        r"env[ií]o\s+(?:gratis|gr[aá]tis)|entrega\s+gr[aá]tis|"
+        r"portes\s+gr[aá]tis|kostenloser\s+versand|versandkostenfrei",
+        text,
+        re.I,
+    ))
+    out = {
+        "promotions": _dedupe(labels)[:8],
+        "free_shipping": free_shipping,
+        "free_shipping_label": "Free shipping" if free_shipping else None,
+    }
+    return {
+        key: value for key, value in out.items()
+        if value not in (None, "", [], {}, False)
+    }
+
+
+def _merge_promotion_attributes(*items: dict) -> dict:
+    merged: dict = {}
+    promotions: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for key, value in item.items():
+            if key == "promotions":
+                if isinstance(value, list):
+                    promotions.extend(str(v) for v in value if v)
+                elif value not in (None, ""):
+                    promotions.append(str(value))
+            elif value not in (None, "", [], {}):
+                if key == "free_shipping":
+                    merged[key] = bool(merged.get(key)) or _boolish(value)
+                else:
+                    merged.setdefault(key, value)
+    if promotions:
+        merged["promotions"] = _dedupe(promotions)[:8]
+    return merged
+
+
+def _boolish(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return False
+    text = str(value).strip().lower()
+    return text in {"1", "true", "yes", "y", "on", "free", "included"}
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
+
+
+def _category_from_url_path(url: str) -> str | None:
+    parts = [
+        html_lib.unescape(part).replace("-", " ").strip().title()
+        for part in urlsplit(str(url or "")).path.split("/")
+        if part and part.lower() not in {
+            "g", "e", "p", "c", "category", "categories",
+        }
+    ]
+    meaningful = []
+    for part in parts:
+        if part.isdigit():
+            continue
+        meaningful.append(part)
+    return "/".join(meaningful[:3]) or None
 
 
 def _bounded_int(value, low: int, high: int, default: int) -> int:

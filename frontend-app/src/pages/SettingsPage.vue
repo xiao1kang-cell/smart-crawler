@@ -7,21 +7,26 @@ import {
   createInvite,
   createUser,
   createWorkspace,
+  deleteWebhookConfig,
+  getWebhookConfig,
   listInvites,
   listUsers,
   listWorkspaceSites,
   proxyStatus,
   resetUserPassword,
+  saveWebhookConfig,
   updateInvite,
   updateUser,
   updateWorkspaceSite
 } from '../api/settings'
 import { useAuthStore } from '../stores/auth'
+import { useToastStore } from '../stores/toast'
 import { useWorkspaceStore } from '../stores/workspace'
 import PageLoading from '../components/common/PageLoading.vue'
 import JobsPanel from '../components/settings/JobsPanel.vue'
 
 const auth = useAuthStore()
+const toast = useToastStore()
 const workspace = useWorkspaceStore()
 
 const section = ref('jobs')
@@ -35,9 +40,10 @@ const invites = ref<Record<string, any>[]>([])
 const workspaceSites = ref<Record<string, any>[]>([])
 const sites = ref<Record<string, any>[]>([])
 const proxy = ref<Record<string, any> | null>(null)
+const webhookConfig = ref<Record<string, any> | null>(null)
+const webhookForm = ref({ url: '', active: true, rotate_secret: false })
 const busy = ref('')
 const error = ref('')
-const message = ref('')
 const showCreateUser = ref(false)
 const createdUserPassword = ref('')
 const newInviteCode = ref('')
@@ -45,6 +51,7 @@ const newInviteCode = ref('')
 const menu = [
   { key: 'users', label: '用户管理', desc: '内部账号与角色' },
   { key: 'jobs', label: '采集任务', desc: '队列与进程状态' },
+  { key: 'webhook', label: 'Webhook 通知', desc: '任务触发与完成回调' },
   { key: 'workspace', label: '工作区', desc: '当前租户与切换' },
   { key: 'workspace_sites', label: '工作区站点', desc: '可见站点清单' },
   { key: 'invites', label: '邀请注册', desc: '新租户或成员邀请' },
@@ -92,6 +99,7 @@ const proxyProblemCount = computed(() => {
   const counts = proxyStatusCounts.value
   return Number(counts.down || 0) + Number(counts.blocked || 0) + Number(counts.degraded || 0)
 })
+const webhookDeliveries = computed(() => asList(webhookConfig.value, ['deliveries']).slice(0, 20))
 const initialLoading = computed(() => busy.value === 'load' && !workspace.workspaces.length && !sites.value.length && !users.value.length && !invites.value.length)
 
 watch(visibleMenu, (items) => {
@@ -130,7 +138,6 @@ function openCreateUser() {
 async function guarded(label: string, fn: () => Promise<void>) {
   busy.value = label
   error.value = ''
-  message.value = ''
   try {
     await fn()
   } catch (err) {
@@ -146,18 +153,25 @@ async function load() {
     currentWorkspaceId.value = String(auth.workspaceId || workspace.currentWorkspace?.id || '')
     if (!inviteForm.value.workspace_id && currentWorkspaceId.value) inviteForm.value.workspace_id = currentWorkspaceId.value
     const workspaceId = currentWorkspaceId.value
-    const [usersData, invitesData, siteData, workspaceSiteData, proxyData] = await Promise.all([
+    const [usersData, invitesData, siteData, workspaceSiteData, proxyData, webhookData] = await Promise.all([
       listUsers().catch(() => ({ users: [] })),
       canManageInvites.value ? listInvites().catch(() => ({ invites: [] })) : Promise.resolve({ invites: [] }),
       listSites().catch(() => ({ sites: [] })),
       workspaceId ? listWorkspaceSites(workspaceId).catch(() => ({ sites: [] })) : Promise.resolve({ sites: [] }),
-      proxyStatus().catch(() => null)
+      proxyStatus().catch(() => null),
+      getWebhookConfig().catch(() => null)
     ])
     users.value = asList(usersData, ['users', 'items'])
     invites.value = asList(invitesData, ['invites', 'items'])
     sites.value = asList(siteData, ['sites', 'items'])
     workspaceSites.value = asList(workspaceSiteData, ['sites', 'items'])
     proxy.value = proxyData
+    webhookConfig.value = webhookData
+    webhookForm.value = {
+      url: webhookData?.url || '',
+      active: webhookData?.configured ? webhookData?.active !== false : true,
+      rotate_secret: false,
+    }
   })
 }
 
@@ -172,7 +186,7 @@ async function saveWorkspace() {
     workspaceForm.value = { name: '', slug: '' }
     if (data?.id) auth.setWorkspace(String(data.id))
     await load()
-    message.value = '工作区已创建'
+    toast.success('工作区已创建')
   })
 }
 
@@ -183,7 +197,7 @@ async function addSite(siteCode = siteForm.value.site) {
     await addWorkspaceSite(workspaceId, { site: siteCode })
     siteForm.value.site = ''
     await load()
-    message.value = '站点已加入工作区'
+    toast.success('站点已加入工作区')
   })
 }
 
@@ -204,7 +218,7 @@ async function saveWorkspaceSiteTarget(site: Record<string, any>) {
       target_sku_count: site.target_sku_count || null,
     })
     await load()
-    message.value = '目标 SKU 已保存'
+    toast.success('目标 SKU 已保存')
   })
 }
 
@@ -215,7 +229,7 @@ async function saveUser() {
     userForm.value.password = ''
     showCreateUser.value = false
     await load()
-    message.value = '用户已创建'
+    toast.success('用户已创建')
   })
 }
 
@@ -234,7 +248,7 @@ async function resetPassword(user: Record<string, any>) {
   await guarded('reset', async () => {
     const data = await resetUserPassword(user.id, {})
     createdUserPassword.value = data?.temporary_password || ''
-    message.value = '临时密码已生成'
+    toast.success('临时密码已生成')
   })
 }
 
@@ -246,7 +260,7 @@ async function saveInvite() {
     const data = await createInvite(payload)
     newInviteCode.value = data?.code || ''
     await load()
-    message.value = '邀请码已生成'
+    toast.success('邀请码已生成')
   })
 }
 
@@ -260,13 +274,46 @@ async function patchInvite(invite: Record<string, any>, active = false) {
 async function refreshProxy() {
   await guarded('proxy', async () => {
     proxy.value = await proxyStatus()
-    message.value = '代理状态已刷新'
+    toast.success('代理状态已刷新')
   })
 }
 
+async function saveWebhook() {
+  await guarded('webhook', async () => {
+    webhookConfig.value = await saveWebhookConfig({
+      url: webhookForm.value.url,
+      active: webhookForm.value.active,
+      rotate_secret: webhookForm.value.rotate_secret,
+    })
+    webhookForm.value.rotate_secret = false
+    await load()
+    toast.success('Webhook 配置已保存')
+  })
+}
+
+async function disableWebhook() {
+  await guarded('webhook', async () => {
+    await deleteWebhookConfig()
+    await load()
+    toast.success('Webhook 已停用')
+  })
+}
+
+function formatDeliveryStatus(status?: string) {
+  return ({ pending: '待投递', success: '成功', failed: '失败' } as Record<string, string>)[status || ''] || status || '—'
+}
+
+function deliveryTone(status?: string) {
+  return status === 'success' ? 'ok' : status === 'pending' ? 'warn' : 'bad'
+}
+
 async function copyText(text: string) {
-  await navigator.clipboard.writeText(text)
-  message.value = '已复制'
+  try {
+    await navigator.clipboard.writeText(text)
+    toast.success('已复制')
+  } catch {
+    toast.show({ title: '复制失败', description: text, tone: 'warning', timeout: 0 })
+  }
 }
 
 onMounted(load)
@@ -277,7 +324,6 @@ onMounted(load)
     <div class="lead">设置</div>
     <div class="sub">{{ menuSummary }}</div>
     <UAlert v-if="error" color="error" variant="soft" :title="error" class="mb-4" />
-    <UAlert v-if="message" color="success" variant="soft" :title="message" class="mb-4" />
 
     <PageLoading v-if="initialLoading" title="加载设置..." note="正在读取工作区、用户、邀请和代理状态" />
 
@@ -343,6 +389,57 @@ onMounted(load)
         <div v-if="section === 'jobs'" class="set-block">
           <h3>⚙ 采集任务</h3>
           <JobsPanel embedded />
+        </div>
+
+        <div v-if="section === 'webhook'" class="set-block">
+          <h3>🔔 Webhook 通知</h3>
+          <div class="hint-box">
+            <b>事件：</b>任务入队时发送 <code>job.triggered</code>，任务进入成功、部分成功、失败、跳过或熔断等终态时发送 <code>job.completed</code>。
+            请求头包含 <code>X-SmartCrawler-Signature</code>，签名算法为 HMAC-SHA256。
+          </div>
+          <div class="form-grid one">
+            <div class="form-field wide">
+              <label>接收地址</label>
+              <input v-model="webhookForm.url" class="set-inp" placeholder="https://example.com/webhooks/smart-crawler" />
+              <small>只支持 http/https，不能指向本机或内网 IP。</small>
+            </div>
+            <label class="toggle-row">
+              <input v-model="webhookForm.active" type="checkbox" />
+              <span>启用通知</span>
+            </label>
+            <label class="toggle-row">
+              <input v-model="webhookForm.rotate_secret" type="checkbox" />
+              <span>保存时重新生成签名密钥</span>
+            </label>
+            <div class="webhook-actions">
+              <button class="mini-btn" :disabled="busy === 'webhook' || !webhookForm.url" @click="saveWebhook">
+                {{ busy === 'webhook' ? '保存中' : '保存配置' }}
+              </button>
+              <button v-if="webhookConfig?.configured" class="mini-btn bad" :disabled="busy === 'webhook'" @click="disableWebhook">停用</button>
+            </div>
+          </div>
+          <div v-if="webhookConfig?.configured" class="key-row webhook-state">
+            <div class="info">
+              <b>{{ webhookConfig.active ? '已启用' : '已停用' }}</b>
+              <span class="key-prefix">{{ webhookConfig.url }}</span>
+              <span class="meta">密钥前缀 {{ webhookConfig.secret_prefix || '—' }} · 更新时间 {{ webhookConfig.updated_at ? webhookConfig.updated_at.slice(0, 19).replace('T', ' ') : '—' }}</span>
+            </div>
+          </div>
+          <h3 class="webhook-subtitle">最近投递</h3>
+          <div class="settings-scroll-list">
+            <div v-for="d in webhookDeliveries" :key="d.id" class="key-row">
+              <div class="info">
+                <b>{{ d.event_type }} · {{ d.job_kind }} #{{ d.job_id }}</b>
+                <span class="meta">HTTP {{ d.http_status || '—' }} · 重试 {{ d.retries || 0 }} · {{ d.created_at ? d.created_at.slice(0, 19).replace('T', ' ') : '—' }}</span>
+                <span v-if="d.response_snippet" class="key-prefix">{{ d.response_snippet }}</span>
+              </div>
+              <span class="pill" :class="deliveryTone(d.status)">{{ formatDeliveryStatus(d.status) }}</span>
+            </div>
+            <div v-if="!webhookDeliveries.length" class="empty-state">
+              <b>暂无投递记录</b>
+              保存配置后，新的任务事件会显示在这里
+            </div>
+          </div>
         </div>
 
         <div v-if="section === 'users' && canAdmin" class="set-block">
@@ -542,6 +639,35 @@ onMounted(load)
   min-height: 30px;
   padding: 4px 8px;
   font-size: .78rem;
+}
+
+.toggle-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ui-muted);
+  font-size: .8rem;
+  font-weight: 700;
+}
+
+.toggle-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--ui-purple);
+}
+
+.webhook-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.webhook-state {
+  margin-top: 12px;
+}
+
+.webhook-subtitle {
+  margin-top: 18px;
 }
 
 .settings-dialog-grid {

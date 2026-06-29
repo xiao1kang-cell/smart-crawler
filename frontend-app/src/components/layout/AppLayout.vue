@@ -21,7 +21,6 @@ const auth = useAuthStore()
 const workspace = useWorkspaceStore()
 
 const busy = ref('')
-const message = ref('')
 const error = ref('')
 const coverageSummary = ref<Record<string, any>>({})
 
@@ -43,7 +42,6 @@ const coveragePct = computed(() => Number(coverageSummary.value.overall_coverage
 async function guarded(label: string, fn: () => Promise<void>) {
   busy.value = label
   error.value = ''
-  message.value = ''
   try {
     await fn()
   } catch (err) {
@@ -90,7 +88,6 @@ onMounted(bootstrap)
 
     <div class="page">
       <UAlert v-if="error" color="error" variant="soft" :title="error" class="mb-4" />
-      <UAlert v-if="message" color="success" variant="soft" :title="message" class="mb-4" />
       <RouterView />
     </div>
   </main>

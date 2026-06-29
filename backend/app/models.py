@@ -814,6 +814,43 @@ class SpineJob(Base):
     finished_at = Column(DateTime)
 
 
+class WebhookConfig(Base):
+    """Workspace webhook 配置。当前工作区内的任务事件会投递到这里。"""
+
+    __tablename__ = "webhook_configs"
+
+    id = Column(Integer, primary_key=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"),
+                          unique=True, index=True)
+    url = Column(String, nullable=False)
+    secret = Column(String, nullable=False)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WebhookDelivery(Base):
+    """一次 webhook 投递记录。任务路径只登记记录，后台循环负责发送。"""
+
+    __tablename__ = "webhook_deliveries"
+
+    id = Column(Integer, primary_key=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)
+    config_id = Column(Integer, ForeignKey("webhook_configs.id"), index=True)
+    event_type = Column(String, index=True)
+    job_kind = Column(String, index=True)
+    job_id = Column(Integer, index=True)
+    payload = Column(JSON)
+    status = Column(String, default="pending", index=True)
+    retries = Column(Integer, default=0)
+    max_retries = Column(Integer, default=5)
+    next_retry_at = Column(DateTime, index=True)
+    http_status = Column(Integer)
+    response_snippet = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    finished_at = Column(DateTime)
+
+
 class AdminAuditLog(Base):
     """超管后台写操作审计 —— 谁在何时对什么做了什么。"""
 
@@ -829,39 +866,3 @@ class AdminAuditLog(Base):
     ip = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
-
-class WebhookConfig(Base):
-    """每个 workspace 一条 webhook 配置。任务终态时向 url POST 通知。"""
-
-    __tablename__ = "webhook_configs"
-
-    id = Column(Integer, primary_key=True)
-    workspace_id = Column(Integer, ForeignKey("workspaces.id"),
-                          unique=True, index=True)
-    url = Column(String, nullable=False)            # 目标地址(http/https)
-    secret = Column(String, nullable=False)         # HMAC-SHA256 密钥(明文存,签名需原文)
-    active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow)
-
-
-class WebhookDelivery(Base):
-    """一次 webhook 投递记录。pending→success/failed,失败按退避重试。"""
-
-    __tablename__ = "webhook_deliveries"
-
-    id = Column(Integer, primary_key=True)
-    workspace_id = Column(Integer, ForeignKey("workspaces.id"), index=True)
-    config_id = Column(Integer, ForeignKey("webhook_configs.id"), index=True)
-    event_type = Column(String)                     # job.success | job.failed
-    job_kind = Column(String)                       # spine | crawl | ondemand
-    job_id = Column(Integer)
-    payload = Column(JSON)                          # 冻结的瘦载荷快照
-    status = Column(String, index=True)             # pending | success | failed
-    retries = Column(Integer, default=0)
-    max_retries = Column(Integer, default=5)
-    next_retry_at = Column(DateTime, index=True)
-    http_status = Column(Integer)                   # 末次响应码
-    response_snippet = Column(Text)                 # 末次响应体前 500 字
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    finished_at = Column(DateTime)

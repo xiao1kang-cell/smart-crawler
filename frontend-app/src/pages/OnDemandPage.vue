@@ -4,8 +4,10 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { asList, fmtNumber } from '../api/client'
 import { batchOndemand, clearOndemandJobs, deleteOndemandJob, fetchOndemand, getOndemandJob, listOndemandJobs, retryOndemandJob } from '../api/ondemand'
 import StatusBadge from '../components/common/StatusBadge.vue'
+import { useToastStore } from '../stores/toast'
 
 const form = ref({ url: '', max_items: 20, review_limit: 2000, batchText: '' })
+const toast = useToastStore()
 const jobs = ref<Record<string, any>[]>([])
 const selectedJob = ref<Record<string, any> | null>(null)
 const showDetail = ref(false)
@@ -15,7 +17,6 @@ const reviewPage = ref(1)
 const loading = ref(false)
 const busy = ref('')
 const error = ref('')
-const message = ref('')
 let timer: number | undefined
 const maxBatch = 1000
 
@@ -88,7 +89,6 @@ function mergeJobs(incoming: Record<string, any>[]) {
 async function guarded(label: string, fn: () => Promise<void>) {
   busy.value = label
   error.value = ''
-  message.value = ''
   try {
     await fn()
   } catch (err) {
@@ -103,7 +103,7 @@ async function submitOne() {
     if (!form.value.url.trim()) throw new Error('请填写 URL')
     await fetchOndemand({ url: form.value.url, max_items: form.value.max_items, review_limit: form.value.review_limit })
     form.value.url = ''
-    message.value = '按需抓取已提交'
+    toast.success('按需抓取已提交')
     await load()
   })
 }
@@ -115,7 +115,7 @@ async function submitBatch() {
     if (urls.length > maxBatch) throw new Error(`单批最多 ${maxBatch} 条，当前 ${urls.length} 条`)
     await batchOndemand({ urls, max_items: form.value.max_items, review_limit: form.value.review_limit })
     form.value.batchText = ''
-    message.value = '批量任务已提交'
+    toast.success('批量任务已提交')
     await load()
   })
 }
@@ -196,7 +196,6 @@ onUnmounted(() => {
     <div class="lead">按需抓取</div>
     <div class="sub">指定 URL → listing + VOC（美客多 / Lazada / 虾皮）</div>
     <UAlert v-if="error" color="error" variant="soft" :title="error" />
-    <UAlert v-if="message" color="success" variant="soft" :title="message" />
 
     <div class="inf-panel od-fetch-panel">
       <div class="od-fetch-row">

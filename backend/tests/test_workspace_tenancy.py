@@ -204,8 +204,14 @@ def test_jobs_list_reports_total_and_summary_beyond_current_limit():
                         if idx < 4 else None))
     db.commit()
 
-    payload = list_jobs(limit=2, user="alice", x_workspace_id=str(ws_a.id),
-                        db=db)
+    payload = list_jobs(
+        limit=2,
+        created_from="2026-01-01T00:00:00+00:00",
+        created_to="2026-01-05T23:59:59+00:00",
+        user="alice",
+        x_workspace_id=str(ws_a.id),
+        db=db,
+    )
 
     assert payload["total"] == 5
     assert payload["page_size"] == 2
@@ -214,8 +220,15 @@ def test_jobs_list_reports_total_and_summary_beyond_current_limit():
     assert payload["summary"]["running"] == 1
     assert payload["items"][0]["finished_at"] is None
 
-    second_page = list_jobs(limit=2, page=2, user="alice",
-                            x_workspace_id=str(ws_a.id), db=db)
+    second_page = list_jobs(
+        limit=2,
+        page=2,
+        created_from="2026-01-01T00:00:00+00:00",
+        created_to="2026-01-05T23:59:59+00:00",
+        user="alice",
+        x_workspace_id=str(ws_a.id),
+        db=db,
+    )
     assert second_page["page"] == 2
     assert second_page["page_size"] == 2
     assert [item["products_count"] for item in second_page["items"]] == [3, 2]
@@ -250,8 +263,14 @@ def test_jobs_list_collapses_same_site_same_day_by_default():
     db.add_all([previous_day, old_same_day, latest_same_day, active_same_day])
     db.commit()
 
-    payload = list_jobs(limit=20, user="alice", x_workspace_id=str(ws_a.id),
-                        db=db)
+    payload = list_jobs(
+        limit=20,
+        created_from="2026-06-24T00:00:00+00:00",
+        created_to="2026-06-25T23:59:59+00:00",
+        user="alice",
+        x_workspace_id=str(ws_a.id),
+        db=db,
+    )
 
     displayed_ids = {item["id"] for item in payload["items"]}
     assert payload["total"] == 2
@@ -272,6 +291,198 @@ def test_jobs_list_collapses_same_site_same_day_by_default():
         old_same_day.id,
         latest_same_day.id,
     }
+
+
+def test_jobs_list_daily_collapse_prefers_full_site_job_over_failed_retry():
+    from app.api.routes import list_jobs
+
+    db = _threadsafe_session()
+    ws_a, _ws_b, _alice, _bob, _admin = _seed_two_workspaces(db)
+    base = datetime(2026, 6, 25, 8, 0)
+    full_site = CrawlJob(site="site_a", status="success", trigger="manual",
+                         products_count=14428, total_product_count=14432,
+                         requested_by_workspace_id=ws_a.id,
+                         created_at=base,
+                         finished_at=base + timedelta(minutes=30))
+    failed_with_larger_denominator = CrawlJob(
+        site="site_a", status="failed", trigger="manual",
+        products_count=300, total_product_count=15000,
+        failure_code="job_timeout",
+        requested_by_workspace_id=ws_a.id,
+        created_at=base + timedelta(minutes=40),
+        finished_at=base + timedelta(minutes=45),
+    )
+    smaller_admin_retry = CrawlJob(site="site_a", status="success",
+                                   trigger="admin_retry",
+                                   products_count=1534,
+                                   total_product_count=1535,
+                                   requested_by_workspace_id=ws_a.id,
+                                   created_at=base + timedelta(hours=1),
+                                   finished_at=base + timedelta(hours=1, minutes=10))
+    failed_retry = CrawlJob(site="site_a", status="success",
+                            trigger="failed_product_retry",
+                            products_count=500, total_product_count=500,
+                            requested_by_workspace_id=ws_a.id,
+                            created_at=base + timedelta(hours=2),
+                            finished_at=base + timedelta(hours=2, minutes=5))
+    db.add_all([
+        full_site,
+        failed_with_larger_denominator,
+        smaller_admin_retry,
+        failed_retry,
+    ])
+    db.commit()
+
+    payload = list_jobs(
+        limit=20,
+        created_from="2026-06-25T00:00:00+00:00",
+        created_to="2026-06-25T23:59:59+00:00",
+        user="alice",
+        x_workspace_id=str(ws_a.id),
+        db=db,
+    )
+
+    assert payload["total"] == 1
+    assert payload["items"][0]["id"] == full_site.id
+    assert payload["items"][0]["products_count"] == 14428
+    assert payload["items"][0]["total_product_count"] == 14432
+
+
+def test_jobs_list_date_range_collapses_by_default_but_can_show_history():
+    from app.api.routes import list_jobs
+
+    db = _threadsafe_session()
+    ws_a, _ws_b, _alice, _bob, _admin = _seed_two_workspaces(db)
+    base = datetime(2026, 6, 25, 8, 0)
+    first = CrawlJob(site="site_a", status="success",
+                     requested_by_workspace_id=ws_a.id,
+                     created_at=base,
+                     finished_at=base + timedelta(minutes=30))
+    second = CrawlJob(site="site_a", status="running",
+                      requested_by_workspace_id=ws_a.id,
+                      created_at=base + timedelta(hours=1),
+                      started_at=base + timedelta(hours=1))
+    outside = CrawlJob(site="site_a", status="success",
+                       requested_by_workspace_id=ws_a.id,
+                       created_at=base - timedelta(days=1),
+                       finished_at=base - timedelta(days=1, minutes=-30))
+    db.add_all([first, second, outside])
+    db.commit()
+
+    payload = list_jobs(
+        limit=20,
+        status="running",
+        created_from="2026-06-25T00:00:00+00:00",
+        created_to="2026-06-25T23:59:59+00:00",
+        user="alice",
+        x_workspace_id=str(ws_a.id),
+        db=db,
+    )
+
+    assert payload["total"] == 1
+    assert [item["id"] for item in payload["items"]] == [second.id]
+    assert payload["summary"]["running"] == 1
+    assert payload["summary"].get("success", 0) == 0
+    assert payload["total_all_statuses"] == 1
+    assert payload["summary_all_statuses"]["running"] == 1
+    assert payload["summary_all_statuses"].get("success", 0) == 0
+    assert payload["site_scope"]["total"] == 1
+    assert payload["site_scope"]["paused"] == 0
+    assert payload["site_scope"]["trackable"] == 1
+
+    history_payload = list_jobs(
+        limit=20,
+        created_from="2026-06-25T00:00:00+00:00",
+        created_to="2026-06-25T23:59:59+00:00",
+        collapse_daily=False,
+        user="alice",
+        x_workspace_id=str(ws_a.id),
+        db=db,
+    )
+    assert history_payload["total"] == 2
+    assert {item["id"] for item in history_payload["items"]} == {
+        first.id,
+        second.id,
+    }
+    assert history_payload["summary_all_statuses"]["running"] == 1
+    assert history_payload["summary_all_statuses"]["success"] == 1
+
+    db.query(Site).filter(Site.site == "site_b").one().track_status = "paused"
+    db.commit()
+    global_payload = list_jobs(
+        limit=20,
+        created_from="2026-06-25T00:00:00+00:00",
+        created_to="2026-06-25T23:59:59+00:00",
+        all_workspaces=True,
+        user="admin",
+        x_workspace_id=str(ws_a.id),
+        db=db,
+    )
+    assert global_payload["global_view"] is True
+    assert global_payload["site_scope"]["total"] == 2
+    assert global_payload["site_scope"]["paused"] == 1
+    assert global_payload["site_scope"]["trackable"] == 1
+
+
+def test_jobs_list_hides_paused_tracking_sites():
+    from app.api.routes import list_jobs
+
+    db = _threadsafe_session()
+    ws_a, ws_b, _alice, _bob, _admin = _seed_two_workspaces(db)
+    db.query(Site).filter(Site.site == "site_b").one().track_status = "paused"
+    _site(db, "site_error", "Error Site")
+    _workspace_site(db, ws_a, "site_error")
+    db.query(Site).filter(Site.site == "site_error").one().track_status = "error"
+    base = datetime(2026, 6, 25, 8, 0)
+    visible = CrawlJob(site="site_a", status="success",
+                       requested_by_workspace_id=ws_a.id,
+                       created_at=base,
+                       finished_at=base + timedelta(minutes=30))
+    paused = CrawlJob(site="site_b", status="running",
+                      requested_by_workspace_id=ws_b.id,
+                      created_at=base + timedelta(hours=1),
+                      started_at=base + timedelta(hours=1))
+    hidden = CrawlJob(site="site_a", status="skipped",
+                      requested_by_workspace_id=ws_a.id,
+                      created_at=base + timedelta(hours=2),
+                      finished_at=base + timedelta(hours=2, minutes=1),
+                      failure_code="workspace_hidden")
+    _site(db, "site_hidden", "Hidden")
+    _workspace_site(db, ws_a, "site_hidden").hidden = True
+    hidden_manual = CrawlJob(site="site_hidden", status="failed",
+                             requested_by_workspace_id=ws_a.id,
+                             created_at=base + timedelta(hours=3),
+                             finished_at=base + timedelta(hours=3, minutes=1),
+                             failure_code="zero_products")
+    error_site = CrawlJob(site="site_error", status="failed",
+                          requested_by_workspace_id=ws_a.id,
+                          created_at=base + timedelta(hours=4),
+                          finished_at=base + timedelta(hours=4, minutes=1),
+                          failure_code="zero_products")
+    db.add_all([visible, paused, hidden, hidden_manual, error_site])
+    db.commit()
+
+    payload = list_jobs(
+        limit=20,
+        created_from="2026-06-25T00:00:00+00:00",
+        created_to="2026-06-25T23:59:59+00:00",
+        all_workspaces=True,
+        user="admin",
+        x_workspace_id=str(ws_a.id),
+        db=db,
+    )
+
+    assert payload["total_all_statuses"] == 2
+    assert payload["summary_all_statuses"]["running"] == 0
+    assert payload["summary_all_statuses"]["success"] == 1
+    assert payload["summary_all_statuses"]["failed"] == 1
+    assert [item["site"] for item in payload["items"]] == [
+        "site_error", "site_a"
+    ]
+    assert payload["site_scope"]["total"] == 3
+    assert payload["site_scope"]["paused"] == 1
+    assert payload["site_scope"]["error"] == 1
+    assert payload["site_scope"]["trackable"] == 1
 
 
 def test_jobs_list_skips_live_progress_by_default():
@@ -297,15 +508,31 @@ def test_jobs_list_skips_live_progress_by_default():
         ))
     db.commit()
 
-    payload = list_jobs(limit=20, user="alice", x_workspace_id=str(ws_a.id),
-                        db=db)
+    payload = list_jobs(
+        limit=20,
+        created_from="2026-06-22T00:00:00+00:00",
+        created_to="2026-06-22T23:59:59+00:00",
+        user="alice",
+        x_workspace_id=str(ws_a.id),
+        db=db,
+    )
     row = payload["items"][0]
     assert row["products_count"] == 2
     assert row["total_product_count"] == 3
     assert row["total_product_count_source"] == "crawl_stats_total"
 
-    live_payload = list_jobs(limit=20, include_live_progress=True, user="alice",
-                             x_workspace_id=str(ws_a.id), db=db)
+    job.products_count = 0
+    job.total_product_count = 0
+    db.commit()
+    live_payload = list_jobs(
+        limit=20,
+        include_live_progress=True,
+        created_from="2026-06-22T00:00:00+00:00",
+        created_to="2026-06-22T23:59:59+00:00",
+        user="alice",
+        x_workspace_id=str(ws_a.id),
+        db=db,
+    )
     live_row = live_payload["items"][0]
     assert live_row["products_count"] == 4
     assert live_row["total_product_count"] == 5
@@ -905,6 +1132,41 @@ def test_coverage_actual_product_count_can_use_discovered_urls_without_details()
     assert row["actual_product_count"] == 2
     assert row["actual_product_count_source"] == "discovered_url"
     assert row["product_detail_count"] == 0
+
+
+def test_coverage_exposes_detail_count_consistency_issue():
+    from app.api.routes import data_coverage
+
+    db = _session()
+    ws_a, _ws_b, _alice, _bob, admin = _seed_two_workspaces(db)
+    _site(db, "site_c", "C")
+    _workspace_site(db, ws_a, "site_c")
+    db.add(SiteMetric(
+        site="site_c",
+        sku_count=1,
+        product_listing_count=1,
+        fetched_count=0,
+        discovered_product_url_count=0,
+        price_signal_count=3,
+        review_signal_count=0,
+        sales_signal_count=0,
+        revenue_signal_count=0,
+    ))
+    db.commit()
+
+    coverage = data_coverage(user=admin.username,
+                             x_workspace_id=str(ws_a.id), db=db)
+    row = next(item for item in coverage["sites"] if item["site"] == "site_c")
+
+    assert row["sku_count"] == 1
+    assert row["spu_count"] == 1
+    assert row["actual_product_count"] == 1
+    assert row["actual_product_count_source"] == "product_listing"
+    assert row["detail_sku_count"] == 3
+    assert row["product_detail_count"] == 3
+    assert row["report_product_count"] == 3
+    assert row["count_consistency_status"] == "warning"
+    assert row["count_consistency_issues"] == ["detail_sku_gt_sku_count"]
 
 
 def test_coverage_does_not_treat_sitemap_only_rows_as_report_details():
@@ -1866,6 +2128,54 @@ def test_workspace_jobs_list_marks_retryable_and_retry_enqueues_visible_site():
                         user=bob.username,
                         x_workspace_id=str(ws_b.id), db=db)
     assert [row["id"] for row in bob_out["items"]] == [other.id]
+
+
+def test_jobs_list_merges_failed_product_retry_progress_with_parent_job():
+    from app.api.routes import list_jobs
+
+    db = _session()
+    ws_a, _ws_b, alice, _bob, _admin = _seed_two_workspaces(db)
+    created_at = datetime(2026, 6, 28, 2, 0, 0)
+    parent = CrawlJob(
+        site="site_a",
+        status="partial",
+        trigger="scheduled",
+        requested_by_workspace_id=ws_a.id,
+        products_count=740,
+        total_product_count=741,
+        failure_code="superseded",
+        created_at=created_at,
+        finished_at=created_at + timedelta(hours=1),
+    )
+    retry = CrawlJob(
+        site="site_a",
+        status="success",
+        trigger="failed_product_retry",
+        requested_by_workspace_id=ws_a.id,
+        products_count=1,
+        total_product_count=1,
+        created_at=created_at + timedelta(hours=6),
+        finished_at=created_at + timedelta(hours=6, minutes=1),
+    )
+    db.add_all([parent, retry])
+    db.commit()
+
+    payload = list_jobs(
+        limit=20,
+        created_from="2026-06-28T00:00:00+00:00",
+        created_to="2026-06-28T23:59:59+00:00",
+        user=alice.username,
+        x_workspace_id=str(ws_a.id),
+        db=db,
+    )
+
+    assert payload["total"] == 1
+    row = payload["items"][0]
+    assert row["id"] == retry.id
+    assert row["status"] == "success"
+    assert row["products_count"] == 741
+    assert row["total_product_count"] == 741
+    assert row["total_product_count_source"] == "crawl_retry_merged"
 
 
 def test_admin_data_quality_product_samples_are_filterable():

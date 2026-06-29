@@ -167,4 +167,5 @@ def test_retry_failed_products_resets_only_selected_urls(monkeypatch):
     assert enqueued["trigger"] == FAILED_PRODUCT_RETRY_TRIGGER
     assert failed_row.status == "pending"
     assert failed_row.failure_code is None
+    assert failed_row.attempts == 0
     assert ok_row.status == "parsed"

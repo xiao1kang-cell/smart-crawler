@@ -75,3 +75,15 @@ export function proxyStatus() {
 export function reloadProxy() {
   return apiJson('/api/proxy/reload', { method: 'POST' })
 }
+
+export function getWebhookConfig() {
+  return apiJson('/api/settings/webhook')
+}
+
+export function saveWebhookConfig(payload: Record<string, unknown>) {
+  return apiJson('/api/settings/webhook', { method: 'PUT', ...jsonBody(payload) })
+}
+
+export function deleteWebhookConfig() {
+  return apiJson('/api/settings/webhook', { method: 'DELETE' })
+}

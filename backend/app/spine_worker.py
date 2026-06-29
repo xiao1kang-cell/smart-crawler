@@ -14,6 +14,7 @@ import socket
 import time
 
 from .spine_queue import claim_job, execute_job, reclaim_stale_jobs
+from .db import session_scope
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [spine-worker] %(message)s")
@@ -26,12 +27,25 @@ RUNNING_TIMEOUT = int(os.environ.get("SPINE_WORKER_RUNNING_TIMEOUT", "600"))
 _running = True
 
 
+def _dispatch_webhooks() -> None:
+    try:
+        from .webhooks import dispatch_pending
+
+        with session_scope() as s:
+            sent = dispatch_pending(s, limit=10)
+        if sent:
+            logger.info("webhook delivery dispatched: %d", sent)
+    except Exception as exc:
+        logger.warning("webhook delivery dispatch failed: %s", exc)
+
+
 def run_loop(poll_interval: int | None = None, should_continue=None) -> None:
     """领取并执行队列任务,直到 should_continue() 为假。"""
     interval = POLL_INTERVAL if poll_interval is None else poll_interval
     should_continue = should_continue or (lambda: _running)
     logger.info("spine-worker %s 启动,轮询间隔 %ds", WORKER_ID, interval)
     while should_continue():
+        _dispatch_webhooks()
         try:
             reclaimed = reclaim_stale_jobs(running_timeout_sec=RUNNING_TIMEOUT)
             if reclaimed:

@@ -85,6 +85,62 @@ _PDP_HTML = (
     + "</head><body>Product page content</body></html>"
 )
 
+_JSONLD_ITEMPAGE = {
+    "@context": "https://schema.org",
+    "@type": "ItemPage",
+    "name": "vidaXL Chair",
+    "breadcrumb": {
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+            {
+                "@type": "ListItem",
+                "position": 1,
+                "item": {
+                    "@type": "WebPage",
+                    "@id": "https://www.vidaxl.nl",
+                    "name": "Frontpage",
+                },
+            },
+            {
+                "@type": "ListItem",
+                "position": 2,
+                "item": {
+                    "@type": "CollectionPage",
+                    "@id": "https://www.vidaxl.nl/g/436/meubelen",
+                    "name": "Meubelen",
+                },
+            },
+            {
+                "@type": "ListItem",
+                "position": 3,
+                "item": {
+                    "@type": "CollectionPage",
+                    "@id": "https://www.vidaxl.nl/g/443/stoelen",
+                    "name": "Stoelen",
+                },
+            },
+            {
+                "@type": "ListItem",
+                "position": 4,
+                "item": {
+                    "@type": "ItemPage",
+                    "@id": _PDP_URL,
+                    "name": "vidaXL Chair",
+                },
+            },
+        ],
+    },
+    "mainEntity": {**_JSONLD_PRODUCT, "category": "Stoelen"},
+}
+
+_PDP_HTML_ITEMPAGE = (
+    "<html><head>"
+    '<script type="application/ld+json">'
+    + json.dumps(_JSONLD_ITEMPAGE)
+    + "</script>"
+    + "</head><body>Product page content</body></html>"
+)
+
 _SITEMAP_XML = (
     "<?xml version='1.0' encoding='UTF-8'?>"
     "<urlset>"
@@ -100,6 +156,33 @@ _SITEMAP_XML_THREE = (
     f"<url><loc>{_PDP_URL_2}</loc></url>"
     f"<url><loc>{_PDP_URL_3}</loc></url>"
     "</urlset>"
+)
+_CATEGORY_URL = "https://www.vidaxl.nl/g/6368/outdoor-seating"
+_CATEGORY_AJAX_URL = (
+    "https://www.vidaxl.nl/on/demandware.store/Sites-vidaxl-nl-Site/"
+    "nl_NL/Search-ShowAjax?cgid=6368&srule=Default%20sort&start=0&sz=20"
+)
+_CATEGORY_HTML = (
+    "<html><head>"
+    '<script type="application/ld+json">'
+    + json.dumps({
+        "@context": "https://schema.org",
+        "@type": "CollectionPage",
+        "name": "Outdoor Seating",
+        "mainEntity": {
+            "@type": "OfferCatalog",
+            "numberOfItems": 3,
+            "itemListElement": [],
+        },
+    })
+    + "</script>"
+    f'<div data-url="{_CATEGORY_AJAX_URL}"></div>'
+    "</head></html>"
+)
+_CATEGORY_AJAX_HTML_1 = (
+    f'<a href="{_PDP_URL}">Chair</a>'
+    f'<a href="{_PDP_URL_2}">Table</a>'
+    f'<a href="{_PDP_URL_3}">Bench</a>'
 )
 
 
@@ -277,6 +360,137 @@ def test_vidaxl_feed_path_reads_site_crawler_config(monkeypatch, tmp_path):
     assert result.products[0]["category_path"] == "Outdoor"
 
 
+def test_vidaxl_category_hint_fills_pdp_without_jsonld_category():
+    """Category crawls must carry listing context into PDP rows."""
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    crawler = VidaxlCrawler(_site())
+    url = "https://www.vidaxl.nl/e/vidaxl-chair/5059340100000.html"
+    listing_html = """
+    <html><head>
+      <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"CollectionPage","name":"Garden Chairs"}
+      </script>
+    </head></html>
+    """
+    row = {"site": "vidaxl_nl", "sku": "5059340100000", "category_path": None}
+
+    crawler._remember_category_hint(url, "https://www.vidaxl.nl/g/6368/garden-chairs", listing_html)
+    crawler._apply_category_hint(row, url)
+
+    assert row["category_path"] == "Garden Chairs"
+
+
+def test_vidaxl_pdp_collects_html_promotion_labels():
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    crawler = VidaxlCrawler(_site())
+    html = _PDP_HTML.replace(
+        "</body>",
+        """
+        <div class="shipping-message">Free delivery on this item</div>
+        <div class="deal-badge">Bundle deal save 15%</div>
+        </body>
+        """,
+    )
+
+    row = crawler._parse_jsonld(html, _PDP_URL)
+
+    assert row is not None
+    assert row["has_free_shipping"] is True
+    assert row["attributes"]["free_shipping_label"] == "Free shipping"
+    assert any("Bundle deal save 15%" in label for label in row["attributes"]["promotions"])
+
+
+def test_vidaxl_pdp_collects_portuguese_free_shipping_labels():
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    site = _site(country="PT")
+    site.site = "vidaxl_pt"
+    site.url = "https://www.vidaxl.pt"
+    crawler = VidaxlCrawler(site)
+    html = _PDP_HTML.replace(
+        "</body>",
+        """
+        <div class="usp-message">Envio grátis desde 80 € (PT continental)</div>
+        <div class="delivery-message">Entrega grátis em todos os produtos</div>
+        </body>
+        """,
+    )
+
+    row = crawler._parse_jsonld(html, _PDP_URL)
+
+    assert row is not None
+    assert row["has_free_shipping"] is True
+    assert row["attributes"]["free_shipping_label"] == "Free shipping"
+    assert any("Envio grátis" in label for label in row["attributes"]["promotions"])
+
+
+def test_vidaxl_breadcrumb_falls_back_to_collection_url_slug_when_name_missing():
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    site = _site(country="ES")
+    site.site = "vidaxl_es"
+    site.url = "https://www.vidaxl.es"
+    crawler = VidaxlCrawler(site)
+    itempage = {
+        **_JSONLD_ITEMPAGE,
+        "breadcrumb": {
+            "@type": "BreadcrumbList",
+            "itemListElement": [
+                {
+                    "@type": "ListItem",
+                    "position": 1,
+                    "item": {
+                        "@type": "WebPage",
+                        "@id": "https://www.vidaxl.es",
+                        "name": "Frontpage",
+                    },
+                },
+                {
+                    "@type": "ListItem",
+                    "position": 2,
+                    "item": {
+                        "@type": "CollectionPage",
+                        "@id": "https://www.vidaxl.es/g/bunk-beds-nl",
+                        "name": None,
+                    },
+                },
+                {
+                    "@type": "ListItem",
+                    "position": 3,
+                    "item": {
+                        "@type": "ItemPage",
+                        "@id": _PDP_URL,
+                        "name": "vidaXL Litera",
+                    },
+                },
+            ],
+        },
+        "mainEntity": {**_JSONLD_PRODUCT, "category": None},
+    }
+    html = (
+        "<html><head><script type=\"application/ld+json\">"
+        + json.dumps(itempage)
+        + "</script></head><body>Product page content</body></html>"
+    )
+
+    row = crawler._parse_jsonld(html, _PDP_URL)
+
+    assert row is not None
+    assert row["category_path"] == "Bunk Beds Nl"
+
+
+def test_vidaxl_html_promotion_does_not_match_ideal_as_deal():
+    from app.crawlers.vidaxl import _promotion_attributes_from_html
+
+    attrs = _promotion_attributes_from_html(
+        "Ideal para diferentes espaços interiores. Material ideal para uso diário."
+    )
+
+    assert attrs == {}
+
+
 def test_vidaxl_feed_total_not_shrunk_by_limit(monkeypatch, tmp_path):
     """Feed 分母必须是完整去重商品数，不能被本次产出上限截断。"""
     monkeypatch.delenv("VIDAXL_API_EMAIL", raising=False)
@@ -384,6 +598,172 @@ def test_vidaxl_storefront_total_uses_full_target_count(monkeypatch):
     assert any("本次全量分母 3" in note for note in result.notes)
 
 
+def test_vidaxl_storefront_category_urls_skip_full_sitemap(monkeypatch):
+    """category_urls configured means storefront only discovers that category."""
+    monkeypatch.delenv("VIDAXL_API_EMAIL", raising=False)
+    monkeypatch.delenv("VIDAXL_API_TOKEN", raising=False)
+    monkeypatch.delenv("VIDAXL_RUN_TARGET_LIMIT", raising=False)
+    monkeypatch.setattr("app.crawlers.base.get_sites",
+                        lambda: [{"site": "vidaxl_nl", "max_products": 0}])
+
+    from app.crawlers import vidaxl as vidaxl_mod
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    site = _site()
+    site.crawler_config = {
+        "category_urls": [_CATEGORY_URL],
+        "category_page_size": 20,
+        "storefront_concurrency": 8,
+    }
+    crawler = VidaxlCrawler(site)
+    ajax_url_1 = VidaxlCrawler._ajax_page_url(
+        _CATEGORY_AJAX_URL,
+        start=0,
+        size=20,
+    )
+    url_map = {
+        _CATEGORY_URL: FetchResult(
+            ok=True, url=_CATEGORY_URL, status=200,
+            text=_CATEGORY_HTML, content=_CATEGORY_HTML.encode(),
+            final_url=_CATEGORY_URL, fetcher="curl_cffi",
+        ),
+        ajax_url_1: FetchResult(
+            ok=True, url=ajax_url_1, status=200,
+            text=_CATEGORY_AJAX_HTML_1,
+            content=_CATEGORY_AJAX_HTML_1.encode(),
+            final_url=ajax_url_1, fetcher="curl_cffi",
+        ),
+    }
+    requested: list[str] = []
+
+    class _FakeFetcher:
+        def get(self, url: str, **kw) -> FetchResult:
+            requested.append(url)
+            crawler.counter.api_calls += 1
+            if url in url_map:
+                return url_map[url]
+            return FetchResult(
+                ok=False, url=url, status=404,
+                text="", content=b"", final_url=url, fetcher="curl_cffi",
+            )
+
+    monkeypatch.setattr(crawler, "make_fetcher", lambda **kw: _FakeFetcher())
+    monkeypatch.setattr(crawler, "snapshot", lambda name, content: None)
+    monkeypatch.setattr(vidaxl_mod, "_persist_sitemap_total",
+                        lambda site, total: None)
+    registered = []
+    monkeypatch.setattr(vidaxl_mod, "_register_frontier_targets",
+                        lambda site, urls: registered.extend(urls))
+    monkeypatch.setattr(vidaxl_mod, "_log_fetched", lambda *args, **kw: None)
+
+    class _FakeResponse:
+        status_code = 200
+
+        def __init__(self, url: str):
+            if url in url_map:
+                item = url_map[url]
+                self.status_code = item.status or 0
+                self.text = item.text
+                return
+            product = dict(_JSONLD_PRODUCT)
+            product["sku"] = url.rstrip("/").split("/")[-1].replace(".html", "")
+            product["mpn"] = product["sku"]
+            self.text = (
+                "<html><head><script type=\"application/ld+json\">"
+                + json.dumps(product)
+                + "</script></head></html>"
+            )
+
+    class _FakeSession:
+        proxies = None
+
+        def get(self, url: str, timeout: int = 30):
+            return _FakeResponse(url)
+
+    monkeypatch.setattr(vidaxl_mod.creq, "Session",
+                        lambda impersonate=None: _FakeSession())
+    import app.proxy_pool as proxy_pool
+    monkeypatch.setattr(proxy_pool, "get_proxy", lambda *args, **kw: None)
+    monkeypatch.setattr(proxy_pool, "report_success", lambda *args, **kw: None)
+    monkeypatch.setattr(proxy_pool, "report_failure", lambda *args, **kw: None)
+
+    result = crawler.crawl()
+
+    assert "https://www.vidaxl.nl/sitemap_index.xml" not in requested
+    assert registered == []
+    assert result.total_product_count == 3
+    assert len(result.products) == 3
+    assert any("storefront/category stream" in note for note in result.notes)
+
+
+def test_vidaxl_category_grid_uses_visible_href_page_size(monkeypatch):
+    """Grid discovery estimates pages from visible product cards, not hidden data-url links."""
+    monkeypatch.delenv("VIDAXL_CATEGORY_DISCOVERY_CONCURRENCY", raising=False)
+
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    site = _site()
+    site.crawler_config = {
+        "category_grid_page_size": 20,
+        "category_discovery_concurrency": 1,
+        "category_rate_interval_sec": 0,
+    }
+    crawler = VidaxlCrawler(site)
+    grid_url = (
+        "https://www.vidaxl.nl/on/demandware.store/Sites-vidaxl-nl-Site/"
+        "nl_NL/Search-UpdateGrid?cgid=436&page=1"
+    )
+
+    def grid_html(page: int, *, hidden: int = 0) -> str:
+        visible = "".join(
+            f'<a href="/e/visible-{page}-{idx}/10{page:02d}{idx:02d}.html">P</a>'
+            for idx in range(20)
+        )
+        hidden_links = "".join(
+            f'<button data-url="/e/hidden-{page}-{idx}/20{page:02d}{idx:02d}.html"></button>'
+            for idx in range(hidden)
+        )
+        return visible + hidden_links
+
+    first_html = (
+        "<html><head><script type=\"application/ld+json\">"
+        + json.dumps({
+            "@context": "https://schema.org",
+            "@type": "CollectionPage",
+            "mainEntity": {
+                "@type": "OfferCatalog",
+                "numberOfItems": 100,
+            },
+        })
+        + "</script>"
+        '<a href="/on/demandware.store/Sites-vidaxl-nl-Site/nl_NL/'
+        'Search-UpdateGrid?cgid=436&page=3">3</a>'
+        "</head></html>"
+    )
+    pages = {page: grid_html(page, hidden=60 if page == 1 else 0)
+             for page in range(1, 6)}
+    requested_pages: list[int] = []
+
+    def fake_fetch(_session, url: str, *, timeout: int = 40):
+        page = int(url.rsplit("page=", 1)[1])
+        requested_pages.append(page)
+        return 200, pages.get(page, "")
+
+    monkeypatch.setattr(crawler, "_fetch_category_listing_html", fake_fetch)
+    monkeypatch.setattr(crawler, "_category_listing_session", lambda: object())
+
+    seen: set[str] = set()
+    targets: list[str] = []
+    found = crawler._collect_category_grid_targets(
+        object(), grid_url, first_html, _CATEGORY_URL, seen, targets)
+
+    assert requested_pages == [1, 2, 3, 4, 5]
+    assert found == 100
+    assert len(targets) == 100
+    assert all("/visible-" in url for url in targets)
+    assert not any("/hidden-" in url for url in targets)
+
+
 # ---------------------------------------------------------------------------
 # Test 2: _map_api 直接单元测试（解析不退化）
 # ---------------------------------------------------------------------------
@@ -402,6 +782,51 @@ def test_vidaxl_map_api_parse():
     assert row["inventory"] == 10
     assert row["status"] == "on_sale"
     assert row["site"] == "vidaxl_api"
+
+
+def test_vidaxl_feed_mapping_accepts_category_and_shipping_promo_aliases():
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    crawler = VidaxlCrawler(_site())
+    row = crawler._map_feed({
+        "sku": "VX-FEED-1",
+        "product_name": "Feed Chair",
+        "category_name": "Garden|Patio Chairs",
+        "price": "49.99",
+        "rrp": "69.99",
+        "currency": "EUR",
+        "image_url": "https://cdn.vidaxl.com/feed-chair.jpg",
+        "stock": "8",
+        "delivery_label": "Free delivery over €50",
+        "coupon_code": "GARDEN10",
+        "campaign_name": "Garden bundle sale",
+    })
+
+    assert row is not None
+    assert row["category_path"] == "Garden/Patio Chairs"
+    assert row["has_free_shipping"] is True
+    assert row["attributes"]["free_shipping"] is True
+    assert row["attributes"]["coupon"] == "GARDEN10"
+    assert "Garden bundle sale" in row["attributes"]["promotions"]
+
+
+def test_vidaxl_api_mapping_accepts_nested_category_list():
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    crawler = VidaxlCrawler(_api_site())
+    row = crawler._map_api({
+        "sku": "VX-API-2",
+        "name": "API Table",
+        "categories": [{"name": "Furniture"}, {"name": "Tables"}],
+        "price": "89.99",
+        "currency": "EUR",
+        "stock": 3,
+        "shipping_text": "Shipping included",
+    })
+
+    assert row is not None
+    assert row["category_path"] == "Furniture/Tables"
+    assert row["has_free_shipping"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +848,16 @@ def test_vidaxl_parse_jsonld():
     assert row["status"] == "on_sale"
     assert row["site"] == "vidaxl_nl"
     assert row["product_url"] == _PDP_URL
+
+
+def test_vidaxl_parse_jsonld_reads_itempage_breadcrumb():
+    """Vidaxl storefront PDP uses ItemPage.breadcrumb for category_path."""
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    row = VidaxlCrawler(_site())._parse_jsonld(_PDP_HTML_ITEMPAGE, _PDP_URL)
+
+    assert row is not None
+    assert row["category_path"] == "Meubelen/Stoelen"
 
 
 # ---------------------------------------------------------------------------

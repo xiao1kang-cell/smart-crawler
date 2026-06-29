@@ -19,13 +19,14 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 
 from .analytics import recompute
 from .crawl_diagnostics import classify_exception, job_timeout_failure, record_failure
 from .db import session_scope
 from .models import CrawlJob
-from .runner import assign_pending_jobs, claim_job, execute_job
+from .runner import (_enqueue_crawl_webhook, assign_pending_jobs, claim_job,
+                     execute_job)
 from . import memory_gate
 
 logging.basicConfig(level=logging.INFO,
@@ -60,14 +61,25 @@ DEFAULT_JOB_TIMEOUT = _env_int("WORKER_JOB_TIMEOUT", 43200)  # 12h 默认
 JOB_TIMEOUT_MIN = _env_int("WORKER_JOB_TIMEOUT_MIN", 300)
 JOB_TIMEOUT_MAX = _env_int("WORKER_JOB_TIMEOUT_MAX", 86400)
 STALE_HEARTBEAT_TIMEOUT = max(
-    43200,
-    _env_int("WORKER_STALE_HEARTBEAT_TIMEOUT", 43200),
+    300,
+    _env_int("WORKER_STALE_HEARTBEAT_TIMEOUT", 3600),
 )
 JOB_HEARTBEAT_INTERVAL = float(os.environ.get("WORKER_JOB_HEARTBEAT_INTERVAL", "30"))
 TRIGGER_ALLOWLIST = tuple(
     trigger.strip() for trigger in os.environ.get("TRIGGER_ALLOWLIST", "").split(",")
     if trigger.strip()
 ) or None
+AUTO_JOB_RETRY_ENABLED = _env_bool("AUTO_JOB_RETRY_ENABLED", True)
+AUTO_JOB_RETRY_TRIGGER = os.environ.get("AUTO_JOB_RETRY_TRIGGER", "admin_retry")
+AUTO_JOB_RETRY_MAX_PER_SITE_DAY = _env_int("AUTO_JOB_RETRY_MAX_PER_SITE_DAY", 2)
+AUTO_JOB_RETRY_CODES = tuple(
+    code.strip() for code in os.environ.get(
+        "AUTO_JOB_RETRY_CODES",
+        "job_timeout,worker_interrupted,queue_stalled,resource_exhausted,"
+        "proxy_unavailable,network_timeout,http_429,http_5xx,anti_bot_challenge",
+    ).split(",")
+    if code.strip()
+)
 
 
 def _env_int_tuple(name: str) -> tuple[int, ...] | None:
@@ -88,6 +100,21 @@ MEM_THRESHOLD = float(os.environ.get("MEM_GATE_THRESHOLD", "80"))
 MEM_CHECK_INTERVAL = float(os.environ.get("MEM_GATE_CHECK_INTERVAL", "2"))
 MEM_MAX_WAIT = float(os.environ.get("MEM_GATE_MAX_WAIT", "300"))
 _running = True
+_current_job_id: int | None = None
+_terminating_job_ids: set[int] = set()
+_termination_lock = threading.Lock()
+
+
+def _dispatch_webhooks() -> None:
+    try:
+        from .webhooks import dispatch_pending
+
+        with session_scope() as s:
+            sent = dispatch_pending(s, limit=10)
+        if sent:
+            logger.info("webhook delivery dispatched: %d", sent)
+    except Exception as exc:
+        logger.warning("webhook delivery dispatch failed: %s", exc)
 
 
 class JobTimeout(Exception):
@@ -174,6 +201,9 @@ def _mark_job_timeout(job_id: int, timeout_sec: int) -> None:
                     job_id=job_id,
                     info=job_timeout_failure(job.site, timeout_sec, detail),
                 )
+                _auto_enqueue_job_retry(s, job, reason_code="job_timeout")
+                _enqueue_crawl_webhook(s, job, event_type="job.completed",
+                                       error=detail)
     except Exception as exc:
         logger.error("mark_job_timeout 失败 job=%s: %s", job_id, exc)
 
@@ -192,8 +222,57 @@ def _mark_job_failed(job_id: int, exc: Exception) -> None:
                         job.finished_at - job.started_at).total_seconds()
                 job.error = f"worker exception: {type(exc).__name__}: {exc}"
                 record_failure(s, site=job.site, job_id=job_id, info=info)
+                _auto_enqueue_job_retry(s, job, reason_code=info.code)
+                _enqueue_crawl_webhook(s, job, event_type="job.completed",
+                                       error=job.error,
+                                       result={"failure_code": info.code})
     except Exception as mark_exc:
         logger.error("mark_job_failed 失败 job=%s: %s", job_id, mark_exc)
+
+
+def _mark_job_interrupted(job_id: int, signum: int | None = None) -> None:
+    """Best-effort SIGTERM/SIGINT persistence before launchd/container exits."""
+    try:
+        with session_scope() as s:
+            job = s.get(CrawlJob, job_id)
+            if job and job.status == "running":
+                detail = (
+                    f"worker {WORKER_ID} on {NODE_ID} received signal"
+                    f" {signum or 'unknown'} while running job"
+                )
+                job.status = "failed"
+                job.finished_at = datetime.utcnow()
+                if job.started_at:
+                    job.duration_sec = (
+                        job.finished_at - job.started_at).total_seconds()
+                job.error = detail
+                record_failure(
+                    s,
+                    site=job.site,
+                    job_id=job_id,
+                    info=classify_exception(RuntimeError(detail)),
+                )
+                _auto_enqueue_job_retry(s, job, reason_code="worker_interrupted")
+                _enqueue_crawl_webhook(s, job, event_type="job.completed",
+                                       error=detail)
+    except Exception as exc:
+        logger.error("mark_job_interrupted 失败 job=%s: %s", job_id, exc)
+
+
+def _mark_current_job_interrupted_async(signum: int | None) -> None:
+    job_id = _current_job_id
+    if job_id is None:
+        return
+    with _termination_lock:
+        if job_id in _terminating_job_ids:
+            return
+        _terminating_job_ids.add(job_id)
+    thread = threading.Thread(
+        target=_mark_job_interrupted,
+        args=(job_id, signum),
+        daemon=False,
+    )
+    thread.start()
 
 
 def _start_crawl_job_heartbeat(job_id: int, interval: float | None = None):
@@ -214,6 +293,125 @@ def _start_crawl_job_heartbeat(job_id: int, interval: float | None = None):
     thread = threading.Thread(target=beat, daemon=True)
     thread.start()
     return stop, thread
+
+
+def _auto_enqueue_job_retry(s, job: CrawlJob,
+                            *, reason_code: str | None) -> int | None:
+    """Queue a bounded whole-site retry for infra-level job interruptions."""
+    if not AUTO_JOB_RETRY_ENABLED or not job or not job.site:
+        return None
+    code = (reason_code or job.failure_code or "").strip()
+    if code not in AUTO_JOB_RETRY_CODES:
+        return None
+    if job.trigger == "failed_product_retry":
+        retry_trigger = "failed_product_retry"
+    else:
+        retry_trigger = AUTO_JOB_RETRY_TRIGGER
+    now = datetime.utcnow()
+    day_start = (job.created_at or now).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+    source_marker = f"[auto_job_retry] source_job={job.id} code={code}"
+
+    if getattr(getattr(s, "bind", None), "dialect", None) is not None:
+        if s.bind.dialect.name == "postgresql":
+            s.execute(
+                text("select pg_advisory_xact_lock(hashtext(:lock_key))"),
+                {"lock_key": f"crawl-auto-retry:{job.id}:{code}"},
+            )
+
+    existing_source_retry = (
+        s.query(CrawlJob)
+        .filter(
+            CrawlJob.site == job.site,
+            CrawlJob.id != job.id,
+            CrawlJob.created_at >= day_start,
+            CrawlJob.created_at < day_end,
+            CrawlJob.suggested_action == source_marker,
+        )
+        .order_by(CrawlJob.id.desc())
+        .first()
+    )
+    if existing_source_retry is not None:
+        job.suggested_action = (
+            f"系统已为源任务 #{job.id} 创建过自动重跑任务 "
+            f"#{existing_source_retry.id}，未重复创建。"
+        )
+        return existing_source_retry.id
+
+    newer_success_q = (
+        s.query(CrawlJob)
+        .filter(
+            CrawlJob.site == job.site,
+            CrawlJob.id != job.id,
+            CrawlJob.status == "success",
+            CrawlJob.created_at >= day_start,
+            CrawlJob.created_at < day_end,
+        )
+    )
+    if job.created_at is not None:
+        newer_success_q = newer_success_q.filter(
+            CrawlJob.created_at >= job.created_at)
+    newer_success = newer_success_q.order_by(CrawlJob.id.desc()).first()
+    if newer_success is not None:
+        job.suggested_action = (
+            f"系统检测到同站点当天已有更新成功任务 #{newer_success.id}，"
+            "未再创建自动整站重跑。"
+        )
+        return newer_success.id
+
+    existing = (
+        s.query(CrawlJob)
+        .filter(
+            CrawlJob.site == job.site,
+            CrawlJob.id != job.id,
+            CrawlJob.status.in_(("pending", "running")),
+        )
+        .order_by(CrawlJob.id.desc())
+        .first()
+    )
+    if existing is not None:
+        job.suggested_action = (
+            f"系统中断后检测到同站点已有任务 #{existing.id}"
+            f"（{existing.status}），未重复创建自动重跑。"
+        )
+        return existing.id
+
+    retries_today = (
+        s.query(CrawlJob.id)
+        .filter(
+            CrawlJob.site == job.site,
+            CrawlJob.created_at >= day_start,
+            CrawlJob.created_at < day_end,
+            CrawlJob.suggested_action.like("[auto_job_retry]%"),
+        )
+        .count()
+    )
+    if retries_today >= max(0, AUTO_JOB_RETRY_MAX_PER_SITE_DAY):
+        job.suggested_action = (
+            f"系统中断可重试，但 {job.site} 当日自动整站重跑已达到上限"
+            f" {AUTO_JOB_RETRY_MAX_PER_SITE_DAY} 次；请人工确认后重跑。"
+        )
+        return None
+
+    retry_job = CrawlJob(
+        site=job.site,
+        status="pending",
+        trigger=retry_trigger,
+        created_at=now,
+        requested_by_workspace_id=job.requested_by_workspace_id,
+        requested_by_user_id=job.requested_by_user_id,
+        suggested_action=source_marker,
+    )
+    s.add(retry_job)
+    s.flush()
+    _enqueue_crawl_webhook(s, retry_job, event_type="job.triggered")
+    job.suggested_action = (
+        f"系统检测到 {code}，已自动创建整站重跑任务 #{retry_job.id}。"
+    )
+    logger.warning("auto job retry queued source=%s retry=%s site=%s code=%s",
+                   job.id, retry_job.id, job.site, code)
+    return retry_job.id
 
 
 def _reclaim_stale_crawl_jobs(timeout_sec: int = STALE_HEARTBEAT_TIMEOUT) -> int:
@@ -245,6 +443,9 @@ def _reclaim_stale_crawl_jobs(timeout_sec: int = STALE_HEARTBEAT_TIMEOUT) -> int
                     job_id=job.id,
                     info=job_timeout_failure(job.site, timeout_sec, detail),
                 )
+                _auto_enqueue_job_retry(s, job, reason_code="job_timeout")
+                _enqueue_crawl_webhook(s, job, event_type="job.completed",
+                                       error=detail)
             return len(rows)
     except Exception as exc:
         logger.error("reclaim stale crawl jobs 失败: %s", exc)
@@ -294,6 +495,7 @@ def run_loop(should_continue=None) -> None:
         STALE_HEARTBEAT_TIMEOUT, trigger_scope, WORKER_ASSIGNED_ONLY,
         WORKER_DISTRIBUTOR_ONLY, ",".join(WORKER_DISTRIBUTOR_NODES or ()))
     while should_continue():
+        _dispatch_webhooks()
         reclaimed = _reclaim_stale_crawl_jobs(STALE_HEARTBEAT_TIMEOUT)
         if reclaimed:
             logger.warning("回收 %d 个超时 crawl job", reclaimed)
@@ -343,8 +545,10 @@ def run_loop(should_continue=None) -> None:
             time.sleep(POLL_INTERVAL)
             continue
         runtime_budget = _job_runtime_budget(job_id)
+        global _current_job_id
         try:
             _set_alarm(runtime_budget)
+            _current_job_id = job_id
             stop_heartbeat, heartbeat_thread = _start_crawl_job_heartbeat(job_id)
             try:
                 result = execute_job(job_id)
@@ -352,24 +556,28 @@ def run_loop(should_continue=None) -> None:
                 stop_heartbeat.set()
                 heartbeat_thread.join(timeout=2)
                 _set_alarm(0)
+                _current_job_id = None
             if result["status"] == "success":
                 recompute(result["site"])
             logger.info("job %s %s -> %s", job_id, result["site"],
                         result["status"])
         except JobTimeout as exc:
             _set_alarm(0)
+            _current_job_id = None
             _mark_job_timeout(job_id, runtime_budget)
             logger.warning("job %s 超时: %s", job_id, exc)
         except Exception as exc:
             _set_alarm(0)
+            _current_job_id = None
             _mark_job_failed(job_id, exc)
             logger.error("job %s 执行异常: %s", job_id, exc)
     logger.info("worker %s 退出", WORKER_ID)
 
 
-def _stop(*_):
+def _stop(signum=None, _frame=None):
     global _running
     _running = False
+    _mark_current_job_interrupted_async(signum)
 
 
 def main() -> None:

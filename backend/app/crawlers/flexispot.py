@@ -72,19 +72,26 @@ class FlexispotCrawler(BaseCrawler):
             page = ctx.new_page()
 
             def on_req(req):
-                if "/sapi/mall-item/" in req.url and "authorization" not in captured:
+                if "/sapi/" in req.url and "authorization" not in captured:
                     h = req.headers
                     if h.get("authorization"):
                         captured["authorization"] = h["authorization"]
                         captured["appid"] = h.get("appid", "10001")
 
             page.on("request", on_req)
-            try:
-                page.goto(self.base + "/standing-desks",
-                          wait_until="domcontentloaded", timeout=45000)
-                page.wait_for_timeout(5000)
-            except Exception:
-                pass
+            paths = ["/standing-desks", "/"]
+            config = self.site.crawler_config or {}
+            if isinstance(config, dict) and config.get("bootstrap_paths"):
+                paths = [str(p or "/") for p in config["bootstrap_paths"]]
+            for path in paths:
+                try:
+                    page.goto(self.base + path,
+                              wait_until="domcontentloaded", timeout=45000)
+                    page.wait_for_timeout(5000)
+                except Exception:
+                    pass
+                if captured.get("authorization"):
+                    break
             browser.close()
         return captured.get("authorization"), captured.get("appid")
 

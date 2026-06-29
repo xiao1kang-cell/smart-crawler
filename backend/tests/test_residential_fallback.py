@@ -75,6 +75,27 @@ def test_proxy_middleware_uses_effective_tier(monkeypatch):
     assert seen["tier"] == "residential"
 
 
+def test_proxy_middleware_falls_back_when_lease_pool_is_full(monkeypatch):
+    """租约耗尽时仍应回退到普通代理，而不是直接判无代理。"""
+    monkeypatch.setenv("PROXY_LEASE_TTL_SEC", "300")
+    f = _fetcher(monkeypatch)
+    f.context.site.proxy_tier = "residential"
+    monkeypatch.setattr(fetching.proxy_pool, "lease_proxy",
+                        lambda *a, **k: None)
+    seen = {}
+    def fake_get_proxy(tier, site=None):
+        seen["tier"] = tier
+        return "http://p:1"
+    monkeypatch.setattr(fetching.proxy_pool, "get_proxy", fake_get_proxy)
+    kwargs = {}
+
+    fetching.ProxyMiddleware().before_request(f, "u", kwargs)
+
+    assert seen["tier"] == "residential"
+    assert kwargs["_proxy"] == "http://p:1"
+    assert "_proxy_unavailable_tier" not in kwargs
+
+
 def test_new_instance_resets(monkeypatch):
     """新 fetcher（新 job）默认不带升级状态。"""
     f1 = _fetcher(monkeypatch)

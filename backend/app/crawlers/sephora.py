@@ -1,8 +1,8 @@
 """Sephora crawler.
 
 Sephora has two very different surfaces in our current workspace:
-- sephora.fr renders product tiles in the HTML payload and can be parsed without
-  browser rendering.
+- sephora.fr category pages are Akamai-gated; sitemap discovery is public and
+  stable, so it is the default collection path.
 - sephora.com is behind Akamai for category/PDP pages; sitemap discovery is
   public, but PDP fetches may still be blocked. In that case we raise
   BlockedError so the job is actionable instead of "unknown platform".
@@ -22,7 +22,7 @@ from ..antiban import BlockedError
 from .base import BaseCrawler, CrawlResult
 from .generic import GenericCrawler
 
-DEFAULT_LIMIT = int(os.environ.get("SEPHORA_LIMIT", "120"))
+DEFAULT_LIMIT = int(os.environ.get("SEPHORA_LIMIT", "999999"))
 _PRICE_RE = re.compile(r"\d[\d\s.,]*")
 _REVIEW_RE = re.compile(r"(\d[\d\s.,]*)\s+avis", re.IGNORECASE)
 _BLOCK_MARKS = (
@@ -50,7 +50,7 @@ class SephoraCrawler(BaseCrawler):
         }
 
     def crawl(self) -> CrawlResult:
-        if ".fr" in urlparse(self.base).netloc:
+        if ".fr" in urlparse(self.base).netloc and os.environ.get("SEPHORA_FR_HTML", "0") == "1":
             return self._crawl_fr()
         return self._crawl_us()
 
@@ -134,6 +134,7 @@ class SephoraCrawler(BaseCrawler):
         result = CrawlResult()
         fetcher = self.make_fetcher(kind="product", source="sephora_us")
         urls = self._sitemap_product_urls(fetcher)
+        result.total_product_count = len(urls)
         result.notes.append(f"Sephora US sitemap 发现 {len(urls)} 个商品 URL")
         if os.environ.get("SEPHORA_FETCH_PDP", "0") != "1":
             targets = urls[: self.limit]
@@ -142,6 +143,16 @@ class SephoraCrawler(BaseCrawler):
             result.notes.append(
                 f"Sephora US sitemap-only 产出 {len(result.products)} 个商品"
                 "（价格/评分字段后续由 PDP 增量补齐）")
+            if len(targets) < len(urls):
+                result.coverage_complete = False
+                result.coverage_code = "incomplete_detail_parse"
+                result.coverage_stage = "sitemap"
+                result.coverage_reason = (
+                    f"Sephora sitemap 共 {len(urls)} 个商品 URL，"
+                    f"本次只计划抓取 {len(targets)} 个"
+                )
+                result.coverage_retryable = True
+                result.coverage_suggested_action = "调大 SEPHORA_LIMIT / max_products 后重跑。"
             return result
 
         blocked = 0
@@ -165,12 +176,22 @@ class SephoraCrawler(BaseCrawler):
         return result
 
     def _sitemap_product_urls(self, fetcher) -> list[str]:
-        locs = self._sitemap_locs(fetcher, f"{self.base}/sitemap.xml")
+        sitemap_index = (
+            f"{self.base}/sitemap_index.xml"
+            if ".fr" in urlparse(self.base).netloc
+            else f"{self.base}/sitemap.xml"
+        )
+        locs = self._sitemap_locs(fetcher, sitemap_index)
         product_maps = [u for u in locs if "product" in u.lower()]
+        if ".com" in urlparse(self.base).netloc:
+            product_maps = [
+                u for u in product_maps
+                if "_en-ca" not in u.lower() and "_fr-ca" not in u.lower()
+            ]
         urls: list[str] = []
-        for sm in product_maps[:8]:
+        for sm in product_maps:
             urls.extend(u for u in self._sitemap_locs(fetcher, sm)
-                        if "/product/" in u or "/p/" in u)
+                        if self._looks_like_product_url(u))
             if len(urls) >= self.limit * 3:
                 break
         seen: set[str] = set()
@@ -218,7 +239,7 @@ class SephoraCrawler(BaseCrawler):
 
     def _row_from_sitemap(self, url: str) -> dict | None:
         parsed = urlparse(url)
-        if "/product/" not in parsed.path and "/p/" not in parsed.path:
+        if not self._looks_like_product_url(url):
             return None
         slug = self._slug(url)
         if not slug:
@@ -226,6 +247,7 @@ class SephoraCrawler(BaseCrawler):
         sku = self._sku_from_url(url) or slug
         title = self._title_from_slug(slug)
         brand = self._brand_from_slug(slug) or self.site.brand
+        is_fr = ".fr" in urlparse(self.base).netloc
         return {
             "sku": sku,
             "spu": sku,
@@ -235,7 +257,7 @@ class SephoraCrawler(BaseCrawler):
             "category_path": "Sephora",
             "sale_price": None,
             "original_price": None,
-            "currency": "USD",
+            "currency": "EUR" if is_fr else "USD",
             "ratings": None,
             "review_count": None,
             "status": "on_sale",
@@ -305,8 +327,13 @@ class SephoraCrawler(BaseCrawler):
 
     @staticmethod
     def _sku_from_url(url: str) -> str | None:
-        match = re.search(r"-(P\d+)(?:[/?#]|$)", url, re.I)
+        match = re.search(r"-(P\d+)(?:\.html)?(?:[/?#]|$)", url, re.I)
         return match.group(1).upper() if match else None
+
+    @staticmethod
+    def _looks_like_product_url(url: str) -> bool:
+        path = urlparse(url).path
+        return "/product/" in path or "/p/" in path or bool(re.search(r"-P\d+", path, re.I))
 
     @classmethod
     def _title_from_slug(cls, slug: str) -> str:

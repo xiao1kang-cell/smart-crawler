@@ -53,6 +53,7 @@ _ORIGINAL_PRICE_ALIASES = (
     "original_price", "list_price", "was_price", "regular_price",
     "compare_at_price", "msrp", "rrp", "pre_price",
 )
+_EXISTING_PRODUCT_LOOKUP_CHUNK_SIZE = 10_000
 
 
 def clean_text(value):
@@ -162,6 +163,11 @@ def is_valid(p: dict) -> bool:
     return all(p.get(k) not in (None, "") for k in REQUIRED)
 
 
+def _chunks(values: list[str], size: int):
+    for idx in range(0, len(values), size):
+        yield values[idx:idx + size]
+
+
 def upsert_products(session: Session, site: str, items: list[dict]) -> dict:
     """入库 + 去重（C-021）+ 变更检测（C-024）+ 价格曲线（F1-011）。
 
@@ -190,13 +196,15 @@ def upsert_products(session: Session, site: str, items: list[dict]) -> dict:
     if not normalized:
         return stats
 
-    existing = {
-        p.sku: p
-        for p in (
-            session.query(Product)
-            .filter(Product.site == site, Product.sku.in_(list(seen)))
-        )
-    }
+    existing = {}
+    for sku_batch in _chunks(sorted(seen), _EXISTING_PRODUCT_LOOKUP_CHUNK_SIZE):
+        existing.update({
+            p.sku: p
+            for p in (
+                session.query(Product)
+                .filter(Product.site == site, Product.sku.in_(sku_batch))
+            )
+        })
 
     for p in normalized:
         sku = p["sku"]

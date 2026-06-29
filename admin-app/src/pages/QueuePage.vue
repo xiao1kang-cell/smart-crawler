@@ -5,9 +5,11 @@ import { enqueueJob, jobDetail, jobStats, listJobs, queueMaintenance, retryJob }
 import { fmtDate, fmtNumber } from '../api/client'
 import StatCard from '../components/common/StatCard.vue'
 import StatusBadge from '../components/common/StatusBadge.vue'
+import { useToastStore } from '../stores/toast'
 
 const POLL_MS = 5000
 const route = useRoute()
+const toast = useToastStore()
 
 const stats = ref<Record<string, any>>({})
 const items = ref<any[]>([])
@@ -25,7 +27,6 @@ const detailRow = ref<Record<string, any> | null>(null)
 const detailLoading = ref(false)
 const detailError = ref('')
 const maintenanceBusy = ref('')
-const maintenanceMsg = ref('')
 const maintenanceResult = ref<Record<string, any> | null>(null)
 
 const polling = ref(true)
@@ -33,7 +34,6 @@ let timer: ReturnType<typeof setInterval> | null = null
 
 const enqForm = ref({ url: '', dataset: '' })
 const enqBusy = ref(false)
-const enqMsg = ref('')
 const ALL_STATUS = '__all_status__'
 
 const sourceFilterItems = [
@@ -273,18 +273,17 @@ watch(() => route.fullPath, () => {
 
 async function submitEnqueue() {
   if (!enqForm.value.url || !enqForm.value.dataset) {
-    enqMsg.value = '请填写 URL 与 dataset'
+    toast.warning('请填写 URL 与 dataset')
     return
   }
   enqBusy.value = true
-  enqMsg.value = ''
   try {
     const res = await enqueueJob({ url: enqForm.value.url, dataset: enqForm.value.dataset })
-    enqMsg.value = `已入队 #${res?.job_id ?? '-'}`
+    toast.success(`已入队 #${res?.job_id ?? '-'}`)
     enqForm.value.url = ''
     await load()
   } catch (err) {
-    enqMsg.value = err instanceof Error ? err.message : String(err)
+    toast.error(err instanceof Error ? err.message : String(err))
   } finally {
     enqBusy.value = false
   }
@@ -294,9 +293,10 @@ async function doRetry(row: Record<string, any>) {
   const id = Number(row.id)
   try {
     await retryJob(id, row?.source || 'spine')
+    toast.success(`已提交重试 #${id}`)
     await load()
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    toast.error(err instanceof Error ? err.message : String(err))
   }
 }
 
@@ -305,17 +305,17 @@ async function runMaintenance(apply = false) {
     return
   }
   maintenanceBusy.value = apply ? 'apply' : 'dry'
-  maintenanceMsg.value = ''
   try {
     const res = await queueMaintenance({ apply, sample_limit: 20 })
     maintenanceResult.value = res || {}
     const counts = res?.counts || {}
-    maintenanceMsg.value = apply
+    toast.success(apply
       ? `已处理 ${res?.total_actionable ?? 0} 个卡住任务`
       : `待处理 ${res?.total_actionable ?? 0} 个卡住任务，久排 ${counts.crawl_stale_pending_observed ?? 0} 个`
+    )
     await load()
   } catch (err) {
-    maintenanceMsg.value = err instanceof Error ? err.message : String(err)
+    toast.error(err instanceof Error ? err.message : String(err))
   } finally {
     maintenanceBusy.value = ''
   }
@@ -519,9 +519,9 @@ onUnmounted(stopPolling)
       <b>久排 {{ statusMeta.stale_pending ?? 0 }}</b>
     </div>
 
-    <div v-if="maintenanceMsg || maintenanceResult" class="maintenance-panel">
+    <div v-if="maintenanceResult" class="maintenance-panel">
       <div class="maintenance-head">
-        <strong>{{ maintenanceMsg || '队列维护结果' }}</strong>
+        <strong>队列维护结果</strong>
         <span v-if="maintenanceResult">
           {{ maintenanceResult.applied ? '已执行' : '只读体检' }} · {{ fmtDate(maintenanceResult.checked_at) }}
         </span>
@@ -574,7 +574,6 @@ onUnmounted(stopPolling)
       <button class="ctl btn primary" :disabled="enqBusy" @click="submitEnqueue">
         {{ enqBusy ? '入队中…' : '入队' }}
       </button>
-      <span v-if="enqMsg" class="enqueue-msg">{{ enqMsg }}</span>
     </div>
 
     <div v-if="error" class="error">{{ error }}</div>
@@ -996,11 +995,6 @@ onUnmounted(stopPolling)
 .btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
-}
-
-.enqueue-msg {
-  font-size: 13px;
-  opacity: 0.75;
 }
 
 .error {

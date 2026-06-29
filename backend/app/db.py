@@ -23,12 +23,14 @@ if IS_SQLITE:
     # SQLite：同一连接跨线程复用（后台采集线程 + Web 线程）
     _kwargs["connect_args"] = {"check_same_thread": False}
 else:
-    # PostgreSQL：连接池 + 回收，避免长连接被 DB / 网络中断
+    # PostgreSQL：连接池 + 回收，避免长连接被 DB / 网络中断。
+    # 线上会同时启动多个 worker；默认池子必须克制，否则几十个进程
+    # 的空闲连接就足以打满 Postgres max_connections。
     is_worker = bool(os.environ.get("WORKER_ID"))
     _kwargs["pool_size"] = int(os.environ.get(
-        "DB_POOL_SIZE", "6" if is_worker else "5"))
+        "DB_POOL_SIZE", "1" if is_worker else "3"))
     _kwargs["max_overflow"] = int(os.environ.get(
-        "DB_MAX_OVERFLOW", "6" if is_worker else "10"))
+        "DB_MAX_OVERFLOW", "2" if is_worker else "3"))
     _kwargs["pool_timeout"] = int(os.environ.get("DB_POOL_TIMEOUT", "120"))
     _kwargs["pool_recycle"] = int(os.environ.get("DB_POOL_RECYCLE", "1800"))
 
@@ -156,6 +158,13 @@ def _migrate_with_connection(conn) -> None:
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_crawl_urls_failed_product_lookup "
             "ON crawl_urls (site, kind, status, failure_code)"))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_crawl_urls_site_last_seen "
+            "ON crawl_urls (site, last_seen_at)"))
+        if not IS_SQLITE:
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_crawl_urls_site_seen_progress "
+                "ON crawl_urls (site, last_seen_at) INCLUDE (status, attempts)"))
     if not IS_SQLITE and insp.has_table("products"):
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_products_site_listing_key "
@@ -169,6 +178,16 @@ def _migrate_with_connection(conn) -> None:
                 "CREATE INDEX IF NOT EXISTS ix_crawl_urls_product_site_url "
                 "ON crawl_urls (site, url) "
                 "WHERE kind = 'product' AND url IS NOT NULL"))
+    if not IS_SQLITE and insp.has_table("crawl_failures"):
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_crawl_failures_site_code_id "
+            "ON crawl_failures (site, code, id DESC)"))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_crawl_failures_site_id "
+            "ON crawl_failures (site, id DESC)"))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_crawl_failures_site_occurred_code "
+            "ON crawl_failures (site, occurred_at DESC, code)"))
     if not IS_SQLITE and insp.has_table("price_history"):
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_price_history_site_sku_date "
@@ -179,12 +198,29 @@ def _migrate_with_connection(conn) -> None:
             "WHERE review_count IS NOT NULL"))
     if not IS_SQLITE and insp.has_table("crawl_jobs"):
         conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_crawl_jobs_created_at_id "
+            "ON crawl_jobs (created_at, id)"))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_crawl_jobs_status_created_at "
+            "ON crawl_jobs (status, created_at)"))
+        conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_crawl_jobs_assigned_node_status "
             "ON crawl_jobs (assigned_node, status, id)"))
         conn.execute(text("""
             CREATE OR REPLACE FUNCTION guard_legacy_30min_crawl_cancel()
             RETURNS trigger AS $$
             BEGIN
+              IF OLD.status = 'running'
+                 AND NEW.status = 'failed'
+                 AND COALESCE(NEW.error, '') LIKE '%stuck running%'
+                 AND OLD.site LIKE 'vidaxl_%'
+                 AND OLD.started_at IS NOT NULL
+                 AND OLD.started_at > (
+                     (now() AT TIME ZONE 'UTC') - interval '72 hours'
+                 ) THEN
+                RETURN OLD;
+              END IF;
+
               IF OLD.status = 'running'
                  AND NEW.status = 'failed'
                  AND COALESCE(NEW.error, '') =

@@ -10,9 +10,15 @@ pytestmark = pytest.mark.unit
 
 _INDEX_URL = "https://www.sephora.com/sitemap.xml"
 _PRODUCTS_URL = "https://www.sephora.com/sitemaps/products-sitemap.xml"
+_FR_INDEX_URL = "https://www.sephora.fr/sitemap_index.xml"
+_FR_PRODUCTS_URL = "https://www.sephora.fr/sitemap-customsitemap_product_0.xml"
 _PDP_URL = (
     "https://www.sephora.com/product/"
     "one-size-by-patrick-starrr-turn-up-base-buttersilk-concealer-P473741"
+)
+_FR_PDP_URL = (
+    "https://www.sephora.fr/p/meteorites-compact---poudre-compacte-"
+    "matifiante-et-fixante-P10064237.html"
 )
 
 _SITEMAP_INDEX = f"""
@@ -27,12 +33,35 @@ _PRODUCTS_SITEMAP = f"""
 </urlset>
 """
 
+_FR_SITEMAP_INDEX = f"""
+<sitemapindex>
+  <sitemap><loc>{_FR_PRODUCTS_URL}</loc></sitemap>
+</sitemapindex>
+"""
+
+_FR_PRODUCTS_SITEMAP = f"""
+<urlset>
+  <url><loc>{_FR_PDP_URL}</loc></url>
+</urlset>
+"""
+
 
 def _site() -> Site:
     s = Site()
     s.site = "sephora_us_makeup"
     s.url = "https://www.sephora.com"
     s.country = "US"
+    s.proxy_tier = "none"
+    s.platform = "sephora"
+    s.brand = "Sephora"
+    return s
+
+
+def _fr_site() -> Site:
+    s = Site()
+    s.site = "sephora_fr_maquillage"
+    s.url = "https://www.sephora.fr/maquillage"
+    s.country = "FR"
     s.proxy_tier = "none"
     s.platform = "sephora"
     s.brand = "Sephora"
@@ -95,3 +124,62 @@ def test_sephora_sitemap_row_from_url_not_degraded():
     assert row["title"] == (
         "One Size By Patrick Starrr Turn Up Base Buttersilk Concealer")
     assert row["status"] == "on_sale"
+
+
+def test_sephora_us_sitemap_records_full_total_when_limited(monkeypatch):
+    from app.crawlers.sephora import SephoraCrawler
+
+    urls = "\n".join(
+        f"<url><loc>https://www.sephora.com/product/item-{i}-P{i}</loc></url>"
+        for i in range(3)
+    )
+    products_sitemap = f"<urlset>{urls}</urlset>"
+    crawler = SephoraCrawler(_site(), limit=1)
+
+    class _FakeFetcher:
+        def get(self, url: str, **kw):
+            if url == _INDEX_URL:
+                return _ok(url, _SITEMAP_INDEX)
+            if url == _PRODUCTS_URL:
+                return _ok(url, products_sitemap)
+            raise AssertionError(f"unexpected fetch: {url}")
+
+    monkeypatch.delenv("SEPHORA_FETCH_PDP", raising=False)
+    monkeypatch.setattr(crawler, "make_fetcher", lambda **kw: _FakeFetcher())
+
+    result = crawler.crawl()
+
+    assert len(result.products) == 1
+    assert result.total_product_count == 3
+    assert result.coverage_complete is False
+    assert result.coverage_stage == "sitemap"
+
+
+def test_sephora_fr_defaults_to_sitemap_only(monkeypatch):
+    from app.crawlers.sephora import SephoraCrawler
+
+    crawler = SephoraCrawler(_fr_site(), limit=1)
+    calls: list[str] = []
+
+    class _FakeFetcher:
+        def get(self, url: str, **kw):
+            calls.append(url)
+            if url == _FR_INDEX_URL:
+                return _ok(url, _FR_SITEMAP_INDEX)
+            if url == _FR_PRODUCTS_URL:
+                return _ok(url, _FR_PRODUCTS_SITEMAP)
+            raise AssertionError(f"unexpected fetch: {url}")
+
+    monkeypatch.delenv("SEPHORA_FR_HTML", raising=False)
+    monkeypatch.delenv("SEPHORA_FETCH_PDP", raising=False)
+    monkeypatch.setattr(crawler, "make_fetcher", lambda **kw: _FakeFetcher())
+
+    result = crawler.crawl()
+
+    assert calls == [_FR_INDEX_URL, _FR_PRODUCTS_URL]
+    assert len(result.products) == 1
+    row = result.products[0]
+    assert row["sku"] == "P10064237"
+    assert "Meteorites Compact" in row["title"]
+    assert row["currency"] == "EUR"
+    assert row["attributes"]["source"] == "sitemap"

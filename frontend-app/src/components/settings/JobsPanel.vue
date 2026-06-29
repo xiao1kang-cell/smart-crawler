@@ -4,7 +4,9 @@ import { asList, fmtDate } from '../../api/client'
 import { crawlDiagnostics, listFailedProducts, listJobs, retryFailedProducts, retryJob } from '../../api/jobs'
 import DataLoadingPanel from '../common/DataLoadingPanel.vue'
 import PageLoading from '../common/PageLoading.vue'
+import PathLoader from '../common/PathLoader.vue'
 import StatusBadge from '../common/StatusBadge.vue'
+import { useToastStore } from '../../stores/toast'
 
 defineProps<{
   embedded?: boolean
@@ -13,9 +15,9 @@ defineProps<{
 const jobs = ref<Record<string, any>[]>([])
 const diagnostics = ref<Record<string, any> | null>(null)
 const jobSummary = ref<Record<string, any>>({})
+const siteScope = ref<Record<string, any>>({})
 const jobTotal = ref(0)
 const error = ref('')
-const actionMsg = ref('')
 const loading = ref(false)
 const retryingId = ref<number | string | null>(null)
 const failedDrawerOpen = ref(false)
@@ -30,6 +32,9 @@ const failedFailureCode = ref('')
 const failedSummary = ref<Record<string, any>>({})
 const selectedFailedUrls = ref<Set<string>>(new Set())
 const statusFilter = ref('all')
+const timeFilter = ref('today')
+const customDateFrom = ref('')
+const customDateTo = ref('')
 const pageSize = ref(20)
 const page = ref(1)
 const statusItems = [
@@ -47,8 +52,77 @@ const pageSizeItems = [
   { label: '60 条/页', value: 60 },
   { label: '100 条/页', value: 100 },
 ]
-const runningCount = computed(() => Number(jobSummary.value.running ?? jobs.value.filter((j) => j.status === 'running').length))
-const successCount = computed(() => Number(jobSummary.value.success ?? jobs.value.filter((j) => ['success', 'completed'].includes(j.status)).length))
+const timeItems = [
+  { label: '今天', value: 'today' },
+  { label: '昨天', value: 'yesterday' },
+  { label: '近 7 天', value: '7d' },
+  { label: '近 30 天', value: '30d' },
+  { label: '全部时间', value: 'all' },
+  { label: '自定义', value: 'custom' },
+]
+const toast = useToastStore()
+
+function localDayRange(offsetDays = 0) {
+  const start = new Date()
+  start.setHours(0, 0, 0, 0)
+  start.setDate(start.getDate() + offsetDays)
+  const end = new Date(start)
+  end.setDate(end.getDate() + 1)
+  end.setMilliseconds(end.getMilliseconds() - 1)
+  return { start: start.toISOString(), end: end.toISOString() }
+}
+
+function localDateBoundary(value: string, endOfDay = false) {
+  if (!value) return undefined
+  const parts = value.split('-').map((part) => Number(part))
+  if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) return undefined
+  const [year, month, day] = parts
+  const dt = new Date(year, month - 1, day)
+  if (endOfDay) dt.setHours(23, 59, 59, 999)
+  else dt.setHours(0, 0, 0, 0)
+  return dt.toISOString()
+}
+
+const timeRange = computed(() => {
+  if (timeFilter.value === 'today') {
+    return { ...localDayRange(0), label: '今天', ranged: true }
+  }
+  if (timeFilter.value === 'yesterday') {
+    return { ...localDayRange(-1), label: '昨天', ranged: true }
+  }
+  if (timeFilter.value === '7d' || timeFilter.value === '30d') {
+    const days = timeFilter.value === '7d' ? 7 : 30
+    const end = new Date()
+    end.setHours(23, 59, 59, 999)
+    const start = new Date()
+    start.setHours(0, 0, 0, 0)
+    start.setDate(start.getDate() - days + 1)
+    return {
+      start: start.toISOString(),
+      end: end.toISOString(),
+      label: `近 ${days} 天`,
+      ranged: true,
+    }
+  }
+  if (timeFilter.value === 'custom') {
+    const start = localDateBoundary(customDateFrom.value)
+    const end = localDateBoundary(customDateTo.value, true)
+    return {
+      start,
+      end,
+      label: customDateFrom.value || customDateTo.value ? '自定义时间' : '自定义',
+      ranged: Boolean(start || end),
+    }
+  }
+  return { start: undefined, end: undefined, label: '全部时间', ranged: false }
+})
+const summaryScope = computed(() => jobSummary.value?.all_statuses || jobSummary.value)
+const runningCount = computed(() => Number(summaryScope.value.running ?? jobs.value.filter((j) => j.status === 'running').length))
+const successCount = computed(() => Number(summaryScope.value.success ?? jobs.value.filter((j) => ['success', 'completed'].includes(j.status)).length))
+const activeCount = computed(() => Number(summaryScope.value.active ?? runningCount.value + Number(summaryScope.value.queued ?? 0)))
+const scopedJobTotal = computed(() => Number(jobSummary.value?.total_all_statuses ?? jobTotal.value))
+const jobTotalText = computed(() => `${timeRange.value.label}${timeRange.value.ranged ? '已建' : '任务'} ${scopedJobTotal.value} 条`)
+const trackableSiteCount = computed(() => Number(siteScope.value?.trackable ?? siteScope.value?.total ?? 0))
 const totalPages = computed(() => Math.max(1, Math.ceil(jobTotal.value / Number(pageSize.value || 20))))
 const pageStart = computed(() => jobs.value.length ? (page.value - 1) * Number(pageSize.value || 20) + 1 : 0)
 const pageEnd = computed(() => jobs.value.length ? pageStart.value + jobs.value.length - 1 : 0)
@@ -68,17 +142,36 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
+    const range = timeRange.value
     const jobData = await listJobs({
       limit: pageSize.value,
       page: page.value,
       status: statusFilter.value === 'all' ? undefined : statusFilter.value,
       all_workspaces: 1,
+      created_from: range.start,
+      created_to: range.end,
+      include_live_progress: statusFilter.value === 'running',
     })
     jobs.value = asList(jobData, ['jobs', 'items'])
     jobTotal.value = Number(jobData?.total ?? jobs.value.length)
     page.value = Math.min(Math.max(1, Number(jobData?.page ?? page.value)), totalPages.value)
-    jobSummary.value = jobData?.summary || {}
-    diagnostics.value = await crawlDiagnostics({ limit: 8 }).catch(() => null)
+    jobSummary.value = {
+      ...(jobData?.summary || {}),
+      all_statuses: jobData?.summary_all_statuses || jobData?.summary || {},
+      total_all_statuses: jobData?.total_all_statuses,
+    }
+    siteScope.value = jobData?.site_scope || {}
+    crawlDiagnostics({
+      limit: 8,
+      created_from: range.start,
+      created_to: range.end,
+    })
+      .then((data) => {
+        diagnostics.value = data
+      })
+      .catch(() => {
+        diagnostics.value = null
+      })
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -94,13 +187,12 @@ async function retry(job: Record<string, any>) {
   if (!canRetry(job) || retryingId.value) return
   retryingId.value = job.id
   error.value = ''
-  actionMsg.value = ''
   try {
     const res = await retryJob(job.id)
-    actionMsg.value = `已重新入队 #${res?.job_id ?? '-'}`
+    toast.success(`已重新入队 #${res?.job_id ?? '-'}`)
     await load()
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    toast.error(err instanceof Error ? err.message : String(err))
   } finally {
     retryingId.value = null
   }
@@ -181,12 +273,11 @@ async function retryFailed(scope: 'selected' | 'filter') {
   if (!job?.site || failedRetrying.value) return
   const urls = Array.from(selectedFailedUrls.value)
   if (scope === 'selected' && !urls.length) {
-    actionMsg.value = '请先勾选要重抓的失败 URL'
+    toast.show({ title: '请先勾选要重抓的失败 URL', tone: 'warning' })
     return
   }
   failedRetrying.value = true
   error.value = ''
-  actionMsg.value = ''
   try {
     const res = await retryFailedProducts({
       site: job.site,
@@ -195,11 +286,14 @@ async function retryFailed(scope: 'selected' | 'filter') {
       urls: scope === 'selected' ? urls : undefined,
       limit: 500,
     })
-    actionMsg.value = `已创建失败商品重抓任务 #${res?.job_id ?? '-'}，选中 ${res?.selected_count ?? (urls.length || 0)} 条`
+    toast.success(
+      `已创建失败商品重抓任务 #${res?.job_id ?? '-'}`,
+      `选中 ${res?.selected_count ?? (urls.length || 0)} 条`
+    )
     selectedFailedUrls.value = new Set()
     await Promise.all([loadFailedProducts(), load()])
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    toast.error(err instanceof Error ? err.message : String(err))
   } finally {
     failedRetrying.value = false
   }
@@ -209,9 +303,9 @@ async function copyUrl(url?: string) {
   if (!url) return
   try {
     await navigator.clipboard.writeText(url)
-    actionMsg.value = 'URL 已复制'
+    toast.success('URL 已复制')
   } catch {
-    actionMsg.value = url
+    toast.show({ title: '复制失败', description: url, tone: 'warning', timeout: 0 })
   }
 }
 
@@ -330,19 +424,31 @@ onMounted(load)
   <section :class="{ 'jobs-panel-embedded': embedded }">
     <div v-if="!embedded" class="lead">采集任务 · 进程状态</div>
     <div class="sub">
-      {{ runningCount }} 采集中 · {{ successCount }} 成功 · 共 {{ jobTotal }} 条 ·
+      {{ jobTotalText }} · 可采集标杆 {{ trackableSiteCount }} 个 ·
+      {{ runningCount }} 采集中 · {{ activeCount }} 活跃 · {{ successCount }} 成功 ·
       当前 {{ pageStart }}-{{ pageEnd }} 条 · 第 {{ page }} / {{ totalPages }} 页
     </div>
     <UAlert v-if="error" color="error" variant="soft" :title="error" class="mb-4" />
-    <UAlert v-if="actionMsg" color="success" variant="soft" :title="actionMsg" class="mb-4" />
     <div class="jobs-toolbar">
       <div class="jobs-filter-group">
         <label class="jobs-filter-row">
           <span>状态</span>
           <USelect v-model="statusFilter" class="jobs-select jobs-status-select" :items="statusItems" value-key="value" @update:model-value="resetPageAndLoad" />
         </label>
+        <label class="jobs-filter-row">
+          <span>时间</span>
+          <USelect v-model="timeFilter" class="jobs-select jobs-time-select" :items="timeItems" value-key="value" @update:model-value="resetPageAndLoad" />
+        </label>
+        <label v-if="timeFilter === 'custom'" class="jobs-filter-row jobs-date-range">
+          <span>日期</span>
+          <input v-model="customDateFrom" class="jobs-date-input" type="date" @change="resetPageAndLoad" />
+          <input v-model="customDateTo" class="jobs-date-input" type="date" @change="resetPageAndLoad" />
+        </label>
       </div>
-      <button class="btn-go jobs-refresh-btn" :disabled="loading" @click="load">{{ loading ? '刷新中...' : '刷新' }}</button>
+      <button class="btn-go jobs-refresh-btn" :class="{ 'is-loading': loading }" :disabled="loading" @click="load">
+        <PathLoader v-if="loading" compact :size="34" />
+        <span>{{ loading ? '刷新中' : '刷新' }}</span>
+      </button>
     </div>
     <div v-if="diagnostics?.failure_counts && Object.keys(diagnostics.failure_counts).length" class="diag-strip">
       <span class="diag-title">失败分布</span>
@@ -350,7 +456,7 @@ onMounted(load)
         {{ code }} · {{ count }}
       </span>
     </div>
-    <DataLoadingPanel class="jobs-list" :loading="loading" :has-data="jobs.length > 0" label="正在更新任务列表">
+    <DataLoadingPanel v-if="!loading || jobs.length" class="jobs-list" :loading="loading" :has-data="jobs.length > 0" label="正在更新任务列表">
       <div class="job-row head">
         <div class="col-id">#</div>
         <div class="col-site">站点</div>
@@ -364,34 +470,34 @@ onMounted(load)
         <div class="col-action">建议动作</div>
         <div class="col-ops">操作</div>
       </div>
-      <PageLoading v-if="loading && !jobs.length" compact title="加载采集任务..." note="正在读取最近任务队列" />
-      <template v-else>
-        <div v-for="job in jobs" :key="job.id" class="job-row">
-          <div class="col-id">{{ job.id }}</div>
-          <div class="col-site">{{ job.site || job.brand }}</div>
-          <div class="col-status"><StatusBadge :status="job.status" /></div>
-          <div class="col-node" :title="job.assigned_by ? `由 ${job.assigned_by} 分配于 ${fmtJobTime(job.assigned_at)}` : ''">{{ nodeText(job) }}</div>
-          <div class="col-worker" :title="workerText(job)">{{ workerText(job) }}</div>
-          <div class="col-products" :title="job.total_product_count_source ? `本次总量来源：${job.total_product_count_source}` : '暂无本次总量数据'">{{ productProgressText(job) }}</div>
-          <div class="col-started">{{ fmtJobTime(job.started_at) }}</div>
-          <div class="col-duration" :title="runtimeTitle(job)">{{ fmtDuration(job.duration_sec) }}</div>
-          <div :title="failureTitle(job)" class="col-failure failure-code">{{ failureText(job) }}</div>
-          <div :title="job.failure_detail || job.error || ''" class="col-action job-action">{{ job.suggested_action || '—' }}</div>
-          <div class="col-ops">
-            <button class="btn-mini" :disabled="!canOpenFailedProducts(job)" @click="openFailedProducts(job)">
-              失败商品
-            </button>
-            <button class="btn-mini" :disabled="!canRetry(job) || retryingId === job.id" @click="retry(job)">
-              {{ retryingId === job.id ? '重试中' : '重试' }}
-            </button>
-          </div>
+      <div v-for="job in jobs" :key="job.id" class="job-row">
+        <div class="col-id">{{ job.id }}</div>
+        <div class="col-site">{{ job.site || job.brand }}</div>
+        <div class="col-status"><StatusBadge :status="job.status" /></div>
+        <div class="col-node" :title="job.assigned_by ? `由 ${job.assigned_by} 分配于 ${fmtJobTime(job.assigned_at)}` : ''">{{ nodeText(job) }}</div>
+        <div class="col-worker" :title="workerText(job)">{{ workerText(job) }}</div>
+        <div class="col-products" :title="job.total_product_count_source ? `本次总量来源：${job.total_product_count_source}` : '暂无本次总量数据'">{{ productProgressText(job) }}</div>
+        <div class="col-started">{{ fmtJobTime(job.started_at) }}</div>
+        <div class="col-duration" :title="runtimeTitle(job)">{{ fmtDuration(job.duration_sec) }}</div>
+        <div :title="failureTitle(job)" class="col-failure failure-code">{{ failureText(job) }}</div>
+        <div :title="job.failure_detail || job.error || ''" class="col-action job-action">{{ job.suggested_action || '—' }}</div>
+        <div class="col-ops">
+          <button class="btn-mini" :disabled="!canOpenFailedProducts(job)" @click="openFailedProducts(job)">
+            失败商品
+          </button>
+          <button class="btn-mini" :disabled="!canRetry(job) || retryingId === job.id" @click="retry(job)">
+            {{ retryingId === job.id ? '重试中' : '重试' }}
+          </button>
         </div>
-      </template>
+      </div>
       <div v-if="!loading && !jobs.length" class="empty-state">
         <b>暂无采集任务</b>
         可以从覆盖率页面触发一个站点抓取。
       </div>
     </DataLoadingPanel>
+    <div v-else class="jobs-list jobs-empty-loading">
+      <PageLoading compact title="加载采集任务..." note="正在读取最近任务队列" />
+    </div>
     <div v-if="jobTotal > 0" class="jobs-footer-pager">
       <div class="jobs-page-size">
         <span>每页条数</span>
@@ -511,19 +617,58 @@ onMounted(load)
 .jobs-filter-row span {
   flex: 0 0 auto;
 }
-.jobs-select {
-  width: 112px;
-  min-height: 34px;
-  flex: 0 0 auto;
+:global(.jobs-select) {
+  flex: 0 0 auto !important;
 }
 :global(.jobs-status-select) {
   width: 148px !important;
   min-width: 148px !important;
 }
+:global(.jobs-time-select) {
+  width: 120px !important;
+  min-width: 120px !important;
+}
+.jobs-date-range {
+  flex-wrap: wrap;
+}
+.jobs-date-input {
+  width: 136px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  background: var(--ui-card-soft);
+  color: var(--ui-heading);
+  font-family: inherit;
+  font-size: .82rem;
+  font-weight: 600;
+  line-height: 1;
+  outline: none;
+  box-shadow: 0 1px 0 rgba(255,255,255,.74),0 8px 18px rgba(37,29,61,.06);
+}
+.jobs-date-input:hover {
+  border-color: var(--ui-purple-line);
+  background: var(--ui-card);
+}
+.jobs-date-input:focus {
+  border-color: var(--ui-purple);
+  outline: 2px solid rgba(124,58,237,.18);
+  outline-offset: 2px;
+}
 .jobs-refresh-btn {
   margin-left: auto;
   min-height: 36px;
-  padding: 0 18px;
+  min-width: 96px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 16px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.jobs-refresh-btn.is-loading {
+  background: linear-gradient(135deg, #c4b5fd, #8b5cf6);
 }
 .jobs-footer-pager {
   display: flex;
@@ -559,13 +704,36 @@ onMounted(load)
   min-width: 0;
 }
 .job-row {
+  display: grid;
   width: 100%;
   min-width: 0;
   grid-template-columns: 44px minmax(76px, .8fr) 72px minmax(76px, .65fr) minmax(88px, .8fr) 92px minmax(98px, .85fr) 72px minmax(76px, .7fr) minmax(120px, 1.15fr) 136px;
   gap: 8px;
+  align-items: center;
+  min-height: 42px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--ui-border);
+  color: var(--ui-text);
+  font-size: .8rem;
+}
+.job-row.head {
+  min-height: 38px;
+  background: var(--ui-card-soft);
+  color: var(--ui-muted);
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.job-row:hover:not(.head) {
+  background: #faf5ff;
 }
 .jobs-list {
   overflow-x: auto;
+}
+.jobs-empty-loading {
+  padding: 14px;
+  overflow: hidden;
 }
 .job-row > div {
   min-width: 0;
@@ -735,6 +903,19 @@ onMounted(load)
 }
 .failed-empty {
   margin: 16px;
+}
+
+:global(html[data-theme="dark"]) .jobs-date-input {
+  border-color: var(--ui-border);
+  background: var(--ui-card-soft);
+  color: var(--ui-heading);
+}
+:global(html[data-theme="dark"]) .job-row.head {
+  background: var(--ui-card-soft);
+  color: #9f95b6;
+}
+:global(html[data-theme="dark"]) .job-row:hover:not(.head) {
+  background: rgba(167,139,250,.05);
 }
 
 @media (max-width: 900px) {

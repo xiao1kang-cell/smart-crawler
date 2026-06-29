@@ -10,6 +10,7 @@ Key cases:
 from __future__ import annotations
 
 import gzip
+import json
 
 import pytest
 
@@ -220,6 +221,138 @@ def test_homary_product_parsed_correctly(monkeypatch):
     assert p["site"] == "homary_us"
     assert p["brand"] == "Homary"
     assert p["product_url"] == _PRODUCT_URL
+
+
+def test_homary_product_collects_coupon_and_free_shipping_labels(monkeypatch):
+    """Aosen promo pass needs Homary PDP coupon/free-shipping signals."""
+    site = _site()
+    crawler = _make_crawler(site, limit=1)
+    promo_html = _PRODUCT_HTML.replace(
+        "</body>",
+        """
+        <div class="coupon-banner">Save 10% with code HOME10</div>
+        <div class="shipping-message">Free shipping on orders over $99</div>
+        </body>
+        """,
+    )
+    url_map = {
+        _SITEMAP_ITEM_GZ: FetchResult(
+            ok=True, url=_SITEMAP_ITEM_GZ, status=200,
+            text="", content=_SITEMAP_ITEM_GZ_BYTES,
+            final_url=_SITEMAP_ITEM_GZ, fetcher="curl_cffi",
+        ),
+        _SITEMAP_BEST_GZ: FetchResult(
+            ok=True, url=_SITEMAP_BEST_GZ, status=200,
+            text="", content=_SITEMAP_BEST_GZ_BYTES,
+            final_url=_SITEMAP_BEST_GZ, fetcher="curl_cffi",
+        ),
+        _PRODUCT_URL: FetchResult(
+            ok=True, url=_PRODUCT_URL, status=200,
+            text=promo_html, content=promo_html.encode("utf-8"),
+            final_url=_PRODUCT_URL, fetcher="curl_cffi",
+        ),
+    }
+
+    monkeypatch.setattr(crawler, "make_fetcher",
+                        lambda **kw: _make_fake_fetcher(crawler, url_map))
+    monkeypatch.setattr(crawler, "sleep", lambda: None)
+    monkeypatch.setattr(crawler, "snapshot", lambda name, content: None)
+
+    result = crawler.crawl()
+    product = result.products[0]
+
+    assert product["has_free_shipping"] is True
+    assert "Save 10% with code HOME10" in product["attributes"]["promotions"]
+    assert "Free shipping on orders over $99" in product["attributes"]["promotions"]
+    assert product["attributes"]["free_shipping_label"] == "Free shipping"
+
+
+def test_homary_empty_shell_without_price_or_category_is_not_product(monkeypatch):
+    site = _site()
+    crawler = _make_crawler(site, limit=1)
+    shell_html = """<!DOCTYPE html>
+    <html>
+    <head><meta property="og:title" content="Homary UK | Homary" /></head>
+    <body><nav class="category-second-list">Furniture Clearance from £59.99</nav></body>
+    </html>
+    """
+    url_map = {
+        _PRODUCT_URL: FetchResult(
+            ok=True, url=_PRODUCT_URL, status=200,
+            text=shell_html, content=shell_html.encode("utf-8"),
+            final_url=_PRODUCT_URL, fetcher="curl_cffi",
+        ),
+    }
+
+    fetcher = _make_fake_fetcher(crawler, url_map)
+
+    assert crawler._parse_product(fetcher, _PRODUCT_URL, set()) is None
+
+
+def test_homary_product_uses_jsonld_category_and_review_count(monkeypatch):
+    site = _site()
+    crawler = _make_crawler(site, limit=1)
+    jsonld_html = _PRODUCT_HTML.replace(
+        '<nav class="breadcrumb"><a href="/living-room">Living Room</a><a href="/sofas">Sofas</a></nav>',
+        "",
+    ).replace(
+        "</head>",
+        """
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "BreadcrumbList",
+          "itemListElement": [
+            {"@type":"ListItem","position":1,"name":"Home"},
+            {"@type":"ListItem","position":2,"name":"Bedroom"},
+            {"@type":"ListItem","position":3,"name":"Beds"}
+          ]
+        }
+        </script>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Modern Sofa",
+          "aggregateRating": {
+            "@type": "AggregateRating",
+            "ratingValue": "4.8",
+            "reviewCount": "123"
+          }
+        }
+        </script>
+        </head>
+        """,
+    )
+    url_map = {
+        _SITEMAP_ITEM_GZ: FetchResult(
+            ok=True, url=_SITEMAP_ITEM_GZ, status=200,
+            text="", content=_SITEMAP_ITEM_GZ_BYTES,
+            final_url=_SITEMAP_ITEM_GZ, fetcher="curl_cffi",
+        ),
+        _SITEMAP_BEST_GZ: FetchResult(
+            ok=True, url=_SITEMAP_BEST_GZ, status=200,
+            text="", content=_SITEMAP_BEST_GZ_BYTES,
+            final_url=_SITEMAP_BEST_GZ, fetcher="curl_cffi",
+        ),
+        _PRODUCT_URL: FetchResult(
+            ok=True, url=_PRODUCT_URL, status=200,
+            text=jsonld_html, content=jsonld_html.encode("utf-8"),
+            final_url=_PRODUCT_URL, fetcher="curl_cffi",
+        ),
+    }
+
+    monkeypatch.setattr(crawler, "make_fetcher",
+                        lambda **kw: _make_fake_fetcher(crawler, url_map))
+    monkeypatch.setattr(crawler, "sleep", lambda: None)
+    monkeypatch.setattr(crawler, "snapshot", lambda name, content: None)
+
+    result = crawler.crawl()
+    product = result.products[0]
+
+    assert product["category_path"] == "Bedroom/Beds"
+    assert product["ratings"] == 4.8
+    assert product["review_count"] == 123
 
 
 def test_homary_concurrency_requires_proxy_lease_config():

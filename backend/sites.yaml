@@ -21,7 +21,6 @@ settings:
     - etsy_us
     - otto_de
     - target_us
-    - vidaxl_ca
     - walmart_us
     - wayfair_us
 
@@ -36,8 +35,8 @@ sites:
 
   # ========== Costway（豪雅, P0）==========
   # 美/加站 = Vue3 SPA + /api JSON；欧洲站 = Magento（/api 返回 404，走 sitemap）
-  - {site: costway_us, brand: Costway, country: US, url: "https://www.costway.com/", platform: vue_spa, proxy_tier: none}
-  - {site: costway_ca, brand: Costway, country: CA, url: "https://www.costway.ca/", platform: vue_spa, proxy_tier: none}
+  - {site: costway_us, brand: Costway, country: US, url: "https://www.costway.com/", platform: vue_spa, proxy_tier: datacenter, crawler_config: {max_products: 999999, job_timeout_sec: 86400, rate_interval_sec: 0.6, listing_concurrency: 4, detail_concurrency: 4, proxy_lease_ttl_sec: 300, failed_product_retry_limit: 500}}
+  - {site: costway_ca, brand: Costway, country: CA, url: "https://www.costway.ca/", platform: vue_spa, proxy_tier: datacenter, crawler_config: {max_products: 999999, job_timeout_sec: 86400, rate_interval_sec: 0.6, listing_concurrency: 4, detail_concurrency: 4, proxy_lease_ttl_sec: 300, failed_product_retry_limit: 500}}
   - {site: costway_uk, brand: Costway, country: UK, url: "https://www.costway.co.uk/", platform: magento, proxy_tier: none}
   - {site: costway_de, brand: Costway, country: DE, url: "https://www.costway.de/", platform: magento, proxy_tier: none}
   - {site: costway_it, brand: Costway, country: IT, url: "https://www.costway.it/", platform: magento, proxy_tier: none}
@@ -62,14 +61,14 @@ sites:
   - {site: vidaxl_uk, brand: Vidaxl, country: UK, url: "https://www.vidaxl.co.uk/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0}
   - {site: vidaxl_ca, brand: Vidaxl, country: CA, url: "https://en.vidaxl.ca/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0}
   - {site: vidaxl_ie, brand: Vidaxl, country: IE, url: "https://www.vidaxl.ie/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0}
-  - {site: vidaxl_de, brand: Vidaxl, country: DE, url: "https://www.vidaxl.de/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0}
-  - {site: vidaxl_it, brand: Vidaxl, country: IT, url: "https://www.vidaxl.it/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0}
-  - {site: vidaxl_es, brand: Vidaxl, country: ES, url: "https://www.vidaxl.es/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0}
-  - {site: vidaxl_fr, brand: Vidaxl, country: FR, url: "https://www.vidaxl.fr/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0}
+  - {site: vidaxl_de, brand: Vidaxl, country: DE, url: "https://www.vidaxl.de/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0, crawler_config: {category_urls: ["https://www.vidaxl.de/g/436/mobel", "https://www.vidaxl.de/g/536/heim-garten", "https://www.vidaxl.de/g/632/heimwerkerbedarf", "https://www.vidaxl.de/g/988/sportartikel", "https://www.vidaxl.de/g/1/tier--haustierbedarf", "https://www.vidaxl.de/g/1239/spielzeuge-spiele", "https://www.vidaxl.de/g/888/fahrzeuge-zubehor", "https://www.vidaxl.de/g/111/wirtschaft-industrie", "https://www.vidaxl.de/g/537/baby-kleinkind", "https://www.vidaxl.de/g/999999/andere"], category_label: "All top categories / 一级主类目"}}
+  - {site: vidaxl_it, brand: Vidaxl, country: IT, url: "https://www.vidaxl.it/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0, crawler_config: {category_urls: ["https://www.vidaxl.it/g/436/mobili", "https://www.vidaxl.it/g/536/casa-e-giardino", "https://www.vidaxl.it/g/632/articoli-di-ferramenta", "https://www.vidaxl.it/g/988/articoli-sportivi", "https://www.vidaxl.it/g/1/articoli-per-animali", "https://www.vidaxl.it/g/1239/giochi-e-giocattoli", "https://www.vidaxl.it/g/888/veicoli-e-parti", "https://www.vidaxl.it/g/111/commercio-e-industria", "https://www.vidaxl.it/g/537/bebe-e-bimbi", "https://www.vidaxl.it/g/999999/altri"], category_label: "All top categories / 一级主类目"}}
+  - {site: vidaxl_es, brand: Vidaxl, country: ES, url: "https://www.vidaxl.es/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0, crawler_config: {category_urls: ["https://www.vidaxl.es/g/436/mobiliario", "https://www.vidaxl.es/g/536/casa-y-jardin", "https://www.vidaxl.es/g/632/bricolaje", "https://www.vidaxl.es/g/988/deportes", "https://www.vidaxl.es/g/1/producto-para-mascotas-y-animales", "https://www.vidaxl.es/g/1239/juegos-y-juguetes", "https://www.vidaxl.es/g/888/vehiculos-y-recambios", "https://www.vidaxl.es/g/111/economia-e-industria", "https://www.vidaxl.es/g/537/bebes-y-ninos-pequenos", "https://www.vidaxl.es/g/999999/otros"], category_label: "All top categories / 一级主类目"}}
+  - {site: vidaxl_fr, brand: Vidaxl, country: FR, url: "https://www.vidaxl.fr/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0, crawler_config: {category_urls: ["https://www.vidaxl.fr/g/436/meubles", "https://www.vidaxl.fr/g/536/maison-jardin", "https://www.vidaxl.fr/g/632/quincaillerie", "https://www.vidaxl.fr/g/988/equipements-sportifs", "https://www.vidaxl.fr/g/1/articles-pour-animaux", "https://www.vidaxl.fr/g/1239/jeux-jouets", "https://www.vidaxl.fr/g/888/entretien-vehicules", "https://www.vidaxl.fr/g/111/entreprise-industrie", "https://www.vidaxl.fr/g/537/bebes-tout-petits", "https://www.vidaxl.fr/g/999999/autres"], category_label: "All top categories / 一级主类目"}}
   - {site: vidaxl_ro, brand: Vidaxl, country: RO, url: "https://www.vidaxl.ro/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0}
   - {site: vidaxl_pt, brand: Vidaxl, country: PT, url: "https://www.vidaxl.pt/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0}
-  - {site: vidaxl_nl, brand: Vidaxl, country: NL, url: "https://www.vidaxl.nl/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0}
-  - {site: vidaxl_pl, brand: Vidaxl, country: PL, url: "https://www.vidaxl.pl/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0}
+  - {site: vidaxl_nl, brand: Vidaxl, country: NL, url: "https://www.vidaxl.nl/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0, crawler_config: {category_urls: ["https://www.vidaxl.nl/g/436/meubelen", "https://www.vidaxl.nl/g/536/huis-tuin", "https://www.vidaxl.nl/g/632/hardware", "https://www.vidaxl.nl/g/988/sportartikelen", "https://www.vidaxl.nl/g/1/dierbenodigdheden", "https://www.vidaxl.nl/g/1239/speelgoed-spellen", "https://www.vidaxl.nl/g/888/voertuig-onderdelen", "https://www.vidaxl.nl/g/111/zakelijk-industrieel", "https://www.vidaxl.nl/g/537/baby-peuter", "https://www.vidaxl.nl/g/999999/overig"], category_label: "All top categories / 一级主类目"}}
+  - {site: vidaxl_pl, brand: Vidaxl, country: PL, url: "https://www.vidaxl.pl/", platform: vidaxl, proxy_tier: residential, product_match: "/p/", max_products: 0, crawler_config: {category_urls: ["https://www.vidaxl.pl/g/436/meble", "https://www.vidaxl.pl/g/536/dom-i-ogrod", "https://www.vidaxl.pl/g/632/sprzet", "https://www.vidaxl.pl/g/988/sprzet-sportowy", "https://www.vidaxl.pl/g/1/artykuly-dla-zwierzat", "https://www.vidaxl.pl/g/1239/gry-i-zabawki", "https://www.vidaxl.pl/g/888/pojazdy-i-czesci", "https://www.vidaxl.pl/g/111/biznes-i-przemysl", "https://www.vidaxl.pl/g/537/dzieci-i-niemowleta", "https://www.vidaxl.pl/g/999999/inne"], category_label: "All top categories / 一级主类目"}}
 
   # ========== Flexispot（乐歌, P1）— React，目录较小 ==========
   - {site: flexispot_us, brand: Flexispot, country: US, url: "https://www.flexispot.com/", platform: flexispot, proxy_tier: none, exclude_match: "spine-care-center", max_products: 150}

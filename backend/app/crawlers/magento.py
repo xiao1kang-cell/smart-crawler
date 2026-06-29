@@ -26,6 +26,14 @@ from selectolax.parser import HTMLParser
 
 from ..antiban import BlockedError
 from ..config import get_sites
+from ..crawl_diagnostics import (
+    FailureInfo,
+    PARSE_NO_PRODUCT,
+    STAGE_PARSE,
+    classify_exception,
+)
+from ..db import session_scope
+from ..frontier import mark_failed, mark_parsed
 from .base import BaseCrawler, CrawlResult
 from .generic import GenericCrawler
 
@@ -168,7 +176,8 @@ class MagentoCrawler(BaseCrawler):
                 rows.append(row)
             result.products.extend(rows)
             result.total_product_count = total
-            if len(rows) < total:
+            coverage_pct = (len(rows) / total * 100) if total else 100.0
+            if len(rows) < total and coverage_pct < 99.9:
                 result.coverage_complete = False
                 result.coverage_code = "incomplete_detail_parse"
                 result.coverage_stage = "sitemap"
@@ -279,6 +288,80 @@ class MagentoCrawler(BaseCrawler):
             "product_url": url,
             "site": self.site.site,
         }
+
+    def crawl_failed_products(self, urls: list[str]) -> CrawlResult:
+        """Retry selected Magento product URLs without rediscovering sitemap."""
+        result = CrawlResult()
+        urls = [u for u in urls if u]
+        if not urls:
+            result.notes.append("没有可重抓的 Magento URL")
+            return result
+
+        seen: set[str] = set()
+        failures = 0
+
+        def _add_row(url: str, row: dict | None) -> None:
+            nonlocal failures
+            if not row:
+                failures += 1
+                info = FailureInfo(
+                    PARSE_NO_PRODUCT,
+                    STAGE_PARSE,
+                    "Magento 失败 URL 重抓未解析到商品",
+                    True,
+                    "保留 URL 进入下一轮失败商品补抓，或检查该 URL 是否仍为商品页",
+                )
+                with session_scope() as s:
+                    mark_failed(s, site=self.site.site, url=url, failure=info)
+                return
+            sku = str(row.get("sku") or "")
+            if sku and sku not in seen:
+                seen.add(sku)
+                result.products.append(row)
+            with session_scope() as s:
+                mark_parsed(s, site=self.site.site, url=url)
+
+        if self._prefer_sitemap_only():
+            for url in urls:
+                _add_row(url, self._row_from_sitemap(url))
+        else:
+            fetcher = self.make_fetcher(
+                kind="product",
+                source="magento_failed_product_retry",
+                fail_fast_blocked=False,
+                retries=1,
+            )
+            self._fetcher = fetcher
+            with ThreadPoolExecutor(max_workers=max(1, min(WORKERS, 8))) as pool:
+                future_by_url = {pool.submit(self._fetch_one, url): url for url in urls}
+                for future, url in future_by_url.items():
+                    try:
+                        _add_row(url, future.result())
+                    except BlockedError:
+                        raise
+                    except Exception as exc:
+                        failures += 1
+                        info = classify_exception(exc)
+                        with session_scope() as s:
+                            mark_failed(s, site=self.site.site, url=url,
+                                        failure=info)
+                        result.notes.append(f"{url} 重抓失败: {exc}")
+
+        result.total_product_count = len(urls)
+        if failures:
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "retry"
+            result.coverage_reason = (
+                f"Magento 失败 URL 补抓 {len(urls)} 个，仍失败 {failures} 个"
+            )
+            result.coverage_retryable = True
+            result.coverage_suggested_action = "等待退避后继续失败商品补抓。"
+        result.notes.append(
+            f"Magento 失败 URL 补抓 {len(urls)} 个，"
+            f"产出 {len(result.products)} 个 SKU，失败 {failures} 个"
+        )
+        return result
 
     @staticmethod
     def _meta(tree: HTMLParser, prop: str) -> str | None:

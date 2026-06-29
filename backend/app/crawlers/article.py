@@ -170,6 +170,59 @@ class ArticleCrawler(BaseCrawler):
             result.coverage_suggested_action = "修复 Article PDP parser 后按失败商品重抓。"
         return result
 
+    def crawl_failed_products(self, urls: list[str]) -> CrawlResult:
+        """Retry failed Article PDP URLs without rediscovering sitemap/browse."""
+        result = CrawlResult()
+        targets = self._dedupe([u for u in urls if u])
+        result.total_product_count = len(targets)
+        self.persist_job_progress(products_count=0,
+                                  total_product_count=len(targets))
+        if not targets:
+            result.notes.append("没有可重抓的 Article PDP URL")
+            return result
+
+        fetcher = self.make_fetcher(
+            kind="product",
+            source="article_failed_product_retry",
+            fail_fast_blocked=True,
+            retries=1,
+        )
+        ok = 0
+        discontinued = 0
+        failed = 0
+        for url in targets:
+            try:
+                row, status = self._fetch_and_parse(fetcher, url)
+                if status == "discontinued":
+                    discontinued += 1
+                elif row:
+                    result.products.append(row)
+                    ok += 1
+                else:
+                    failed += 1
+            except Exception as exc:
+                failed += 1
+                if failed <= 5:
+                    result.notes.append(f"重抓失败 {url[-60:]}: {exc}")
+            self.persist_job_progress(
+                products_count=ok,
+                total_product_count=max(0, len(targets) - discontinued),
+            )
+            self.sleep()
+
+        result.total_product_count = max(0, len(targets) - discontinued)
+        result.notes.append(
+            f"失败商品重抓完成：成功 {ok}/{len(targets)}，停售 {discontinued}，失败 {failed}"
+        )
+        if failed:
+            result.coverage_complete = False
+            result.coverage_code = "incomplete_detail_parse"
+            result.coverage_stage = "pdp"
+            result.coverage_reason = f"Article 仍有 {failed} 个 PDP 未能解析成商品。"
+            result.coverage_retryable = True
+            result.coverage_suggested_action = "稍后继续按失败商品重抓，或检查该 PDP 是否持续 5xx。"
+        return result
+
     def _discover_browse_urls(self, fetcher, result: CrawlResult) -> list[str]:
         """从当前 browse 页抽取 live PDP 链接。
 

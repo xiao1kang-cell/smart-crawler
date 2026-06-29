@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { analyticsRecompute, crawlEnqueue, dataQuality, dataQualityProducts, promotionsRebuild, proxyAntiBotApplyRules, siteCrawlerConfig, siteCrawlerConfigTestPriceSource, siteCrawlerConfigUpdate, tenants, thirdPartyMetricsImport, thirdPartyMetricsTemplate, thirdPartyMetricsValidate } from '../api/admin'
+import { analyticsRecompute, aosenAcceptanceActionPlan, aosenFieldQualityAcceptance, crawlEnqueue, dataQuality, dataQualityProducts, productFieldFixesImport, productFieldFixesTemplate, productFieldFixesValidate, promotionSignalsImport, promotionSignalsTemplate, promotionSignalsValidate, promotionsRebuild, proxyAntiBotApplyRules, reviewHistoryImport, reviewHistoryTemplate, reviewHistoryValidate, salesSignalsImport, salesSignalsTemplate, salesSignalsValidate, siteCrawlerConfig, siteCrawlerConfigTestPriceSource, siteCrawlerConfigUpdate, skuTargetsImport, skuTargetsTemplate, skuTargetsValidate, tenants, thirdPartyMetricsImport, thirdPartyMetricsTemplate, thirdPartyMetricsValidate } from '../api/admin'
 import { fmtDate, fmtNumber } from '../api/client'
 import StatCard from '../components/common/StatCard.vue'
 import StatusBadge from '../components/common/StatusBadge.vue'
@@ -17,6 +17,27 @@ const rerunBusy = ref<Record<string, boolean>>({})
 const rerunMessage = ref<Record<string, string>>({})
 const promoBusy = ref<Record<string, boolean>>({})
 const promoMessage = ref<Record<string, string>>({})
+const promoImportOpen = ref(false)
+const promoImportText = ref('site,sku,promotion_type,promotion_name,discount_percent,promotion_price,threshold,start_time,end_time\nhomary_us,SKU123,coupon,Save 10% with code HOME10,10,,,2026-06-28,')
+const promoImportBusy = ref(false)
+const promoImportMessage = ref('')
+const promoTemplateBusy = ref(false)
+const promoValidateBusy = ref(false)
+const promoValidation = ref<Record<string, any> | null>(null)
+const fieldFixImportOpen = ref(false)
+const fieldFixImportText = ref('site,sku,title,currency,category_path,image_urls,sale_price,original_price,spu,note\nhomary_us,SKU123,Oak storage cabinet,USD,Living Room > Storage,https://example.com/image.jpg,199.99,249.99,SPU123,')
+const fieldFixImportBusy = ref(false)
+const fieldFixImportMessage = ref('')
+const fieldFixTemplateBusy = ref(false)
+const fieldFixValidateBusy = ref(false)
+const fieldFixValidation = ref<Record<string, any> | null>(null)
+const skuTargetImportOpen = ref(false)
+const skuTargetImportText = ref('site,workspace_id,target_sku_count,note\nhomary_us,1,1200,client accepted target')
+const skuTargetImportBusy = ref(false)
+const skuTargetImportMessage = ref('')
+const skuTargetTemplateBusy = ref(false)
+const skuTargetValidateBusy = ref(false)
+const skuTargetValidation = ref<Record<string, any> | null>(null)
 const analyticsBusy = ref<Record<string, boolean>>({})
 const analyticsMessage = ref<Record<string, string>>({})
 const proxyRuleBusy = ref<Record<string, boolean>>({})
@@ -28,6 +49,24 @@ const metricsImportMessage = ref('')
 const metricsTemplateBusy = ref(false)
 const metricsValidateBusy = ref(false)
 const metricsValidation = ref<Record<string, any> | null>(null)
+const salesImportOpen = ref(false)
+const salesImportText = ref('site,sku,date,thirty_day_sales,thirty_day_revenue\nhomary_us,SKU123,2026-06-28,12,1299.99')
+const salesImportBusy = ref(false)
+const salesImportMessage = ref('')
+const salesTemplateBusy = ref(false)
+const salesValidateBusy = ref(false)
+const salesValidation = ref<Record<string, any> | null>(null)
+const reviewHistoryImportOpen = ref(false)
+const reviewHistoryImportText = ref('site,sku,date,review_count,sale_price,original_price\nhomary_us,SKU123,2026-06-01,120,199.99,249.99')
+const reviewHistoryImportBusy = ref(false)
+const reviewHistoryImportMessage = ref('')
+const reviewHistoryTemplateBusy = ref(false)
+const reviewHistoryValidateBusy = ref(false)
+const reviewHistoryValidation = ref<Record<string, any> | null>(null)
+const aosenAcceptance = ref<Record<string, any>>({})
+const aosenActionPlan = ref<Record<string, any>>({})
+const aosenAcceptanceBusy = ref(false)
+const aosenAcceptanceError = ref('')
 const configOpen = ref(false)
 const configSite = ref('')
 const configBusy = ref(false)
@@ -71,6 +110,8 @@ const detailIssues = [
   { key: 'coverage_low', label: '覆盖低' },
   { key: 'sku_deviation_high', label: 'SKU偏差' },
   { key: 'title_weak', label: '弱标题' },
+  { key: 'category_missing', label: '缺类目' },
+  { key: 'image_missing', label: '缺图片' },
   { key: 'price_missing', label: '缺价格' },
   { key: 'pdp_price_required', label: 'PDP价格源' },
   { key: 'currency_missing', label: '缺币种' },
@@ -160,6 +201,8 @@ const summaryCards = computed(() => [
   { key: 'sites_without_jobs', label: '无任务记录', value: summary.value.sites_without_jobs },
   { key: 'sku_deviation_high', label: 'SKU偏差', value: summary.value.high_deviation },
   { key: 'title_weak', label: '弱标题', value: summary.value.weak_titles },
+  { key: 'category_missing', label: '缺类目', value: summary.value.missing_categories },
+  { key: 'image_missing', label: '缺图片', value: summary.value.missing_images },
   { key: 'price_missing', label: '缺价格', value: summary.value.missing_prices },
   { key: 'pdp_price_required', label: 'PDP价格源', value: summary.value.pdp_price_required },
   { key: 'currency_issues', label: '币种问题', value: summary.value.currency_issues },
@@ -212,6 +255,28 @@ const analyticsRecomputeSites = computed(() => sortedRows.value
   .filter((row) => shouldRecomputeAnalytics(row))
   .map((row) => row.site)
   .filter(Boolean))
+const aosenAcceptanceSummary = computed(() => aosenAcceptance.value?.summary || {})
+const aosenAcceptanceItems = computed(() => Array.isArray(aosenAcceptance.value?.items) ? aosenAcceptance.value.items : [])
+const aosenActionGroups = computed(() => aosenActionPlan.value?.groups || {})
+const aosenFieldFixTemplate = computed(() => aosenActionPlan.value?.templates?.product_field_fixes || {})
+const aosenSkuTargetTemplate = computed(() => aosenActionPlan.value?.templates?.sku_targets || {})
+const aosenPromotionTemplate = computed(() => aosenActionPlan.value?.templates?.promotion_signals || {})
+const aosenSalesTemplate = computed(() => aosenActionPlan.value?.templates?.sales_signals || {})
+const aosenReviewHistoryTemplate = computed(() => aosenActionPlan.value?.templates?.review_history || {})
+function uniqueSites(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  return Array.from(new Set(raw.map((item) => String(item || '').trim()).filter(Boolean)))
+}
+const aosenPromotionRefreshSites = computed(() => uniqueSites(aosenActionGroups.value?.promotion_refresh?.sites))
+const aosenBusinessDataSites = computed(() => uniqueSites(aosenActionGroups.value?.business_data?.sites))
+const aosenActionCards = computed(() => [
+  { key: 'field_fixes', label: '字段修复', value: aosenActionGroups.value?.field_fixes?.count || 0, issue: 'title_weak' },
+  { key: 'promotion_refresh', label: '促销刷新', value: aosenActionGroups.value?.promotion_refresh?.count || 0, issue: 'promotions_missing' },
+  { key: 'business_data', label: '业务数据', value: aosenActionGroups.value?.business_data?.count || 0, issue: 'sales_missing' },
+])
+const aosenAttentionItems = computed(() => aosenAcceptanceItems.value
+  .filter((item: Record<string, any>) => item.status !== 'pass')
+  .slice(0, 8))
 const proxyRuleSites = computed(() => {
   const sites = new Set<string>()
   for (const item of preconditionRows.value) {
@@ -247,7 +312,6 @@ const siteDetailIssues = new Set([
   'sku_deviation_high',
   'pdp_price_required',
   'promotions_missing',
-  'sales_history_insufficient',
   'never_crawled',
 ])
 const detailKind = computed(() => detailMeta.value?.kind || (
@@ -431,6 +495,8 @@ function issueLabel(issue: string) {
     coverage_low: '覆盖低',
     sku_deviation_high: 'SKU偏差高',
     title_weak: '标题弱',
+    category_missing: '类目缺失',
+    image_missing: '图片缺失',
     price_missing: '价格缺失',
     pdp_price_required: '需PDP价格源',
     currency_missing: '币种缺失',
@@ -462,7 +528,7 @@ function preconditionAction(issue: string) {
     proxy_unavailable: '修复代理池',
     proxy_auth_failed: '修复代理鉴权',
     pdp_price_required: '配置PDP价格源',
-    sales_history_insufficient: '等待/补采历史快照',
+    sales_history_insufficient: '导入评论历史',
   } as Record<string, string>)[issue] || '查看明细'
 }
 
@@ -474,7 +540,7 @@ function preconditionHint(issue: string) {
     proxy_unavailable: '代理池无可用出口，修复健康检查后再重跑。',
     proxy_auth_failed: '代理账号/密码或白名单失败，修复后再重跑。',
     pdp_price_required: '列表页只有商品枚举，价格在 PDP/API/外部价格源。',
-    sales_history_insufficient: '评论倒推销量至少需要两次快照。',
+    sales_history_insufficient: '评论倒推销量至少需要两次快照；也可以导入明确的外部 30 日销量/营收。',
   } as Record<string, string>)[issue] || '先处理前置条件，再重跑站点。'
 }
 
@@ -605,6 +671,10 @@ async function applyPrecondition(item: PreconditionRow) {
   applyQualityFilter(issue)
   if (issue === 'traffic_missing' || issue === 'conversion_missing') {
     metricsImportOpen.value = true
+  } else if (issue === 'coverage_low' || issue === 'sku_deviation_high') {
+    skuTargetImportOpen.value = true
+  } else if (issue === 'sales_history_insufficient') {
+    reviewHistoryImportOpen.value = true
   } else if (['anti_bot_blocked', 'proxy_unavailable', 'proxy_auth_failed'].includes(issue)) {
     await applyRecommendedProxyRules(item.sites || [], issue)
   } else if (issue === 'pdp_price_required' && item.sites?.[0]) {
@@ -682,11 +752,96 @@ async function load() {
     const res = await dataQuality(params)
     rows.value = res?.items || []
     summary.value = res?.summary || {}
+    await loadAosenAcceptance()
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
     loading.value = false
   }
+}
+
+async function loadAosenAcceptance() {
+  aosenAcceptanceBusy.value = true
+  aosenAcceptanceError.value = ''
+  try {
+    const params: Record<string, any> = { include_hidden: includeHidden.value }
+    if (tenantId.value) params.tenant = tenantId.value
+    const [acceptance, actionPlan] = await Promise.all([
+      aosenFieldQualityAcceptance(params),
+      aosenAcceptanceActionPlan(params),
+    ])
+    aosenAcceptance.value = acceptance
+    aosenActionPlan.value = actionPlan
+  } catch (err) {
+    aosenAcceptanceError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    aosenAcceptanceBusy.value = false
+  }
+}
+
+function loadAosenPromotionTemplatePreview() {
+  const csv = String(aosenPromotionTemplate.value?.csv || '')
+  if (!csv.trim()) {
+    promoImportMessage.value = '暂无 Aosen 促销缺口模板'
+    return
+  }
+  promoImportText.value = csv
+  promoImportOpen.value = true
+  promoValidation.value = null
+  const more = aosenPromotionTemplate.value?.has_more ? ' · 仍有更多缺口，可生成完整模板' : ''
+  promoImportMessage.value = `已载入 Aosen 促销模板预览 ${fmtNumber(aosenPromotionTemplate.value?.count || 0)} 行${more}`
+}
+
+function loadAosenFieldFixTemplatePreview() {
+  const csv = String(aosenFieldFixTemplate.value?.csv || '')
+  if (!csv.trim()) {
+    fieldFixImportMessage.value = '暂无 Aosen 字段修正模板'
+    return
+  }
+  fieldFixImportText.value = csv
+  fieldFixImportOpen.value = true
+  fieldFixValidation.value = null
+  const more = aosenFieldFixTemplate.value?.has_more ? ' · 仍有更多缺口，可生成完整模板' : ''
+  fieldFixImportMessage.value = `已载入 Aosen 字段修正模板预览 ${fmtNumber(aosenFieldFixTemplate.value?.count || 0)} 行${more}`
+}
+
+function loadAosenSkuTargetTemplatePreview() {
+  const csv = String(aosenSkuTargetTemplate.value?.csv || '')
+  if (!csv.trim()) {
+    skuTargetImportMessage.value = '暂无 Aosen SKU 目标模板'
+    return
+  }
+  skuTargetImportText.value = csv
+  skuTargetImportOpen.value = true
+  skuTargetValidation.value = null
+  const more = aosenSkuTargetTemplate.value?.has_more ? ' · 仍有更多缺口，可生成完整模板' : ''
+  skuTargetImportMessage.value = `已载入 Aosen SKU 目标模板预览 ${fmtNumber(aosenSkuTargetTemplate.value?.count || 0)} 行${more}`
+}
+
+function loadAosenSalesTemplatePreview() {
+  const csv = String(aosenSalesTemplate.value?.csv || '')
+  if (!csv.trim()) {
+    salesImportMessage.value = '暂无 Aosen 销量营收缺口模板'
+    return
+  }
+  salesImportText.value = csv
+  salesImportOpen.value = true
+  salesValidation.value = null
+  const more = aosenSalesTemplate.value?.has_more ? ' · 仍有更多缺口，可生成完整模板' : ''
+  salesImportMessage.value = `已载入 Aosen 销量营收模板预览 ${fmtNumber(aosenSalesTemplate.value?.count || 0)} 行${more}`
+}
+
+function loadAosenReviewHistoryTemplatePreview() {
+  const csv = String(aosenReviewHistoryTemplate.value?.csv || '')
+  if (!csv.trim()) {
+    reviewHistoryImportMessage.value = '暂无 Aosen 评论历史模板'
+    return
+  }
+  reviewHistoryImportText.value = csv
+  reviewHistoryImportOpen.value = true
+  reviewHistoryValidation.value = null
+  const more = aosenReviewHistoryTemplate.value?.has_more ? ' · 仍有更多缺口，可生成完整模板' : ''
+  reviewHistoryImportMessage.value = `已载入 Aosen 评论历史模板预览 ${fmtNumber(aosenReviewHistoryTemplate.value?.count || 0)} 行${more}`
 }
 
 async function rerunSites(sites: string[]) {
@@ -749,6 +904,195 @@ async function rebuildPromotions(sites: string[]) {
     promoMessage.value = { ...promoMessage.value, [key]: err instanceof Error ? err.message : String(err) }
   } finally {
     promoBusy.value = { ...promoBusy.value, [key]: false }
+  }
+}
+
+async function importProductFieldFixes() {
+  const csv = fieldFixImportText.value.trim()
+  if (!csv) {
+    fieldFixImportMessage.value = '请粘贴 CSV 数据'
+    return
+  }
+  fieldFixImportBusy.value = true
+  fieldFixImportMessage.value = ''
+  try {
+    const res = await productFieldFixesImport({ csv })
+    fieldFixImportMessage.value = `已导入 ${fmtNumber(res?.rows || 0)} 行，更新 ${fmtNumber(res?.updated || 0)} 个商品`
+    fieldFixValidation.value = null
+    await load()
+  } catch (err) {
+    fieldFixImportMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    fieldFixImportBusy.value = false
+  }
+}
+
+async function generateFieldFixTemplate() {
+  fieldFixTemplateBusy.value = true
+  fieldFixImportMessage.value = ''
+  fieldFixValidation.value = null
+  try {
+    const res = await productFieldFixesTemplate({
+      tenant: tenantId.value,
+      include_hidden: includeHidden.value,
+    })
+    fieldFixImportText.value = String(res?.csv || '')
+    const deferred = Array.isArray(res?.deferred_sites) && res.deferred_sites.length
+      ? ` · 已排除 ${res.deferred_sites.join(' / ')}`
+      : ''
+    fieldFixImportMessage.value = `已生成 ${fmtNumber(res?.count || 0)} 行字段修正模板${deferred}`
+  } catch (err) {
+    fieldFixImportMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    fieldFixTemplateBusy.value = false
+  }
+}
+
+async function validateProductFieldFixes() {
+  const csv = fieldFixImportText.value.trim()
+  if (!csv) {
+    fieldFixImportMessage.value = '请粘贴 CSV 数据'
+    return
+  }
+  fieldFixValidateBusy.value = true
+  fieldFixImportMessage.value = ''
+  fieldFixValidation.value = null
+  try {
+    const res = await productFieldFixesValidate({ csv })
+    fieldFixValidation.value = res || {}
+    fieldFixImportMessage.value = res?.valid
+      ? `校验通过 ${fmtNumber(res?.valid_rows || 0)} 行`
+      : `校验未通过：${fmtNumber(res?.errors?.length || 0)} 个错误`
+  } catch (err) {
+    fieldFixImportMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    fieldFixValidateBusy.value = false
+  }
+}
+
+async function importSkuTargets() {
+  const csv = skuTargetImportText.value.trim()
+  if (!csv) {
+    skuTargetImportMessage.value = '请粘贴 CSV 数据'
+    return
+  }
+  skuTargetImportBusy.value = true
+  skuTargetImportMessage.value = ''
+  try {
+    const res = await skuTargetsImport({ csv })
+    skuTargetImportMessage.value = `已导入 ${fmtNumber(res?.rows || 0)} 条 SKU 目标，站点 ${fmtNumber(res?.sites?.length || 0)} 个`
+    skuTargetValidation.value = null
+    await load()
+  } catch (err) {
+    skuTargetImportMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    skuTargetImportBusy.value = false
+  }
+}
+
+async function generateSkuTargetTemplate() {
+  skuTargetTemplateBusy.value = true
+  skuTargetImportMessage.value = ''
+  skuTargetValidation.value = null
+  try {
+    const res = await skuTargetsTemplate({
+      tenant: tenantId.value,
+      include_hidden: includeHidden.value,
+    })
+    skuTargetImportText.value = String(res?.csv || '')
+    const deferred = Array.isArray(res?.deferred_sites) && res.deferred_sites.length
+      ? ` · 已排除 ${res.deferred_sites.join(' / ')}`
+      : ''
+    skuTargetImportMessage.value = `已生成 ${fmtNumber(res?.count || 0)} 行 SKU 目标模板${deferred}`
+  } catch (err) {
+    skuTargetImportMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    skuTargetTemplateBusy.value = false
+  }
+}
+
+async function validateSkuTargets() {
+  const csv = skuTargetImportText.value.trim()
+  if (!csv) {
+    skuTargetImportMessage.value = '请粘贴 CSV 数据'
+    return
+  }
+  skuTargetValidateBusy.value = true
+  skuTargetImportMessage.value = ''
+  skuTargetValidation.value = null
+  try {
+    const res = await skuTargetsValidate({ csv })
+    skuTargetValidation.value = res || {}
+    skuTargetImportMessage.value = res?.valid
+      ? `校验通过 ${fmtNumber(res?.valid_rows || 0)} 行`
+      : `校验未通过：${fmtNumber(res?.errors?.length || 0)} 个错误`
+  } catch (err) {
+    skuTargetImportMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    skuTargetValidateBusy.value = false
+  }
+}
+
+async function importPromotionSignals() {
+  const csv = promoImportText.value.trim()
+  if (!csv) {
+    promoImportMessage.value = '请粘贴 CSV 数据'
+    return
+  }
+  promoImportBusy.value = true
+  promoImportMessage.value = ''
+  try {
+    const res = await promotionSignalsImport({ csv })
+    promoImportMessage.value = `已导入 ${fmtNumber(res?.rows || 0)} 行，新增 ${fmtNumber(res?.created || 0)}，更新 ${fmtNumber(res?.updated || 0)}`
+    promoValidation.value = null
+    await load()
+  } catch (err) {
+    promoImportMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    promoImportBusy.value = false
+  }
+}
+
+async function generatePromotionTemplate() {
+  promoTemplateBusy.value = true
+  promoImportMessage.value = ''
+  promoValidation.value = null
+  try {
+    const res = await promotionSignalsTemplate({
+      tenant: tenantId.value,
+      include_hidden: includeHidden.value,
+    })
+    promoImportText.value = String(res?.csv || '')
+    const deferred = Array.isArray(res?.deferred_sites) && res.deferred_sites.length
+      ? ` · 已排除 ${res.deferred_sites.join(' / ')}`
+      : ''
+    promoImportMessage.value = `已生成 ${fmtNumber(res?.count || 0)} 行促销模板${deferred}`
+  } catch (err) {
+    promoImportMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    promoTemplateBusy.value = false
+  }
+}
+
+async function validatePromotionSignals() {
+  const csv = promoImportText.value.trim()
+  if (!csv) {
+    promoImportMessage.value = '请粘贴 CSV 数据'
+    return
+  }
+  promoValidateBusy.value = true
+  promoImportMessage.value = ''
+  promoValidation.value = null
+  try {
+    const res = await promotionSignalsValidate({ csv })
+    promoValidation.value = res || {}
+    promoImportMessage.value = res?.valid
+      ? `校验通过 ${fmtNumber(res?.valid_rows || 0)} 行`
+      : `校验未通过：${fmtNumber(res?.errors?.length || 0)} 个错误`
+  } catch (err) {
+    promoImportMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    promoValidateBusy.value = false
   }
 }
 
@@ -838,6 +1182,157 @@ async function validateThirdPartyMetrics() {
   }
 }
 
+async function importSalesSignals() {
+  const csv = salesImportText.value.trim()
+  if (!csv) {
+    salesImportMessage.value = '请粘贴 CSV 数据'
+    return
+  }
+  salesImportBusy.value = true
+  salesImportMessage.value = ''
+  try {
+    const res = await salesSignalsImport({ csv })
+    salesImportMessage.value = `已导入 ${fmtNumber(res?.rows || 0)} 行，站点 ${fmtNumber(res?.sites?.length || 0)} 个`
+    salesValidation.value = null
+    await load()
+  } catch (err) {
+    salesImportMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    salesImportBusy.value = false
+  }
+}
+
+async function generateSalesTemplate() {
+  salesTemplateBusy.value = true
+  salesImportMessage.value = ''
+  salesValidation.value = null
+  try {
+    const res = await salesSignalsTemplate({
+      tenant: tenantId.value,
+      include_hidden: includeHidden.value,
+    })
+    salesImportText.value = String(res?.csv || '')
+    const deferred = Array.isArray(res?.deferred_sites) && res.deferred_sites.length
+      ? ` · 已排除 ${res.deferred_sites.join(' / ')}`
+      : ''
+    salesImportMessage.value = `已生成 ${fmtNumber(res?.count || 0)} 行销量模板${deferred}`
+  } catch (err) {
+    salesImportMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    salesTemplateBusy.value = false
+  }
+}
+
+async function validateSalesSignals() {
+  const csv = salesImportText.value.trim()
+  if (!csv) {
+    salesImportMessage.value = '请粘贴 CSV 数据'
+    return
+  }
+  salesValidateBusy.value = true
+  salesImportMessage.value = ''
+  salesValidation.value = null
+  try {
+    const res = await salesSignalsValidate({ csv })
+    salesValidation.value = res || {}
+    salesImportMessage.value = res?.valid
+      ? `校验通过 ${fmtNumber(res?.valid_rows || 0)} 行`
+      : `校验未通过：${fmtNumber(res?.errors?.length || 0)} 个错误`
+  } catch (err) {
+    salesImportMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    salesValidateBusy.value = false
+  }
+}
+
+async function importReviewHistory() {
+  const csv = reviewHistoryImportText.value.trim()
+  if (!csv) {
+    reviewHistoryImportMessage.value = '请粘贴 CSV 数据'
+    return
+  }
+  reviewHistoryImportBusy.value = true
+  reviewHistoryImportMessage.value = ''
+  try {
+    const res = await reviewHistoryImport({ csv })
+    const totals = Object.values(res?.by_site || {}).reduce((acc: Record<string, number>, item: any) => {
+      acc.estimated_skus += Number(item?.estimated_skus || 0)
+      acc.estimated_sales += Number(item?.estimated_sales || 0)
+      return acc
+    }, { estimated_skus: 0, estimated_sales: 0 })
+    reviewHistoryImportMessage.value = `已导入 ${fmtNumber(res?.rows || 0)} 行，重算SKU ${fmtNumber(totals.estimated_skus)}，销量 ${fmtNumber(totals.estimated_sales)}`
+    reviewHistoryValidation.value = null
+    await load()
+  } catch (err) {
+    reviewHistoryImportMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    reviewHistoryImportBusy.value = false
+  }
+}
+
+async function generateReviewHistoryTemplate() {
+  reviewHistoryTemplateBusy.value = true
+  reviewHistoryImportMessage.value = ''
+  reviewHistoryValidation.value = null
+  try {
+    const res = await reviewHistoryTemplate({
+      tenant: tenantId.value,
+      include_hidden: includeHidden.value,
+    })
+    reviewHistoryImportText.value = String(res?.csv || '')
+    const deferred = Array.isArray(res?.deferred_sites) && res.deferred_sites.length
+      ? ` · 已排除 ${res.deferred_sites.join(' / ')}`
+      : ''
+    reviewHistoryImportMessage.value = `已生成 ${fmtNumber(res?.count || 0)} 行评论历史模板${deferred}`
+  } catch (err) {
+    reviewHistoryImportMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    reviewHistoryTemplateBusy.value = false
+  }
+}
+
+async function validateReviewHistory() {
+  const csv = reviewHistoryImportText.value.trim()
+  if (!csv) {
+    reviewHistoryImportMessage.value = '请粘贴 CSV 数据'
+    return
+  }
+  reviewHistoryValidateBusy.value = true
+  reviewHistoryImportMessage.value = ''
+  reviewHistoryValidation.value = null
+  try {
+    const res = await reviewHistoryValidate({ csv })
+    reviewHistoryValidation.value = res || {}
+    reviewHistoryImportMessage.value = res?.valid
+      ? `校验通过 ${fmtNumber(res?.valid_rows || 0)} 行`
+      : `校验未通过：${fmtNumber(res?.errors?.length || 0)} 个错误`
+  } catch (err) {
+    reviewHistoryImportMessage.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    reviewHistoryValidateBusy.value = false
+  }
+}
+
+function openExternalDataImport(row: Record<string, any>) {
+  const issues = Array.isArray(row.issues) ? row.issues.map(String) : []
+  if (issues.includes('sales_history_insufficient')) {
+    reviewHistoryImportOpen.value = true
+  } else if (issues.some((issue) => ['sales_missing', 'revenue_missing'].includes(issue))) {
+    salesImportOpen.value = true
+  } else {
+    metricsImportOpen.value = true
+  }
+}
+
+function aosenStatusLabel(status: string) {
+  return ({
+    fail: '字段失败',
+    needs_refresh: '需重抓/重算',
+    needs_business_data: '需业务数据',
+    pass: '通过',
+  } as Record<string, string>)[status] || status || '-'
+}
+
 async function loadDetail(site: string, issue = detailIssue.value, page = detailPage.value) {
   detailSite.value = site
   detailIssue.value = issue
@@ -915,17 +1410,131 @@ onMounted(bootstrap)
         <button class="btn small promote" :disabled="loading || promoBusy.__batch__ || !promotionRebuildSites.length" @click="rebuildPromotions(promotionRebuildSites)">
           {{ promoBusy.__batch__ ? '重算中...' : `重算缺促销(${promotionRebuildSites.length})` }}
         </button>
+        <button class="btn small" :class="{ active: promoImportOpen }" @click="promoImportOpen = !promoImportOpen">
+          导入促销
+        </button>
+        <button class="btn small" :class="{ active: fieldFixImportOpen }" @click="fieldFixImportOpen = !fieldFixImportOpen">
+          导入字段修正
+        </button>
+        <button class="btn small" :class="{ active: skuTargetImportOpen }" @click="skuTargetImportOpen = !skuTargetImportOpen">
+          导入SKU目标
+        </button>
         <button class="btn small" :disabled="loading || analyticsBusy.__batch__ || !analyticsRecomputeSites.length" @click="recomputeAnalytics(analyticsRecomputeSites)">
           {{ analyticsBusy.__batch__ ? '重算中...' : `重算销量趋势(${analyticsRecomputeSites.length})` }}
         </button>
         <button class="btn small" :class="{ active: metricsImportOpen }" @click="metricsImportOpen = !metricsImportOpen">
           导入流量转化
         </button>
+        <button class="btn small" :class="{ active: salesImportOpen }" @click="salesImportOpen = !salesImportOpen">
+          导入销量营收
+        </button>
+        <button class="btn small" :class="{ active: reviewHistoryImportOpen }" @click="reviewHistoryImportOpen = !reviewHistoryImportOpen">
+          导入评论历史
+        </button>
         <button class="btn small" :disabled="loading" @click="load">刷新</button>
       </div>
     </div>
 
     <div v-if="error" class="error">{{ error }}</div>
+    <div v-if="promoImportOpen" class="import-panel">
+      <div class="import-head">
+        <b>促销信号导入</b>
+        <span>CSV 字段：site,sku,promotion_type,promotion_name,discount_percent,promotion_price,threshold,start_time,end_time；默认模板不包含 vidaxl_us / vidaxl_ca。</span>
+      </div>
+      <textarea v-model="promoImportText" spellcheck="false" />
+      <div class="import-actions">
+        <button class="btn small" :disabled="promoTemplateBusy" @click="generatePromotionTemplate">
+          {{ promoTemplateBusy ? '生成中...' : '生成促销模板' }}
+        </button>
+        <button class="btn small" :disabled="promoValidateBusy" @click="validatePromotionSignals">
+          {{ promoValidateBusy ? '校验中...' : '预校验' }}
+        </button>
+        <button class="btn small primary" :disabled="promoImportBusy || promoValidateBusy" @click="importPromotionSignals">
+          {{ promoImportBusy ? '导入中...' : '导入并刷新' }}
+        </button>
+        <span v-if="promoImportMessage" class="import-msg">{{ promoImportMessage }}</span>
+      </div>
+      <div v-if="promoValidation" class="validation-panel">
+        <div class="validation-head">
+          <b>{{ promoValidation.valid ? '校验通过' : '校验未通过' }}</b>
+          <span>
+            有效 {{ fmtNumber(promoValidation.valid_rows) }} / {{ fmtNumber(promoValidation.rows) }}
+            · 跳过 {{ fmtNumber(promoValidation.skipped) }}
+          </span>
+        </div>
+        <div v-if="promoValidation.errors?.length" class="validation-errors">
+          <div v-for="item in promoValidation.errors.slice(0, 8)" :key="`${item.row}-${item.site || 'blank'}-${item.sku || 'sku'}`">
+            第 {{ item.row }} 行 · {{ item.site || '-' }} · {{ item.sku || '-' }} · {{ (item.errors || []).join(' / ') }}
+          </div>
+        </div>
+      </div>
+    </div>
+    <div v-if="fieldFixImportOpen" class="import-panel">
+      <div class="import-head">
+        <b>商品字段修正导入</b>
+        <span>CSV 字段：site,sku,title,currency,category_path,image_urls,sale_price,original_price,spu,note；默认模板不包含 vidaxl_us / vidaxl_ca。</span>
+      </div>
+      <textarea v-model="fieldFixImportText" spellcheck="false" />
+      <div class="import-actions">
+        <button class="btn small" :disabled="fieldFixTemplateBusy" @click="generateFieldFixTemplate">
+          {{ fieldFixTemplateBusy ? '生成中...' : '生成字段模板' }}
+        </button>
+        <button class="btn small" :disabled="fieldFixValidateBusy" @click="validateProductFieldFixes">
+          {{ fieldFixValidateBusy ? '校验中...' : '预校验' }}
+        </button>
+        <button class="btn small primary" :disabled="fieldFixImportBusy || fieldFixValidateBusy" @click="importProductFieldFixes">
+          {{ fieldFixImportBusy ? '导入中...' : '导入并刷新' }}
+        </button>
+        <span v-if="fieldFixImportMessage" class="import-msg">{{ fieldFixImportMessage }}</span>
+      </div>
+      <div v-if="fieldFixValidation" class="validation-panel">
+        <div class="validation-head">
+          <b>{{ fieldFixValidation.valid ? '校验通过' : '校验未通过' }}</b>
+          <span>
+            有效 {{ fmtNumber(fieldFixValidation.valid_rows) }} / {{ fmtNumber(fieldFixValidation.rows) }}
+            · 跳过 {{ fmtNumber(fieldFixValidation.skipped) }}
+          </span>
+        </div>
+        <div v-if="fieldFixValidation.errors?.length" class="validation-errors">
+          <div v-for="item in fieldFixValidation.errors.slice(0, 8)" :key="`${item.row}-${item.site || 'blank'}-${item.sku || 'sku'}`">
+            第 {{ item.row }} 行 · {{ item.site || '-' }} · {{ item.sku || '-' }} · {{ (item.errors || []).join(' / ') }}
+          </div>
+        </div>
+      </div>
+    </div>
+    <div v-if="skuTargetImportOpen" class="import-panel">
+      <div class="import-head">
+        <b>SKU 目标口径导入</b>
+        <span>CSV 字段：site,workspace_id,target_sku_count,note；更新 workspace 的目标 SKU 数，不修改商品 SKU；默认模板不包含 vidaxl_us / vidaxl_ca。</span>
+      </div>
+      <textarea v-model="skuTargetImportText" spellcheck="false" />
+      <div class="import-actions">
+        <button class="btn small" :disabled="skuTargetTemplateBusy" @click="generateSkuTargetTemplate">
+          {{ skuTargetTemplateBusy ? '生成中...' : '生成SKU目标模板' }}
+        </button>
+        <button class="btn small" :disabled="skuTargetValidateBusy" @click="validateSkuTargets">
+          {{ skuTargetValidateBusy ? '校验中...' : '预校验' }}
+        </button>
+        <button class="btn small primary" :disabled="skuTargetImportBusy || skuTargetValidateBusy" @click="importSkuTargets">
+          {{ skuTargetImportBusy ? '导入中...' : '导入并刷新' }}
+        </button>
+        <span v-if="skuTargetImportMessage" class="import-msg">{{ skuTargetImportMessage }}</span>
+      </div>
+      <div v-if="skuTargetValidation" class="validation-panel">
+        <div class="validation-head">
+          <b>{{ skuTargetValidation.valid ? '校验通过' : '校验未通过' }}</b>
+          <span>
+            有效 {{ fmtNumber(skuTargetValidation.valid_rows) }} / {{ fmtNumber(skuTargetValidation.rows) }}
+            · 跳过 {{ fmtNumber(skuTargetValidation.skipped) }}
+          </span>
+        </div>
+        <div v-if="skuTargetValidation.errors?.length" class="validation-errors">
+          <div v-for="item in skuTargetValidation.errors.slice(0, 8)" :key="`${item.row}-${item.site || 'blank'}-${item.workspace_id || 'ws'}`">
+            第 {{ item.row }} 行 · {{ item.site || '-' }} · workspace {{ item.workspace_id || '-' }} · {{ (item.errors || []).join(' / ') }}
+          </div>
+        </div>
+      </div>
+    </div>
     <div v-if="metricsImportOpen" class="import-panel">
       <div class="import-head">
         <b>第三方指标导入</b>
@@ -958,6 +1567,173 @@ onMounted(bootstrap)
             第 {{ item.row }} 行 · {{ item.site || '-' }} · {{ (item.errors || []).join(' / ') }}
           </div>
         </div>
+      </div>
+    </div>
+    <div v-if="salesImportOpen" class="import-panel">
+      <div class="import-head">
+        <b>30 日销量/营收导入</b>
+        <span>CSV 字段：site,sku,date,thirty_day_sales,thirty_day_revenue；默认模板不包含 vidaxl_us / vidaxl_ca。</span>
+      </div>
+      <textarea v-model="salesImportText" spellcheck="false" />
+      <div class="import-actions">
+        <button class="btn small" :disabled="salesTemplateBusy" @click="generateSalesTemplate">
+          {{ salesTemplateBusy ? '生成中...' : '生成销量模板' }}
+        </button>
+        <button class="btn small" :disabled="salesValidateBusy" @click="validateSalesSignals">
+          {{ salesValidateBusy ? '校验中...' : '预校验' }}
+        </button>
+        <button class="btn small primary" :disabled="salesImportBusy || salesValidateBusy" @click="importSalesSignals">
+          {{ salesImportBusy ? '导入中...' : '导入并刷新' }}
+        </button>
+        <span v-if="salesImportMessage" class="import-msg">{{ salesImportMessage }}</span>
+      </div>
+      <div v-if="salesValidation" class="validation-panel">
+        <div class="validation-head">
+          <b>{{ salesValidation.valid ? '校验通过' : '校验未通过' }}</b>
+          <span>
+            有效 {{ fmtNumber(salesValidation.valid_rows) }} / {{ fmtNumber(salesValidation.rows) }}
+            · 跳过 {{ fmtNumber(salesValidation.skipped) }}
+          </span>
+        </div>
+        <div v-if="salesValidation.errors?.length" class="validation-errors">
+          <div v-for="item in salesValidation.errors.slice(0, 8)" :key="`${item.row}-${item.site || 'blank'}-${item.sku || 'sku'}`">
+            第 {{ item.row }} 行 · {{ item.site || '-' }} · {{ item.sku || '-' }} · {{ (item.errors || []).join(' / ') }}
+          </div>
+        </div>
+      </div>
+    </div>
+    <div v-if="reviewHistoryImportOpen" class="import-panel">
+      <div class="import-head">
+        <b>评论历史快照导入</b>
+        <span>CSV 字段：site,sku,date,review_count,sale_price,original_price；导入后按同 SKU 评论增量重算 30 日销量/营收，默认模板不包含 vidaxl_us / vidaxl_ca。</span>
+      </div>
+      <textarea v-model="reviewHistoryImportText" spellcheck="false" />
+      <div class="import-actions">
+        <button class="btn small" :disabled="reviewHistoryTemplateBusy" @click="generateReviewHistoryTemplate">
+          {{ reviewHistoryTemplateBusy ? '生成中...' : '生成评论历史模板' }}
+        </button>
+        <button class="btn small" :disabled="reviewHistoryValidateBusy" @click="validateReviewHistory">
+          {{ reviewHistoryValidateBusy ? '校验中...' : '预校验' }}
+        </button>
+        <button class="btn small primary" :disabled="reviewHistoryImportBusy || reviewHistoryValidateBusy" @click="importReviewHistory">
+          {{ reviewHistoryImportBusy ? '导入中...' : '导入并重算' }}
+        </button>
+        <span v-if="reviewHistoryImportMessage" class="import-msg">{{ reviewHistoryImportMessage }}</span>
+      </div>
+      <div v-if="reviewHistoryValidation" class="validation-panel">
+        <div class="validation-head">
+          <b>{{ reviewHistoryValidation.valid ? '校验通过' : '校验未通过' }}</b>
+          <span>
+            有效 {{ fmtNumber(reviewHistoryValidation.valid_rows) }} / {{ fmtNumber(reviewHistoryValidation.rows) }}
+            · 跳过 {{ fmtNumber(reviewHistoryValidation.skipped) }}
+          </span>
+        </div>
+        <div v-if="reviewHistoryValidation.errors?.length" class="validation-errors">
+          <div v-for="item in reviewHistoryValidation.errors.slice(0, 8)" :key="`${item.row}-${item.site || 'blank'}-${item.sku || 'sku'}`">
+            第 {{ item.row }} 行 · {{ item.site || '-' }} · {{ item.sku || '-' }} · {{ (item.errors || []).join(' / ') }}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="acceptance-panel">
+      <div class="acceptance-head">
+        <div>
+          <b>Aosen 字段验收</b>
+          <span>默认排除 vidaxl_us / vidaxl_ca，最终以线上运行环境的数据为准。</span>
+        </div>
+        <button class="btn small" :disabled="aosenAcceptanceBusy" @click="loadAosenAcceptance">
+          {{ aosenAcceptanceBusy ? '刷新中...' : '刷新验收' }}
+        </button>
+      </div>
+      <div v-if="aosenAcceptanceError" class="error">{{ aosenAcceptanceError }}</div>
+      <div v-else class="acceptance-grid">
+        <div class="acceptance-stat">
+          <span>站点</span>
+          <b>{{ fmtNumber(aosenAcceptanceSummary.sites) }}</b>
+        </div>
+        <div class="acceptance-stat pass">
+          <span>通过</span>
+          <b>{{ fmtNumber(aosenAcceptanceSummary.pass) }}</b>
+        </div>
+        <div class="acceptance-stat fail">
+          <span>字段失败</span>
+          <b>{{ fmtNumber(aosenAcceptanceSummary.fail) }}</b>
+        </div>
+        <div class="acceptance-stat warn">
+          <span>需业务数据</span>
+          <b>{{ fmtNumber(aosenAcceptanceSummary.needs_business_data) }}</b>
+        </div>
+        <div class="acceptance-stat warn">
+          <span>需重抓/重算</span>
+          <b>{{ fmtNumber(aosenAcceptanceSummary.needs_refresh) }}</b>
+        </div>
+        <div class="acceptance-stat">
+          <span>促销缺口</span>
+          <b>{{ fmtNumber(aosenAcceptanceSummary.promotions_missing) }}</b>
+        </div>
+        <div class="acceptance-stat">
+          <span>类目/图片</span>
+          <b>{{ fmtNumber((aosenAcceptanceSummary.category_missing || 0) + (aosenAcceptanceSummary.image_missing || 0)) }}</b>
+        </div>
+        <div class="acceptance-stat">
+          <span>销量/收入</span>
+          <b>{{ fmtNumber(aosenAcceptanceSummary.sales_or_revenue_missing) }}</b>
+        </div>
+      </div>
+      <div v-if="aosenActionPlan.status" class="acceptance-actions">
+        <button
+          v-for="card in aosenActionCards"
+          :key="card.key"
+          class="acceptance-action"
+          @click="applyQualityFilter(card.issue)"
+        >
+          <span>{{ card.label }}</span>
+          <b>{{ fmtNumber(card.value) }}</b>
+        </button>
+      </div>
+      <div v-if="aosenActionPlan.status" class="acceptance-template-actions">
+        <button
+          class="btn small promote"
+          :disabled="promoBusy.__batch__ || !aosenPromotionRefreshSites.length"
+          @click="rebuildPromotions(aosenPromotionRefreshSites)"
+        >
+          {{ promoBusy.__batch__ ? '重算中...' : `重算Aosen促销(${aosenPromotionRefreshSites.length})` }}
+        </button>
+        <button
+          class="btn small"
+          :disabled="analyticsBusy.__batch__ || !aosenBusinessDataSites.length"
+          @click="recomputeAnalytics(aosenBusinessDataSites)"
+        >
+          {{ analyticsBusy.__batch__ ? '重算中...' : `重算Aosen销量(${aosenBusinessDataSites.length})` }}
+        </button>
+        <button class="btn small" @click="loadAosenPromotionTemplatePreview">
+          载入促销模板预览
+        </button>
+        <button class="btn small" @click="loadAosenFieldFixTemplatePreview">
+          载入字段模板预览
+        </button>
+        <button class="btn small" @click="loadAosenSkuTargetTemplatePreview">
+          载入SKU目标模板
+        </button>
+        <button class="btn small" @click="loadAosenSalesTemplatePreview">
+          载入销量模板预览
+        </button>
+        <button class="btn small" @click="loadAosenReviewHistoryTemplatePreview">
+          载入评论历史模板
+        </button>
+      </div>
+      <div v-if="aosenAttentionItems.length" class="acceptance-items">
+        <button
+          v-for="item in aosenAttentionItems"
+          :key="item.site"
+          class="acceptance-item"
+          @click="applyQualityFilter((item.issues || [])[0] || '')"
+        >
+          <b>{{ item.site }}</b>
+          <span>{{ aosenStatusLabel(item.status) }}</span>
+          <small>{{ (item.issues || []).map(issueLabel).join(' / ') || '-' }}</small>
+        </button>
       </div>
     </div>
 
@@ -1040,8 +1816,11 @@ onMounted(bootstrap)
         </template>
 
         <template #signals-cell="{ row }">
-          标题 {{ row.original.title_quality_pct }}% · 价格 {{ row.original.price_signal_pct }}% · 销量 {{ row.original.sales_signal_pct }}% · 收入 {{ row.original.revenue_signal_pct }}%
+          标题 {{ row.original.title_quality_pct }}% · 类目 {{ row.original.category_signal_pct }}% · 图片 {{ row.original.image_signal_pct }}% · 价格 {{ row.original.price_signal_pct }}% · 销量 {{ row.original.sales_signal_pct }}% · 收入 {{ row.original.revenue_signal_pct }}%
           <small v-if="row.original.weak_title_count">弱标题 {{ fmtNumber(row.original.weak_title_count) }}</small>
+          <small v-if="row.original.category_missing_count || row.original.image_missing_count">
+            类目缺 {{ fmtNumber(row.original.category_missing_count) }} · 图片缺 {{ fmtNumber(row.original.image_missing_count) }}
+          </small>
           <small v-if="row.original.currency_missing_count || row.original.currency_mismatch_count">
             币种 {{ row.original.expected_currency || '-' }} · 缺 {{ fmtNumber(row.original.currency_missing_count) }} · 错 {{ fmtNumber(row.original.currency_mismatch_count) }}
           </small>
@@ -1137,7 +1916,7 @@ onMounted(bootstrap)
             <button
               v-if="row.original.external_data_required && !row.original.issues?.includes('pdp_price_required')"
               class="btn small"
-              @click="metricsImportOpen = true"
+              @click="openExternalDataImport(row.original)"
             >
               导入指标
             </button>
@@ -1481,6 +2260,29 @@ onMounted(bootstrap)
 .validation-head span,
 .validation-errors { color:var(--ui-muted, #9ca3af); font-size:12px; line-height:1.45; }
 .validation-errors { color:var(--admin-danger-text, #b91c1c); }
+.acceptance-panel { display:flex; flex-direction:column; gap:10px; padding:12px; border:1px solid var(--ui-border, rgba(148,163,184,.32)); border-radius:10px; background:var(--admin-panel, #fff); }
+.acceptance-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; color:var(--ui-muted, #9ca3af); font-size:12px; }
+.acceptance-head b { display:block; color:var(--ui-text, #0f172a); font-size:13px; }
+.acceptance-head span { line-height:1.45; }
+.acceptance-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(118px,1fr)); gap:8px; }
+.acceptance-stat { min-height:62px; display:flex; flex-direction:column; justify-content:center; gap:5px; padding:9px 10px; border:1px solid rgba(148,163,184,.24); border-radius:8px; background:var(--admin-panel-muted, #f1f5f9); }
+.acceptance-stat span { color:var(--ui-muted, #9ca3af); font-size:12px; }
+.acceptance-stat b { color:var(--ui-text, #0f172a); font-size:20px; line-height:1; }
+.acceptance-stat.pass b { color:var(--admin-success-text, #047857); }
+.acceptance-stat.fail b { color:var(--admin-danger-text, #b91c1c); }
+.acceptance-stat.warn b { color:var(--admin-warn-text, #b45309); }
+.acceptance-actions { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; }
+.acceptance-action { min-height:50px; display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 10px; border:1px solid rgba(148,163,184,.24); border-radius:8px; background:transparent; color:inherit; cursor:pointer; }
+.acceptance-action:hover { border-color:rgba(14,165,233,.52); background:rgba(14,165,233,.08); }
+.acceptance-action span { color:var(--ui-muted, #9ca3af); font-size:12px; }
+.acceptance-action b { color:var(--ui-text, #0f172a); font-size:18px; }
+.acceptance-template-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.acceptance-items { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:8px; }
+.acceptance-item { min-height:74px; display:flex; flex-direction:column; align-items:flex-start; gap:4px; padding:9px 10px; border:1px solid rgba(148,163,184,.24); border-radius:8px; background:transparent; color:inherit; text-align:left; cursor:pointer; }
+.acceptance-item:hover { border-color:rgba(139,92,246,.52); background:rgba(139,92,246,.10); }
+.acceptance-item b { font-size:12px; }
+.acceptance-item span { color:var(--admin-warn-text, #b45309); font-size:11px; font-weight:700; }
+.acceptance-item small { color:var(--ui-muted, #9ca3af); font-size:12px; line-height:1.35; }
 .stat-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(128px,1fr)); gap:12px; }
 .stat-filter { display:block; padding:0; border:0; background:transparent; color:inherit; text-align:left; cursor:pointer; }
 .stat-filter :deep(.stat-card) { height:100%; transition:border-color .16s ease, background .16s ease; }

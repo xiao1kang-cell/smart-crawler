@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import bindparam, func, or_, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .currency import currency_for_site
@@ -57,9 +58,15 @@ def load_site_metrics(
     site_codes = sorted({site for site in sites if site})
     if not site_codes:
         return {}
-    rows = (db.query(SiteMetric)
-            .filter(SiteMetric.site.in_(site_codes))
-            .all())
+    try:
+        rows = (db.query(SiteMetric)
+                .filter(SiteMetric.site.in_(site_codes))
+                .all())
+    except SQLAlchemyError:
+        db.rollback()
+        return collect_site_metrics(db, site_codes) if collect_missing else {
+            site: empty_site_metric(site) for site in site_codes
+        }
     out = {row.site: site_metric_to_dict(row) for row in rows}
     missing = [site for site in site_codes if site not in out]
     if missing and collect_missing:
@@ -196,6 +203,14 @@ def _product_metrics(db: Session, sites: list[str]) -> dict[str, dict]:
 
 
 def _fetched_counts(db: Session, sites: list[str]) -> dict[str, int]:
+    bind = db.get_bind()
+    if getattr(bind.dialect, "name", "") == "sqlite":
+        exists = db.execute(text(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='fetched_urls'"
+        )).first()
+        if not exists:
+            return {}
     stmt = (text("SELECT site, count(*) FROM fetched_urls "
                  "WHERE site IN :sites GROUP BY site")
             .bindparams(bindparam("sites", expanding=True)))
@@ -203,7 +218,6 @@ def _fetched_counts(db: Session, sites: list[str]) -> dict[str, int]:
         return {row[0]: int(row[1] or 0)
                 for row in db.execute(stmt, {"sites": sites}).all()}
     except Exception:
-        db.rollback()
         return {}
 
 

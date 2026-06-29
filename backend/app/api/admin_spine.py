@@ -6,27 +6,31 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import csv
 import ipaddress
 import io
+import json
 import os
+import re
 import socket
 import time
 from types import SimpleNamespace
 from urllib.parse import urlparse
 from urllib.request import urlopen
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from sqlalchemy import and_, func, or_
+from sqlalchemy import String, and_, cast, func, or_
 from sqlalchemy.orm import Session
 
 from .. import spine_queue
 from ..audit import record_audit
 from ..crawl_diagnostics import job_timeout_failure, record_failure
 from ..currency import currency_for_site
-from ..db import get_db
+from ..db import IS_SQLITE, get_db
 from ..price_sources import enrich_products_from_site_config
+from ..site_metrics import load_site_metrics, refresh_site_metrics
 from ..models import (
     AdminAuditLog,
     ApiKey,
@@ -59,7 +63,9 @@ from .routes import (
     require_user,
     _ANTI_BOT_FAILURE_CODES,
     _build_data_quality_payload,
+    _daily_crawl_job_display_query,
     _crawl_job_live_progress,
+    FAILED_PRODUCT_RETRY_TRIGGER,
     _require_super_admin,
 )
 
@@ -71,6 +77,44 @@ def _env_int(name: str, default: int) -> int:
         return int(os.environ.get(name, str(default)))
     except (TypeError, ValueError):
         return default
+
+
+def _parse_queue_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _parse_queue_datetime_end(value: str | None) -> datetime | None:
+    parsed = _parse_queue_datetime(value)
+    if parsed and value and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip()):
+        return parsed + timedelta(days=1) - timedelta(microseconds=1)
+    return parsed
+
+
+def _default_queue_day_window() -> tuple[datetime, datetime]:
+    local_start = datetime.now(ZoneInfo("Asia/Shanghai")).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    utc_start = local_start.astimezone(timezone.utc).replace(tzinfo=None)
+    return utc_start, utc_start + timedelta(days=1)
+
+
+def _missing_category(value: object) -> bool:
+    text = str(value or "").strip()
+    return not text or text.lower() in {"unknown", "uncategorized", "none", "null"}
+
+
+def _missing_image(value: object) -> bool:
+    if isinstance(value, list):
+        return not any(str(item or "").strip() for item in value)
+    text = str(value or "").strip()
+    return not text or text in {"[]", "null", "None"}
 
 
 _STUCK_SEC = 600
@@ -100,13 +144,40 @@ _QUALITY_SITE_ISSUES = {
     "sku_deviation_high",
     "pdp_price_required",
     "promotions_missing",
-    "sales_history_insufficient",
     "never_crawled",
 }
+AOSEN_DEFERRED_SITES = {"vidaxl_us", "vidaxl_ca"}
 
 
 def _table_count(db: Session, model) -> int:
     return db.query(func.count(model.id)).scalar() or 0
+
+
+def _query_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _query_int(value, default: int, *, minimum: int = 1, maximum: int = 5000) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def _pct(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0
+    return round(max(0, numerator) / denominator * 100, 2)
 
 
 def _count_by(db: Session, model, col, *, limit: int = 20) -> list[dict]:
@@ -143,6 +214,10 @@ def _product_quality_issues(product: Product) -> list[str]:
     if (not title or len(title) < 4 or title.lower() in weak_titles or
             (sku and title.lower() == sku.lower())):
         issues.append("title_weak")
+    if _missing_category(product.category_path):
+        issues.append("category_missing")
+    if _missing_image(product.image_urls):
+        issues.append("image_missing")
     if not ((product.sale_price or 0) > 0 or (product.original_price or 0) > 0):
         issues.append("price_missing")
     expected_currency = currency_for_site(product.site)
@@ -217,6 +292,1274 @@ def _metric_number(value, *, percent: bool = False) -> float | int | None:
     if percent:
         return round(number, 4)
     return int(round(number))
+
+
+def _sales_number(value) -> float | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace(",", "").replace("$", "").replace("€", "")
+    text = text.replace("£", "").replace("¥", "").strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        raise HTTPException(422, {"error": "invalid_sales_metric", "value": value})
+
+
+def _first_present(raw: dict, *keys: str):
+    for key in keys:
+        value = raw.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _sales_rows_from_payload(payload: dict) -> list[dict]:
+    rows = payload.get("rows")
+    if rows is None and payload.get("csv"):
+        reader = csv.DictReader(io.StringIO(str(payload.get("csv") or "")))
+        rows = list(reader)
+    keys = {
+        "site", "sku", "date", "thirty_day_sales", "sales",
+        "thirty_day_revenue", "revenue",
+    }
+    if rows is None and any(k in payload for k in keys):
+        rows = [payload]
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(422, {"error": "rows_or_csv_required"})
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def _field_fix_rows_from_payload(payload: dict) -> list[dict]:
+    rows = payload.get("rows")
+    if rows is None and payload.get("csv"):
+        reader = csv.DictReader(io.StringIO(str(payload.get("csv") or "")))
+        rows = list(reader)
+    keys = {
+        "site", "sku", "title", "currency", "category_path", "image_urls",
+        "sale_price", "original_price", "spu",
+    }
+    if rows is None and any(k in payload for k in keys):
+        rows = [payload]
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(422, {"error": "rows_or_csv_required"})
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def _sku_target_rows_from_payload(payload: dict) -> list[dict]:
+    rows = payload.get("rows")
+    if rows is None and payload.get("csv"):
+        reader = csv.DictReader(io.StringIO(str(payload.get("csv") or "")))
+        rows = list(reader)
+    keys = {
+        "site", "workspace_id", "tenant", "target_sku_count",
+        "new_target_sku_count",
+    }
+    if rows is None and any(k in payload for k in keys):
+        rows = [payload]
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(422, {"error": "rows_or_csv_required"})
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def _promotion_rows_from_payload(payload: dict) -> list[dict]:
+    rows = payload.get("rows")
+    if rows is None and payload.get("csv"):
+        reader = csv.DictReader(io.StringIO(str(payload.get("csv") or "")))
+        rows = list(reader)
+    keys = {
+        "site", "sku", "promotion_type", "promotion_name", "name",
+        "discount_percent", "coupon", "threshold", "start_time", "end_time",
+    }
+    if rows is None and any(k in payload for k in keys):
+        rows = [payload]
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(422, {"error": "rows_or_csv_required"})
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def _field_fix_text(raw: dict, *keys: str, max_len: int | None = None) -> str | None:
+    value = _first_present(raw, *keys)
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text[:max_len] if max_len else text
+
+
+def _field_fix_images(value) -> list[str] | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, list):
+        images = [str(item).strip() for item in value if str(item).strip()]
+        return images or None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                images = [str(item).strip() for item in parsed if str(item).strip()]
+                return images or None
+        except json.JSONDecodeError:
+            pass
+    images = [
+        item.strip()
+        for item in re.split(r"\s*[|;\n]\s*", text)
+        if item.strip()
+    ]
+    return images or None
+
+
+def _sku_target_int(value, *, minimum: int = 1) -> int | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        raise HTTPException(422, {"error": "invalid_sku_target", "value": value})
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return None
+    try:
+        number = int(float(text))
+    except ValueError:
+        raise HTTPException(422, {"error": "invalid_sku_target", "value": value})
+    if number < minimum:
+        raise HTTPException(422, {"error": "invalid_sku_target", "value": value})
+    return number
+
+
+def _validate_sku_target_rows(db: Session, rows: list[dict]) -> dict:
+    site_codes = sorted({
+        str(row.get("site") or "").strip()
+        for row in rows
+        if str(row.get("site") or "").strip()
+    })
+    existing_sites = {
+        site for (site,) in db.query(Site.site)
+        .filter(Site.site.in_(site_codes)).all()
+    } if site_codes else set()
+    workspace_rows: dict[str, list[WorkspaceSite]] = {}
+    if site_codes:
+        for row in (
+            db.query(WorkspaceSite)
+            .join(Workspace, Workspace.id == WorkspaceSite.workspace_id)
+            .filter(WorkspaceSite.site.in_(site_codes),
+                    WorkspaceSite.enabled.is_(True),
+                    Workspace.status == "active")
+            .all()
+        ):
+            workspace_rows.setdefault(row.site, []).append(row)
+    errors = []
+    valid_rows = []
+    skipped = 0
+    by_site: dict[str, dict] = {}
+    for index, raw in enumerate(rows, start=1):
+        site = str(raw.get("site") or "").strip()
+        row_errors = []
+        if not site:
+            row_errors.append("site required")
+        elif site not in existing_sites:
+            row_errors.append("site_not_found")
+        try:
+            target_sku_count = _sku_target_int(
+                _first_present(raw, "target_sku_count", "new_target_sku_count"))
+        except HTTPException as exc:
+            row_errors.append(str(exc.detail))
+            target_sku_count = None
+        if target_sku_count is None:
+            row_errors.append("target_sku_count required")
+        try:
+            workspace_id = _sku_target_int(
+                _first_present(raw, "workspace_id", "tenant", "tenant_id"),
+                minimum=1,
+            )
+        except HTTPException as exc:
+            row_errors.append(str(exc.detail))
+            workspace_id = None
+        candidates = list(workspace_rows.get(site, [])) if site else []
+        if workspace_id is not None:
+            candidates = [row for row in candidates if row.workspace_id == workspace_id]
+        if site and site in existing_sites and not candidates:
+            row_errors.append(
+                "workspace_site_not_found" if workspace_id else "active_workspace_site_not_found"
+            )
+        if row_errors:
+            skipped += 1
+            errors.append({
+                "row": index,
+                "site": site or None,
+                "workspace_id": workspace_id,
+                "errors": row_errors,
+            })
+            continue
+        assert target_sku_count is not None
+        workspace_site_ids = [int(row.id) for row in candidates if row.id is not None]
+        valid_rows.append({
+            "row": index,
+            "site": site,
+            "workspace_id": workspace_id,
+            "workspace_site_ids": workspace_site_ids,
+            "target_sku_count": target_sku_count,
+            "note": str(raw.get("note") or "").strip()[:500],
+        })
+        bucket = by_site.setdefault(site, {"rows": 0, "workspace_sites": 0})
+        bucket["rows"] += 1
+        bucket["workspace_sites"] += len(workspace_site_ids)
+    return {
+        "valid": not errors and bool(valid_rows),
+        "rows": len(rows),
+        "valid_rows": len(valid_rows),
+        "skipped": skipped,
+        "sites": sorted(by_site),
+        "by_site": by_site,
+        "errors": errors,
+        "valid_items": valid_rows,
+        "items": valid_rows[:100],
+    }
+
+
+def _sku_target_template_payload(
+    db: Session,
+    *,
+    tenant: int | None = None,
+    include_hidden: bool = False,
+    exclude_deferred: bool = True,
+    limit: int = 5000,
+    include_total_count: bool = True,
+) -> dict:
+    q = (db.query(WorkspaceSite.site, WorkspaceSite.workspace_id, Workspace.name,
+                  WorkspaceSite.target_sku_count)
+         .join(Workspace, Workspace.id == WorkspaceSite.workspace_id)
+         .filter(WorkspaceSite.enabled.is_(True), Workspace.status == "active"))
+    if tenant is not None:
+        q = q.filter(WorkspaceSite.workspace_id == tenant)
+    if not include_hidden:
+        q = q.filter(WorkspaceSite.hidden.is_(False))
+    if exclude_deferred:
+        q = q.filter(~WorkspaceSite.site.in_(tuple(AOSEN_DEFERRED_SITES)))
+    workspace_rows = q.order_by(WorkspaceSite.site, WorkspaceSite.workspace_id).all()
+    site_codes: list[str] = []
+    target_sku_by_site: dict[str, int] = {}
+    for site, _, _, target_sku_count in workspace_rows:
+        if site not in site_codes:
+            site_codes.append(site)
+        if target_sku_count:
+            target_sku_by_site[site] = max(
+                int(target_sku_by_site.get(site, 0)),
+                int(target_sku_count),
+            )
+    sites = db.query(Site).filter(Site.site.in_(site_codes)).all() if site_codes else []
+    quality = {
+        item["site"]: item
+        for item in _aosen_field_quality_items(db, sites, target_sku_by_site)
+    }
+    rows = []
+    for site, workspace_id, workspace_name, current_target in workspace_rows:
+        item = quality.get(site) or {}
+        issues = set(item.get("issues") or [])
+        if not ({"coverage_low", "sku_deviation_high"} & issues):
+            continue
+        rows.append({
+            "site": site,
+            "workspace_id": workspace_id,
+            "workspace_name": workspace_name or "",
+            "current_target_sku_count": current_target or "",
+            "observed_sku_count": item.get("sku_count") or 0,
+            "observed_spu_count": item.get("spu_count") or 0,
+            "target_sku_count": "",
+            "sku_deviation_pct": item.get("sku_deviation_pct"),
+            "coverage_pct": item.get("coverage_pct"),
+            "note": "fill accepted target SKU count; do not use observed count unless verified",
+        })
+    total_count = len(rows) if include_total_count else None
+    limit = _query_int(limit, 5000)
+    has_more = len(rows) > limit
+    items = rows[:limit]
+    output = io.StringIO()
+    fieldnames = [
+        "site", "workspace_id", "workspace_name", "current_target_sku_count",
+        "observed_sku_count", "observed_spu_count", "target_sku_count",
+        "sku_deviation_pct", "coverage_pct", "note",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for item in items:
+        writer.writerow({key: item.get(key, "") for key in fieldnames})
+    return {
+        "total_count": total_count,
+        "count": len(items),
+        "limit": limit,
+        "has_more": has_more,
+        "deferred_sites": sorted(AOSEN_DEFERRED_SITES) if exclude_deferred else [],
+        "items": items,
+        "csv": output.getvalue(),
+    }
+
+
+def _validate_field_fix_rows(db: Session, rows: list[dict]) -> dict:
+    site_codes = sorted({
+        str(row.get("site") or "").strip()
+        for row in rows
+        if str(row.get("site") or "").strip()
+    })
+    existing_sites = {
+        site for (site,) in db.query(Site.site)
+        .filter(Site.site.in_(site_codes)).all()
+    } if site_codes else set()
+    products = {
+        (site, sku): product
+        for site, sku, product in (
+            db.query(Product.site, Product.sku, Product)
+            .filter(Product.site.in_(site_codes))
+            .all()
+        )
+    } if site_codes else {}
+    errors = []
+    valid_rows = []
+    skipped = 0
+    by_site: dict[str, dict] = {}
+    for index, raw in enumerate(rows, start=1):
+        site = str(raw.get("site") or "").strip()
+        sku = str(raw.get("sku") or "").strip()
+        row_errors = []
+        product = None
+        if not site:
+            row_errors.append("site required")
+        elif site not in existing_sites:
+            row_errors.append("site_not_found")
+        if not sku:
+            row_errors.append("sku required")
+        elif site:
+            product = products.get((site, sku))
+            if product is None:
+                row_errors.append("product_not_found")
+        updates: dict[str, object] = {}
+        for field, max_len in (
+            ("title", 300),
+            ("spu", 120),
+            ("currency", 12),
+            ("category_path", 500),
+        ):
+            value = _field_fix_text(raw, field, f"new_{field}", max_len=max_len)
+            if value is not None:
+                updates[field] = value.upper() if field == "currency" else value
+        for field in ("sale_price", "original_price"):
+            value = _first_present(raw, field, f"new_{field}")
+            if value not in (None, ""):
+                try:
+                    parsed = _sales_number(value)
+                    if parsed is not None and parsed < 0:
+                        row_errors.append(f"{field}_must_be_non_negative")
+                    elif parsed is not None:
+                        updates[field] = round(float(parsed), 2)
+                except HTTPException as exc:
+                    row_errors.append(str(exc.detail))
+        images = _field_fix_images(_first_present(raw, "image_urls", "images", "new_image_urls"))
+        if images is not None:
+            updates["image_urls"] = images[:20]
+        if not updates:
+            row_errors.append("no_fields_to_update")
+        if row_errors:
+            skipped += 1
+            errors.append({
+                "row": index,
+                "site": site or None,
+                "sku": sku or None,
+                "errors": row_errors,
+            })
+            continue
+        assert product is not None
+        valid_rows.append({
+            "row": index,
+            "site": site,
+            "sku": sku,
+            "updates": updates,
+        })
+        by_site.setdefault(site, {"rows": 0})
+        by_site[site]["rows"] += 1
+    return {
+        "valid": not errors and bool(valid_rows),
+        "rows": len(rows),
+        "valid_rows": len(valid_rows),
+        "skipped": skipped,
+        "sites": sorted(by_site),
+        "by_site": by_site,
+        "errors": errors,
+        "valid_items": valid_rows,
+        "items": valid_rows[:100],
+    }
+
+
+def _field_fix_template_payload(
+    db: Session,
+    *,
+    tenant: int | None = None,
+    include_hidden: bool = False,
+    exclude_deferred: bool = True,
+    limit: int = 5000,
+    include_total_count: bool = True,
+) -> dict:
+    weak_title = _weak_product_title_filter()
+    image_text = func.trim(func.coalesce(cast(Product.image_urls, String), ""))
+    currency_text = func.upper(func.trim(func.coalesce(Product.currency, "")))
+    mismatch_parts = []
+    for site, in db.query(Site.site).all():
+        expected = currency_for_site(site)
+        if expected:
+            mismatch_parts.append(and_(
+                Product.site == site,
+                currency_text != "",
+                currency_text != expected,
+            ))
+    issue_expr = or_(
+        weak_title,
+        func.length(func.trim(func.coalesce(Product.category_path, ""))) == 0,
+        image_text.in_(("", "[]", "null")),
+        ~((func.coalesce(Product.sale_price, 0) > 0) |
+          (func.coalesce(Product.original_price, 0) > 0)),
+        currency_text == "",
+        *(mismatch_parts or []),
+    )
+    q = db.query(Product).filter(issue_expr)
+    if exclude_deferred:
+        q = q.filter(~Product.site.in_(tuple(AOSEN_DEFERRED_SITES)))
+    if tenant is not None or not include_hidden:
+        q = q.join(WorkspaceSite, WorkspaceSite.site == Product.site)
+        q = q.join(Workspace, Workspace.id == WorkspaceSite.workspace_id)
+        q = q.filter(WorkspaceSite.enabled.is_(True), Workspace.status == "active")
+        if tenant is not None:
+            q = q.filter(WorkspaceSite.workspace_id == tenant)
+        if not include_hidden:
+            q = q.filter(WorkspaceSite.hidden.is_(False))
+    limit = _query_int(limit, 5000)
+    total_count = int(q.count() or 0) if include_total_count else None
+    row_limit = limit if include_total_count else limit + 1
+    rows = (q.order_by(Product.site, Product.updated_time.desc().nullslast(),
+                       Product.id.desc())
+            .limit(row_limit)
+            .all())
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    items = []
+    seen: set[tuple[str, str]] = set()
+    for product in rows:
+        key = (product.site, product.sku)
+        if key in seen:
+            continue
+        seen.add(key)
+        issues = _product_quality_issues(product)
+        images = product.image_urls or []
+        if isinstance(images, list):
+            image_value = "|".join(str(item) for item in images if item)
+        else:
+            image_value = str(images or "")
+        items.append({
+            "site": product.site,
+            "sku": product.sku,
+            "title": product.title or "",
+            "currency": product.currency or "",
+            "category_path": product.category_path or "",
+            "image_urls": image_value,
+            "sale_price": product.sale_price or "",
+            "original_price": product.original_price or "",
+            "spu": product.spu or "",
+            "note": "/".join(issues) or "field_fix",
+        })
+    output = io.StringIO()
+    fieldnames = [
+        "site", "sku", "title", "currency", "category_path", "image_urls",
+        "sale_price", "original_price", "spu", "note",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for item in items:
+        writer.writerow({key: item.get(key, "") for key in fieldnames})
+    return {
+        "total_count": total_count,
+        "count": len(items),
+        "limit": limit,
+        "has_more": has_more,
+        "deferred_sites": sorted(AOSEN_DEFERRED_SITES) if exclude_deferred else [],
+        "items": items,
+        "csv": output.getvalue(),
+    }
+
+
+def _promotion_datetime(value) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day)
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(text[:19], fmt)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        raise HTTPException(422, {"error": "invalid_promotion_datetime", "value": text})
+
+
+def _promotion_number(value, *, integer: bool = False) -> float | int | None:
+    if isinstance(value, str):
+        value = value.strip().rstrip("%").strip()
+    number = _sales_number(value)
+    if number is None:
+        return None
+    return int(round(number)) if integer else round(float(number), 2)
+
+
+def _promotion_type_from_import(raw: dict, name: str) -> str:
+    explicit = str(raw.get("promotion_type") or raw.get("type") or "").strip()
+    if explicit:
+        return explicit[:48]
+    text = " ".join(str(v or "") for v in (
+        name, raw.get("coupon"), raw.get("coupon_code"), raw.get("code"),
+        raw.get("threshold"),
+    ))
+    lowered = text.lower()
+    if "free shipping" in lowered or "free delivery" in lowered:
+        return "free_shipping"
+    if "bundle" in lowered or "buy " in lowered or "multibuy" in lowered:
+        return "bundle"
+    if "coupon" in lowered or "code" in lowered or raw.get("coupon_code"):
+        return "coupon"
+    return "external"
+
+
+def _validate_promotion_rows(db: Session, rows: list[dict]) -> dict:
+    site_codes = sorted({
+        str(row.get("site") or "").strip()
+        for row in rows
+        if str(row.get("site") or "").strip()
+    })
+    existing_sites = {
+        site for (site,) in db.query(Site.site)
+        .filter(Site.site.in_(site_codes)).all()
+    } if site_codes else set()
+    products = {
+        (site, sku): product
+        for site, sku, product in (
+            db.query(Product.site, Product.sku, Product)
+            .filter(Product.site.in_(site_codes))
+            .all()
+        )
+    } if site_codes else {}
+    errors = []
+    valid_rows = []
+    by_site: dict[str, dict] = {}
+    skipped = 0
+    for index, raw in enumerate(rows, start=1):
+        site = str(raw.get("site") or "").strip()
+        sku = str(raw.get("sku") or "").strip()
+        name = str(_first_present(
+            raw, "promotion_name", "name", "label", "coupon", "coupon_code"
+        ) or "").strip()
+        row_errors = []
+        product = None
+        if not site:
+            row_errors.append("site required")
+        elif site not in existing_sites:
+            row_errors.append("site_not_found")
+        if not sku:
+            row_errors.append("sku required")
+        elif site:
+            product = products.get((site, sku))
+            if product is None:
+                row_errors.append("product_not_found")
+        if not name:
+            row_errors.append("promotion_name required")
+        try:
+            discount = _promotion_number(
+                _first_present(raw, "discount_percent", "discount", "saving"),
+                integer=True,
+            )
+        except HTTPException as exc:
+            row_errors.append(str(exc.detail))
+            discount = None
+        try:
+            original_price = _promotion_number(
+                _first_present(raw, "original_price", "regular_price", "was_price", "rrp")
+            )
+        except HTTPException as exc:
+            row_errors.append(str(exc.detail))
+            original_price = None
+        try:
+            promotion_price = _promotion_number(
+                _first_present(raw, "promotion_price", "promo_price", "sale_price", "price")
+            )
+        except HTTPException as exc:
+            row_errors.append(str(exc.detail))
+            promotion_price = None
+        try:
+            start_time = _promotion_datetime(
+                _first_present(raw, "start_time", "start", "date_from")
+            )
+            end_time = _promotion_datetime(
+                _first_present(raw, "end_time", "end", "date_to")
+            )
+        except HTTPException as exc:
+            row_errors.append(str(exc.detail))
+            start_time = None
+            end_time = None
+        if discount is not None and (discount < 0 or discount > 100):
+            row_errors.append("discount_percent_must_be_0_100")
+        if row_errors:
+            skipped += 1
+            errors.append({
+                "row": index,
+                "site": site or None,
+                "sku": sku or None,
+                "errors": row_errors,
+            })
+            continue
+        assert product is not None
+        valid_rows.append({
+            "row": index,
+            "site": site,
+            "sku": sku,
+            "promotion_type": _promotion_type_from_import(raw, name),
+            "promotion_name": name[:160],
+            "original_price": (
+                original_price if original_price is not None else product.original_price
+            ),
+            "promotion_price": (
+                promotion_price if promotion_price is not None else product.sale_price
+            ),
+            "discount_percent": discount,
+            "threshold": str(raw.get("threshold") or "").strip() or None,
+            "start_time": start_time.isoformat() if start_time else None,
+            "end_time": end_time.isoformat() if end_time else None,
+            "product_title": product.title,
+            "product_image": (product.image_urls or [None])[0],
+        })
+        by_site.setdefault(site, {"rows": 0})
+        by_site[site]["rows"] += 1
+    return {
+        "valid": not errors and bool(valid_rows),
+        "rows": len(rows),
+        "valid_rows": len(valid_rows),
+        "skipped": skipped,
+        "sites": sorted(by_site),
+        "by_site": by_site,
+        "errors": errors,
+        "valid_items": valid_rows,
+        "items": valid_rows[:100],
+    }
+
+
+def _promotion_template_payload(
+    db: Session,
+    *,
+    tenant: int | None = None,
+    include_hidden: bool = False,
+    exclude_deferred: bool = True,
+    limit: int = 5000,
+    include_total_count: bool = True,
+) -> dict:
+    existing_promos = (db.query(Promotion.site, Promotion.sku)
+                       .filter(Promotion.sku.isnot(None))
+                       .subquery())
+    q = (db.query(Product)
+         .join(Site, Site.site == Product.site)
+         .outerjoin(
+             existing_promos,
+             and_(existing_promos.c.site == Product.site,
+                  existing_promos.c.sku == Product.sku),
+         )
+         .filter(existing_promos.c.sku.is_(None)))
+    if exclude_deferred:
+        q = q.filter(~Product.site.in_(tuple(AOSEN_DEFERRED_SITES)))
+    if tenant is not None or not include_hidden:
+        q = q.join(WorkspaceSite, WorkspaceSite.site == Product.site)
+        q = q.join(Workspace, Workspace.id == WorkspaceSite.workspace_id)
+        q = q.filter(WorkspaceSite.enabled.is_(True), Workspace.status == "active")
+        if tenant is not None:
+            q = q.filter(WorkspaceSite.workspace_id == tenant)
+        if not include_hidden:
+            q = q.filter(WorkspaceSite.hidden.is_(False))
+    limit = _query_int(limit, 5000)
+    total_count = int(q.count() or 0) if include_total_count else None
+    row_limit = limit if include_total_count else limit + 1
+    rows = (q.order_by(Product.site, Product.updated_time.desc().nullslast(),
+                       Product.id.desc())
+            .limit(row_limit)
+            .all())
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    items = []
+    seen_products: set[tuple[str, str]] = set()
+    for row in rows:
+        key = (row.site, row.sku)
+        if key in seen_products:
+            continue
+        seen_products.add(key)
+        items.append({
+            "site": row.site,
+            "sku": row.sku,
+            "promotion_type": "",
+            "promotion_name": "",
+            "discount_percent": "",
+            "promotion_price": "",
+            "threshold": "",
+            "start_time": "",
+            "end_time": "",
+            "title": row.title,
+            "sale_price": row.sale_price,
+            "currency": row.currency,
+            "note": "fill coupon/bundle/free_shipping/external promotion; vidaxl_us/vidaxl_ca excluded by default",
+        })
+    output = io.StringIO()
+    fieldnames = [
+        "site", "sku", "promotion_type", "promotion_name",
+        "discount_percent", "promotion_price", "threshold",
+        "start_time", "end_time", "note",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for item in items:
+        writer.writerow({key: item.get(key, "") for key in fieldnames})
+    return {
+        "total_count": total_count,
+        "count": len(items),
+        "limit": limit,
+        "has_more": has_more,
+        "deferred_sites": sorted(AOSEN_DEFERRED_SITES) if exclude_deferred else [],
+        "items": items,
+        "csv": output.getvalue(),
+    }
+
+
+_AOSEN_FIELD_ISSUE_KEYS = {
+    "no_products",
+    "coverage_low",
+    "title_weak",
+    "currency_missing",
+    "currency_mismatch",
+    "price_missing",
+    "category_missing",
+    "image_missing",
+    "sku_deviation_high",
+    "promotions_missing",
+    "sales_missing",
+    "revenue_missing",
+    "sales_history_insufficient",
+}
+_AOSEN_HARD_FAIL_ISSUES = {
+    "no_products",
+    "coverage_low",
+    "price_missing",
+    "currency_missing",
+    "currency_mismatch",
+    "sku_deviation_high",
+    "title_weak",
+    "category_missing",
+    "image_missing",
+}
+_AOSEN_BUSINESS_DATA_ISSUES = {
+    "sales_missing",
+    "revenue_missing",
+    "sales_history_insufficient",
+}
+
+
+def _aosen_status_from_issues(issues: list[str]) -> str:
+    if not issues:
+        return "pass"
+    if any(issue in _AOSEN_HARD_FAIL_ISSUES for issue in issues):
+        return "fail"
+    if "promotions_missing" in issues:
+        return "needs_refresh"
+    if any(issue in _AOSEN_BUSINESS_DATA_ISSUES for issue in issues):
+        return "needs_business_data"
+    return "fail"
+
+
+def _aosen_field_quality_items(
+    db: Session,
+    sites: list[Site],
+    target_sku_by_site: dict[str, int],
+) -> list[dict]:
+    site_codes = [site.site for site in sites if site.site]
+    if not site_codes:
+        return []
+    metrics = load_site_metrics(db, site_codes, collect_missing=IS_SQLITE)
+    field_counts = {
+        site: {
+            "category_missing_count": int(category_missing or 0),
+            "image_missing_count": int(image_missing or 0),
+        }
+        for site, category_missing, image_missing in (
+            db.query(
+                Product.site,
+                func.count(Product.id).filter(
+                    func.length(func.trim(func.coalesce(Product.category_path, ""))) == 0
+                ),
+                func.count(Product.id).filter(
+                    func.trim(func.coalesce(cast(Product.image_urls, String), "")).in_(
+                        ("", "[]", "null")
+                    )
+                ),
+            )
+            .filter(Product.site.in_(site_codes))
+            .group_by(Product.site)
+            .all()
+        )
+    }
+    items: list[dict] = []
+    for site_row in sites:
+        site = site_row.site
+        metric = metrics.get(site, {})
+        sku_count = int(metric.get("sku_count") or 0)
+        spu_count = int(metric.get("product_listing_count") or 0)
+        target_sku_count = int(target_sku_by_site.get(site) or 0)
+        sku_deviation_pct = (
+            round((sku_count - target_sku_count) / target_sku_count * 100, 2)
+            if target_sku_count else None
+        )
+        coverage_pct = _pct(sku_count, target_sku_count) if target_sku_count else None
+        weak_title_count = int(metric.get("weak_title_count") or 0)
+        currency_missing_count = int(metric.get("currency_missing_count") or 0)
+        currency_mismatch_count = int(metric.get("currency_mismatch_count") or 0)
+        price_signal_count = int(metric.get("price_signal_count") or 0)
+        sales_signal_count = int(metric.get("sales_signal_count") or 0)
+        revenue_signal_count = int(metric.get("revenue_signal_count") or 0)
+        review_signal_count = int(metric.get("review_signal_count") or 0)
+        review_history_signal_count = int(
+            metric.get("review_history_signal_count") or 0)
+        promotion_count = int(metric.get("promotion_count") or 0)
+        field = field_counts.get(site, {})
+        category_missing_count = int(field.get("category_missing_count") or 0)
+        image_missing_count = int(field.get("image_missing_count") or 0)
+        issues: list[str] = []
+        if sku_count == 0:
+            issues.append("no_products")
+        if target_sku_count and coverage_pct is not None and coverage_pct < 50:
+            issues.append("coverage_low")
+        if target_sku_count and sku_deviation_pct is not None and abs(sku_deviation_pct) > 50:
+            issues.append("sku_deviation_high")
+        if weak_title_count > 0:
+            issues.append("title_weak")
+        if currency_missing_count > 0:
+            issues.append("currency_missing")
+        if currency_mismatch_count > 0:
+            issues.append("currency_mismatch")
+        if sku_count > 0 and price_signal_count == 0:
+            issues.append("price_missing")
+        if category_missing_count > 0:
+            issues.append("category_missing")
+        if image_missing_count > 0:
+            issues.append("image_missing")
+        if promotion_count == 0:
+            issues.append("promotions_missing")
+        if sku_count > 0 and sales_signal_count == 0:
+            issues.append("sales_missing")
+        if sku_count > 0 and revenue_signal_count == 0:
+            issues.append("revenue_missing")
+        if review_signal_count > 0 and review_history_signal_count < 2:
+            issues.append("sales_history_insufficient")
+        issues = [issue for issue in issues if issue in _AOSEN_FIELD_ISSUE_KEYS]
+        items.append({
+            "site": site,
+            "brand": site_row.brand,
+            "country": site_row.country,
+            "status": _aosen_status_from_issues(issues),
+            "issues": issues,
+            "sku_count": sku_count,
+            "spu_count": spu_count,
+            "coverage_pct": coverage_pct,
+            "sku_deviation_pct": sku_deviation_pct,
+            "title_quality_pct": _pct(sku_count - weak_title_count, sku_count),
+            "category_signal_pct": _pct(sku_count - category_missing_count, sku_count),
+            "image_signal_pct": _pct(sku_count - image_missing_count, sku_count),
+            "price_signal_pct": _pct(price_signal_count, sku_count),
+            "sales_signal_pct": _pct(sales_signal_count, sku_count),
+            "revenue_signal_pct": _pct(revenue_signal_count, sku_count),
+            "promotion_count": promotion_count,
+            "expected_currency": currency_for_site(site),
+            "category_missing_count": category_missing_count,
+            "image_missing_count": image_missing_count,
+            "currency_missing_count": currency_missing_count,
+            "currency_mismatch_count": currency_mismatch_count,
+            "suggested_action": (
+                "修复字段解析/重抓" if any(issue in _AOSEN_HARD_FAIL_ISSUES for issue in issues)
+                else "重算促销或导入促销信号" if "promotions_missing" in issues
+                else "导入销量营收或补齐历史快照" if any(issue in _AOSEN_BUSINESS_DATA_ISSUES for issue in issues)
+                else "通过"
+            ),
+        })
+    return items
+
+
+def _validate_sales_rows(db: Session, rows: list[dict]) -> dict:
+    site_codes = sorted({
+        str(row.get("site") or "").strip()
+        for row in rows
+        if str(row.get("site") or "").strip()
+    })
+    existing_sites = {
+        site for (site,) in db.query(Site.site)
+        .filter(Site.site.in_(site_codes)).all()
+    } if site_codes else set()
+    existing_products = {
+        (site, sku)
+        for site, sku in db.query(Product.site, Product.sku)
+        .filter(Product.site.in_(site_codes)).all()
+    } if site_codes else set()
+    errors = []
+    valid_rows = []
+    by_site: dict[str, dict] = {}
+    skipped = 0
+    for index, raw in enumerate(rows, start=1):
+        site = str(raw.get("site") or "").strip()
+        sku = str(raw.get("sku") or "").strip()
+        row_errors = []
+        sales = None
+        revenue = None
+        parsed_day: date | None = None
+        if not site:
+            row_errors.append("site required")
+        elif site not in existing_sites:
+            row_errors.append("site_not_found")
+        if not sku:
+            row_errors.append("sku required")
+        elif site and (site, sku) not in existing_products:
+            row_errors.append("product_not_found")
+        try:
+            parsed_day = _parse_metric_date(raw.get("date") or date.today())
+        except HTTPException as exc:
+            row_errors.append(str(exc.detail))
+        try:
+            sales = _sales_number(
+                _first_present(raw, "thirty_day_sales", "sales", "estimated_sales")
+            )
+        except HTTPException as exc:
+            row_errors.append(str(exc.detail))
+        try:
+            revenue = _sales_number(
+                _first_present(raw, "thirty_day_revenue", "revenue", "estimated_revenue")
+            )
+        except HTTPException as exc:
+            row_errors.append(str(exc.detail))
+        if sales is None and revenue is None:
+            row_errors.append("sales_or_revenue_required")
+        if sales is not None and sales < 0:
+            row_errors.append("sales_must_be_non_negative")
+        if revenue is not None and revenue < 0:
+            row_errors.append("revenue_must_be_non_negative")
+        if row_errors:
+            skipped += 1
+            errors.append({
+                "row": index,
+                "site": site or None,
+                "sku": sku or None,
+                "date": parsed_day.isoformat() if parsed_day else raw.get("date"),
+                "errors": row_errors,
+            })
+            continue
+        assert parsed_day is not None
+        valid_rows.append({
+            "row": index,
+            "site": site,
+            "sku": sku,
+            "date": parsed_day.isoformat(),
+            "thirty_day_sales": int(round(sales)) if sales is not None else None,
+            "thirty_day_revenue": round(float(revenue), 2) if revenue is not None else None,
+        })
+        by_site.setdefault(site, {"rows": 0})
+        by_site[site]["rows"] += 1
+    return {
+        "valid": not errors and bool(valid_rows),
+        "rows": len(rows),
+        "valid_rows": len(valid_rows),
+        "skipped": skipped,
+        "sites": sorted(by_site),
+        "by_site": by_site,
+        "errors": errors,
+        "valid_items": valid_rows,
+        "items": valid_rows[:100],
+    }
+
+
+def _sales_template_payload(
+    db: Session,
+    *,
+    tenant: int | None = None,
+    include_hidden: bool = False,
+    day: date | None = None,
+    exclude_deferred: bool = True,
+    limit: int = 5000,
+    include_total_count: bool = True,
+) -> dict:
+    day = day or date.today()
+    q = (db.query(Product)
+         .join(Site, Site.site == Product.site)
+         .filter(or_(Product.thirty_day_sales.is_(None),
+                     Product.thirty_day_sales <= 0,
+                     Product.thirty_day_revenue.is_(None),
+                     Product.thirty_day_revenue <= 0)))
+    if exclude_deferred:
+        q = q.filter(~Product.site.in_(tuple(AOSEN_DEFERRED_SITES)))
+    if tenant is not None or not include_hidden:
+        q = q.join(WorkspaceSite, WorkspaceSite.site == Product.site)
+        q = q.join(Workspace, Workspace.id == WorkspaceSite.workspace_id)
+        q = q.filter(WorkspaceSite.enabled.is_(True), Workspace.status == "active")
+        if tenant is not None:
+            q = q.filter(WorkspaceSite.workspace_id == tenant)
+        if not include_hidden:
+            q = q.filter(WorkspaceSite.hidden.is_(False))
+    limit = _query_int(limit, 5000)
+    total_count = int(q.count() or 0) if include_total_count else None
+    row_limit = limit if include_total_count else limit + 1
+    rows = (q.order_by(Product.site, Product.updated_time.desc().nullslast(),
+                       Product.id.desc())
+            .limit(row_limit)
+            .all())
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    items = []
+    seen_products: set[tuple[str, str]] = set()
+    for row in rows:
+        key = (row.site, row.sku)
+        if key in seen_products:
+            continue
+        seen_products.add(key)
+        items.append({
+            "site": row.site,
+            "sku": row.sku,
+            "date": day.isoformat(),
+            "thirty_day_sales": "",
+            "thirty_day_revenue": "",
+            "title": row.title,
+            "sale_price": row.sale_price,
+            "currency": row.currency,
+            "note": "fill external 30-day sales/revenue; vidaxl_us/vidaxl_ca excluded by default",
+        })
+    output = io.StringIO()
+    fieldnames = ["site", "sku", "date", "thirty_day_sales",
+                  "thirty_day_revenue", "note"]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for item in items:
+        writer.writerow({key: item.get(key, "") for key in fieldnames})
+    return {
+        "date": day.isoformat(),
+        "total_count": total_count,
+        "count": len(items),
+        "limit": limit,
+        "has_more": has_more,
+        "deferred_sites": sorted(AOSEN_DEFERRED_SITES) if exclude_deferred else [],
+        "items": items,
+        "csv": output.getvalue(),
+    }
+
+
+def _review_history_rows_from_payload(payload: dict) -> list[dict]:
+    rows = payload.get("rows")
+    if rows is None and payload.get("csv"):
+        reader = csv.DictReader(io.StringIO(str(payload.get("csv") or "")))
+        rows = list(reader)
+    if rows is None and any(k in payload for k in (
+        "site", "sku", "date", "review_count",
+    )):
+        rows = [payload]
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(422, {"error": "rows_or_csv_required"})
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def _validate_review_history_rows(db: Session, rows: list[dict]) -> dict:
+    site_codes = sorted({
+        str(row.get("site") or "").strip()
+        for row in rows
+        if str(row.get("site") or "").strip()
+    })
+    existing_sites = {
+        site for (site,) in db.query(Site.site)
+        .filter(Site.site.in_(site_codes)).all()
+    } if site_codes else set()
+    existing_products = {
+        (site, sku)
+        for site, sku in db.query(Product.site, Product.sku)
+        .filter(Product.site.in_(site_codes)).all()
+    } if site_codes else set()
+    errors = []
+    valid_rows = []
+    by_site: dict[str, dict] = {}
+    skipped = 0
+    for index, raw in enumerate(rows, start=1):
+        site = str(raw.get("site") or "").strip()
+        sku = str(raw.get("sku") or "").strip()
+        row_errors = []
+        parsed_day: date | None = None
+        review_count = None
+        sale_price = None
+        original_price = None
+        if not site:
+            row_errors.append("site required")
+        elif site not in existing_sites:
+            row_errors.append("site_not_found")
+        if not sku:
+            row_errors.append("sku required")
+        elif site and (site, sku) not in existing_products:
+            row_errors.append("product_not_found")
+        try:
+            parsed_day = _parse_metric_date(raw.get("date") or date.today())
+        except HTTPException as exc:
+            row_errors.append(str(exc.detail))
+        try:
+            review_count = _sales_number(
+                _first_present(raw, "review_count", "reviews", "review_total")
+            )
+        except HTTPException as exc:
+            row_errors.append(str(exc.detail))
+        try:
+            sale_price = _sales_number(
+                _first_present(raw, "sale_price", "price", "current_price")
+            )
+        except HTTPException as exc:
+            row_errors.append(str(exc.detail))
+        try:
+            original_price = _sales_number(
+                _first_present(raw, "original_price", "regular_price", "was_price")
+            )
+        except HTTPException as exc:
+            row_errors.append(str(exc.detail))
+        if review_count is None:
+            row_errors.append("review_count required")
+        elif review_count < 0:
+            row_errors.append("review_count_must_be_non_negative")
+        if sale_price is not None and sale_price < 0:
+            row_errors.append("sale_price_must_be_non_negative")
+        if original_price is not None and original_price < 0:
+            row_errors.append("original_price_must_be_non_negative")
+        if row_errors:
+            skipped += 1
+            errors.append({
+                "row": index,
+                "site": site or None,
+                "sku": sku or None,
+                "date": parsed_day.isoformat() if parsed_day else raw.get("date"),
+                "errors": row_errors,
+            })
+            continue
+        assert parsed_day is not None
+        valid_rows.append({
+            "row": index,
+            "site": site,
+            "sku": sku,
+            "date": parsed_day.isoformat(),
+            "review_count": int(round(review_count or 0)),
+            "sale_price": round(float(sale_price), 2) if sale_price is not None else None,
+            "original_price": (
+                round(float(original_price), 2)
+                if original_price is not None else None
+            ),
+        })
+        by_site.setdefault(site, {"rows": 0})
+        by_site[site]["rows"] += 1
+    return {
+        "valid": not errors and bool(valid_rows),
+        "rows": len(rows),
+        "valid_rows": len(valid_rows),
+        "skipped": skipped,
+        "sites": sorted(by_site),
+        "by_site": by_site,
+        "errors": errors,
+        "valid_items": valid_rows,
+        "items": valid_rows[:100],
+    }
+
+
+def _review_history_template_payload(
+    db: Session,
+    *,
+    tenant: int | None = None,
+    include_hidden: bool = False,
+    exclude_deferred: bool = True,
+    limit: int = 5000,
+    include_total_count: bool = True,
+) -> dict:
+    sufficient_review_history_skus = (
+        db.query(PriceHistory.site.label("site"),
+                 PriceHistory.sku.label("sku"))
+        .filter(PriceHistory.review_count.isnot(None))
+        .group_by(PriceHistory.site, PriceHistory.sku)
+        .having(func.count(func.distinct(PriceHistory.date)) >= 2)
+        .subquery()
+    )
+    q = (db.query(Product)
+         .outerjoin(
+             sufficient_review_history_skus,
+             and_(
+                 sufficient_review_history_skus.c.site == Product.site,
+                 sufficient_review_history_skus.c.sku == Product.sku,
+             ),
+         )
+         .filter(func.coalesce(Product.review_count, 0) > 0)
+         .filter(sufficient_review_history_skus.c.sku.is_(None)))
+    if exclude_deferred:
+        q = q.filter(~Product.site.in_(tuple(AOSEN_DEFERRED_SITES)))
+    if tenant is not None or not include_hidden:
+        q = q.join(WorkspaceSite, WorkspaceSite.site == Product.site)
+        q = q.join(Workspace, Workspace.id == WorkspaceSite.workspace_id)
+        q = q.filter(WorkspaceSite.enabled.is_(True), Workspace.status == "active")
+        if tenant is not None:
+            q = q.filter(WorkspaceSite.workspace_id == tenant)
+        if not include_hidden:
+            q = q.filter(WorkspaceSite.hidden.is_(False))
+    limit = _query_int(limit, 5000)
+    total_count = int(q.count() or 0) if include_total_count else None
+    row_limit = limit if include_total_count else limit + 1
+    rows = (q.order_by(Product.site, Product.updated_time.desc().nullslast(),
+                       Product.id.desc())
+            .limit(row_limit)
+            .all())
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    items = []
+    for row in rows:
+        items.append({
+            "site": row.site,
+            "sku": row.sku,
+            "date": "",
+            "review_count": "",
+            "current_review_count": row.review_count or "",
+            "sale_price": row.sale_price or "",
+            "original_price": row.original_price or "",
+            "title": row.title or "",
+            "note": "fill another historical review snapshot date/review_count; vidaxl_us/vidaxl_ca excluded by default",
+        })
+    output = io.StringIO()
+    fieldnames = [
+        "site", "sku", "date", "review_count", "sale_price",
+        "original_price", "current_review_count", "note",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for item in items:
+        writer.writerow({key: item.get(key, "") for key in fieldnames})
+    return {
+        "total_count": total_count,
+        "count": len(items),
+        "limit": limit,
+        "has_more": has_more,
+        "deferred_sites": sorted(AOSEN_DEFERRED_SITES) if exclude_deferred else [],
+        "items": items,
+        "csv": output.getvalue(),
+    }
 
 
 def _metric_rows_from_payload(payload: dict) -> list[dict]:
@@ -485,6 +1828,7 @@ def _ondemand_stuck_filter(cutoff):
 
 def _queue_stats(db: Session) -> dict:
     now = datetime.utcnow()
+    parsed_from, parsed_to = _default_queue_day_window()
     spine_cutoff = now - timedelta(seconds=_STUCK_SEC)
     crawl_cutoff = now - timedelta(seconds=_CRAWL_STUCK_SEC)
     crawl_pending_cutoff = now - timedelta(seconds=_CRAWL_PENDING_STALE_SEC)
@@ -495,21 +1839,38 @@ def _queue_stats(db: Session) -> dict:
         "ondemand": _empty_queue_counts(),
     }
 
-    spine_stuck = (db.query(func.count(SpineJob.id))
+    def apply_day_window(q, model):
+        if parsed_from:
+            q = q.filter(model.created_at >= parsed_from)
+        if parsed_to:
+            q = q.filter(model.created_at <= parsed_to)
+        return q
+
+    def visible_crawl_jobs(q):
+        return apply_day_window(q, CrawlJob).filter(or_(
+            CrawlJob.failure_code.is_(None),
+            ~CrawlJob.failure_code.in_(("workspace_hidden", "superseded")),
+        ))
+
+    spine_stuck = (apply_day_window(db.query(func.count(SpineJob.id)), SpineJob)
                    .filter(*_spine_stuck_filter(spine_cutoff)).scalar() or 0)
-    crawl_stuck = (db.query(func.count(CrawlJob.id))
+    crawl_stuck = (visible_crawl_jobs(db.query(func.count(CrawlJob.id)))
                    .filter(*_crawl_stuck_filter(crawl_cutoff)).scalar() or 0)
     crawl_stale_pending = (
-        db.query(func.count(CrawlJob.id))
+        visible_crawl_jobs(db.query(func.count(CrawlJob.id)))
         .filter(CrawlJob.status == "pending",
                 CrawlJob.created_at.isnot(None),
                 CrawlJob.created_at < crawl_pending_cutoff)
         .scalar() or 0
     )
-    ondemand_stuck = (db.query(func.count(OnDemandJob.id))
+    ondemand_stuck = (apply_day_window(db.query(func.count(OnDemandJob.id)), OnDemandJob)
                       .filter(*_ondemand_stuck_filter(ondemand_cutoff)).scalar() or 0)
 
-    for status, count in db.query(SpineJob.status, func.count(SpineJob.id)).group_by(SpineJob.status).all():
+    for status, count in (
+        apply_day_window(db.query(SpineJob.status, func.count(SpineJob.id)), SpineJob)
+        .group_by(SpineJob.status)
+        .all()
+    ):
         status_key = _norm_status("spine", status)
         if status_key == "running":
             count = max(0, int(count or 0) - int(spine_stuck or 0))
@@ -517,7 +1878,11 @@ def _queue_stats(db: Session) -> dict:
     if spine_stuck:
         _add_count(by_queue["spine"], "stuck", spine_stuck)
 
-    for status, count in db.query(CrawlJob.status, func.count(CrawlJob.id)).group_by(CrawlJob.status).all():
+    for status, count in (
+        visible_crawl_jobs(db.query(CrawlJob.status, func.count(CrawlJob.id)))
+        .group_by(CrawlJob.status)
+        .all()
+    ):
         status_key = _norm_status("crawl", status)
         if status_key == "running":
             count = max(0, int(count or 0) - int(crawl_stuck or 0))
@@ -525,7 +1890,11 @@ def _queue_stats(db: Session) -> dict:
     if crawl_stuck:
         _add_count(by_queue["crawl"], "stuck", crawl_stuck)
 
-    for status, count in db.query(OnDemandJob.status, func.count(OnDemandJob.id)).group_by(OnDemandJob.status).all():
+    for status, count in (
+        apply_day_window(db.query(OnDemandJob.status, func.count(OnDemandJob.id)), OnDemandJob)
+        .group_by(OnDemandJob.status)
+        .all()
+    ):
         status_key = _norm_status("ondemand", status)
         if status_key == "running":
             count = max(0, int(count or 0) - int(ondemand_stuck or 0))
@@ -585,13 +1954,13 @@ def _queue_stats(db: Session) -> dict:
     }
     total["breakdowns"] = {
         "crawl_failed_by_site": _group_rows(
-            db.query(CrawlJob.site, func.count(CrawlJob.id))
+            visible_crawl_jobs(db.query(CrawlJob.site, func.count(CrawlJob.id)))
             .filter(CrawlJob.status == "failed")
             .group_by(CrawlJob.site),
             limit=25,
         ),
         "crawl_running_by_site": _group_rows(
-            db.query(CrawlJob.site, func.count(CrawlJob.id))
+            visible_crawl_jobs(db.query(CrawlJob.site, func.count(CrawlJob.id)))
             .filter(CrawlJob.status == "running",
                     or_(CrawlJob.started_at.is_(None),
                         CrawlJob.started_at >= crawl_cutoff,
@@ -600,13 +1969,13 @@ def _queue_stats(db: Session) -> dict:
             limit=25,
         ),
         "crawl_stuck_by_site": _group_rows(
-            db.query(CrawlJob.site, func.count(CrawlJob.id))
+            visible_crawl_jobs(db.query(CrawlJob.site, func.count(CrawlJob.id)))
             .filter(*_crawl_stuck_filter(crawl_cutoff))
             .group_by(CrawlJob.site),
             limit=25,
         ),
         "crawl_stale_pending_by_site": _group_rows(
-            db.query(CrawlJob.site, func.count(CrawlJob.id))
+            visible_crawl_jobs(db.query(CrawlJob.site, func.count(CrawlJob.id)))
             .filter(CrawlJob.status == "pending",
                     CrawlJob.created_at.isnot(None),
                     CrawlJob.created_at < crawl_pending_cutoff)
@@ -614,31 +1983,35 @@ def _queue_stats(db: Session) -> dict:
             limit=25,
         ),
         "crawl_blocked_by_site": _group_rows(
-            db.query(CrawlJob.site, func.count(CrawlJob.id))
+            visible_crawl_jobs(db.query(CrawlJob.site, func.count(CrawlJob.id)))
             .filter(CrawlJob.status == "blocked")
             .group_by(CrawlJob.site),
             limit=25,
         ),
         "crawl_skipped_by_site": _group_rows(
-            db.query(CrawlJob.site, func.count(CrawlJob.id))
+            visible_crawl_jobs(db.query(CrawlJob.site, func.count(CrawlJob.id)))
             .filter(CrawlJob.status == "skipped")
             .group_by(CrawlJob.site),
             limit=25,
         ),
         "crawl_failure_codes": _group_rows(
-            db.query(CrawlJob.failure_code, func.count(CrawlJob.id))
+            visible_crawl_jobs(db.query(CrawlJob.failure_code, func.count(CrawlJob.id)))
             .filter(CrawlJob.status.in_(("failed", "blocked")))
             .group_by(CrawlJob.failure_code),
             limit=25,
         ),
         "spine_failed_by_dataset": _group_rows(
-            db.query(SpineJob.dataset, func.count(SpineJob.id))
+            apply_day_window(
+                db.query(SpineJob.dataset, func.count(SpineJob.id)), SpineJob
+            )
             .filter(SpineJob.status == "failed")
             .group_by(SpineJob.dataset),
             limit=25,
         ),
         "spine_running_by_dataset": _group_rows(
-            db.query(SpineJob.dataset, func.count(SpineJob.id))
+            apply_day_window(
+                db.query(SpineJob.dataset, func.count(SpineJob.id)), SpineJob
+            )
             .filter(SpineJob.status == "running",
                     SpineJob.heartbeat_at.isnot(None),
                     SpineJob.heartbeat_at >= spine_cutoff)
@@ -646,13 +2019,17 @@ def _queue_stats(db: Session) -> dict:
             limit=25,
         ),
         "spine_stuck_by_dataset": _group_rows(
-            db.query(SpineJob.dataset, func.count(SpineJob.id))
+            apply_day_window(
+                db.query(SpineJob.dataset, func.count(SpineJob.id)), SpineJob
+            )
             .filter(*_spine_stuck_filter(spine_cutoff))
             .group_by(SpineJob.dataset),
             limit=25,
         ),
         "ondemand_running_by_platform": _group_rows(
-            db.query(OnDemandJob.platform, func.count(OnDemandJob.id))
+            apply_day_window(
+                db.query(OnDemandJob.platform, func.count(OnDemandJob.id)), OnDemandJob
+            )
             .filter(OnDemandJob.status == "running",
                     or_(OnDemandJob.created_at.is_(None),
                         OnDemandJob.created_at >= ondemand_cutoff))
@@ -660,13 +2037,17 @@ def _queue_stats(db: Session) -> dict:
             limit=25,
         ),
         "ondemand_stuck_by_platform": _group_rows(
-            db.query(OnDemandJob.platform, func.count(OnDemandJob.id))
+            apply_day_window(
+                db.query(OnDemandJob.platform, func.count(OnDemandJob.id)), OnDemandJob
+            )
             .filter(*_ondemand_stuck_filter(ondemand_cutoff))
             .group_by(OnDemandJob.platform),
             limit=25,
         ),
         "ondemand_failed_by_platform": _group_rows(
-            db.query(OnDemandJob.platform, func.count(OnDemandJob.id))
+            apply_day_window(
+                db.query(OnDemandJob.platform, func.count(OnDemandJob.id)), OnDemandJob
+            )
             .filter(OnDemandJob.status == "failed")
             .group_by(OnDemandJob.platform),
             limit=25,
@@ -709,7 +2090,8 @@ def _spine_job_dict(j: SpineJob, *, now: datetime | None = None) -> dict:
 
 
 def _crawl_job_dict(j: CrawlJob, *, now: datetime | None = None,
-                    db: Session | None = None) -> dict:
+                    db: Session | None = None,
+                    live_progress: bool = False) -> dict:
     now = now or datetime.utcnow()
     cutoff = now - timedelta(seconds=_CRAWL_STUCK_SEC)
     pending_cutoff = now - timedelta(seconds=_CRAWL_PENDING_STALE_SEC)
@@ -720,9 +2102,11 @@ def _crawl_job_dict(j: CrawlJob, *, now: datetime | None = None,
         j.status == "pending" and j.created_at is not None
         and j.created_at < pending_cutoff
     )
-    if db is not None:
+    if db is not None and (
+        live_progress or (j.trigger or "") == FAILED_PRODUCT_RETRY_TRIGGER
+    ):
         fetched_count, total_product_count, total_product_count_source = (
-            _crawl_job_live_progress(db, j)
+            _crawl_job_live_progress(db, j, include_live_progress=live_progress)
         )
     else:
         fetched_count = int(j.products_count or 0)
@@ -821,7 +2205,9 @@ def _ondemand_job_dict(j: OnDemandJob, *, now: datetime | None = None) -> dict:
 
 def _queue_jobs_list(db: Session, *, status: str | None, dataset: str | None,
                      tenant: int | None, source: str, page: int, size: int,
-                     failure_code: str | None = None) -> dict:
+                     failure_code: str | None = None,
+                     created_from: str | None = None,
+                     created_to: str | None = None) -> dict:
     source = (source or "all").lower()
     allowed_sources = {"all", "spine", "crawl", "ondemand"}
     if source not in allowed_sources:
@@ -839,11 +2225,22 @@ def _queue_jobs_list(db: Session, *, status: str | None, dataset: str | None,
     rows: list[dict] = []
     total = 0
     fetch_limit = page * size
+    parsed_from = _parse_queue_datetime(created_from)
+    parsed_to = _parse_queue_datetime_end(created_to)
+    if parsed_from is None and parsed_to is None:
+        parsed_from, parsed_to = _default_queue_day_window()
 
     def apply_status_filter(q, filters: list):
         if not wanted:
             return q
         return q.filter(or_(*filters)) if filters else q.filter(False)
+
+    def apply_created_window(q, model):
+        if parsed_from:
+            q = q.filter(model.created_at >= parsed_from)
+        if parsed_to:
+            q = q.filter(model.created_at <= parsed_to)
+        return q
 
     def append_page(query, mapper, model, **mapper_kwargs):
         nonlocal total
@@ -855,7 +2252,7 @@ def _queue_jobs_list(db: Session, *, status: str | None, dataset: str | None,
             rows.append(mapper(job, now=now, **mapper_kwargs))
 
     if source in ("all", "spine"):
-        q = db.query(SpineJob)
+        q = apply_created_window(db.query(SpineJob), SpineJob)
         if target:
             needle = f"%{target}%"
             q = q.filter(or_(SpineJob.dataset.ilike(needle),
@@ -882,7 +2279,12 @@ def _queue_jobs_list(db: Session, *, status: str | None, dataset: str | None,
             append_page(q, _spine_job_dict, SpineJob)
 
     if source in ("all", "crawl"):
-        q = db.query(CrawlJob)
+        q = apply_created_window(db.query(CrawlJob), CrawlJob)
+        if not code:
+            q = q.filter(or_(
+                CrawlJob.failure_code.is_(None),
+                ~CrawlJob.failure_code.in_(("workspace_hidden", "superseded")),
+            ))
         if target:
             needle = f"%{target}%"
             q = q.filter(or_(CrawlJob.site.ilike(needle),
@@ -916,10 +2318,12 @@ def _queue_jobs_list(db: Session, *, status: str | None, dataset: str | None,
         if raw:
             filters.append(CrawlJob.status.in_(tuple(raw)))
         q = apply_status_filter(q, filters)
+        if not code:
+            q = _daily_crawl_job_display_query(q)
         append_page(q, _crawl_job_dict, CrawlJob, db=db)
 
     if source in ("all", "ondemand"):
-        q = db.query(OnDemandJob)
+        q = apply_created_window(db.query(OnDemandJob), OnDemandJob)
         if target:
             needle = f"%{target}%"
             q = q.filter(or_(OnDemandJob.batch_id.ilike(needle),
@@ -1140,6 +2544,250 @@ def admin_data_quality(
     return payload
 
 
+@router.get("/acceptance/aosen/field-quality")
+def admin_aosen_field_quality_acceptance(
+    tenant: int | None = None,
+    include_hidden: bool = Query(default=False),
+    include_deferred: bool = Query(default=False),
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Aosen 本轮字段质量验收清单。
+
+    关注标题、币种、价格、SKU/SPU 口径、促销、销量/营收信号；默认排除
+    已明确暂不处理的 vidaxl_us / vidaxl_ca。
+    """
+    _require_super_admin(user, db)
+    include_hidden = _query_bool(include_hidden, default=False)
+    include_deferred = _query_bool(include_deferred, default=False)
+    q = (db.query(WorkspaceSite.site, WorkspaceSite.target_sku_count)
+         .join(Workspace, Workspace.id == WorkspaceSite.workspace_id)
+         .filter(WorkspaceSite.enabled.is_(True), Workspace.status == "active"))
+    if tenant is not None:
+        q = q.filter(WorkspaceSite.workspace_id == tenant)
+    if not include_hidden:
+        q = q.filter(WorkspaceSite.hidden.is_(False))
+    site_codes: list[str] = []
+    target_sku_by_site: dict[str, int] = {}
+    for site, target_sku_count in q.order_by(WorkspaceSite.site).all():
+        if not include_deferred and site in AOSEN_DEFERRED_SITES:
+            continue
+        if site not in site_codes:
+            site_codes.append(site)
+        if target_sku_count:
+            target_sku_by_site[site] = max(
+                int(target_sku_by_site.get(site, 0)),
+                int(target_sku_count),
+            )
+    sites = db.query(Site).filter(Site.site.in_(site_codes)).all() if site_codes else []
+    items = _aosen_field_quality_items(db, sites, target_sku_by_site)
+    summary = {
+        "sites": len(items),
+        "pass": sum(1 for item in items if item["status"] == "pass"),
+        "fail": sum(1 for item in items if item["status"] == "fail"),
+        "needs_refresh": sum(
+            1 for item in items if item["status"] == "needs_refresh"),
+        "needs_business_data": sum(
+            1 for item in items if item["status"] == "needs_business_data"),
+        "deferred_sites": sorted(AOSEN_DEFERRED_SITES) if not include_deferred else [],
+        "no_products": sum(1 for item in items if "no_products" in item["issues"]),
+        "coverage_low": sum(1 for item in items if "coverage_low" in item["issues"]),
+        "title_weak": sum(1 for item in items if "title_weak" in item["issues"]),
+        "currency_issues": sum(1 for item in items if (
+            "currency_missing" in item["issues"]
+            or "currency_mismatch" in item["issues"]
+        )),
+        "price_missing": sum(1 for item in items if "price_missing" in item["issues"]),
+        "category_missing": sum(
+            1 for item in items if "category_missing" in item["issues"]),
+        "image_missing": sum(
+            1 for item in items if "image_missing" in item["issues"]),
+        "sku_deviation_high": sum(
+            1 for item in items if "sku_deviation_high" in item["issues"]),
+        "promotions_missing": sum(
+            1 for item in items if "promotions_missing" in item["issues"]),
+        "sales_or_revenue_missing": sum(1 for item in items if (
+            "sales_missing" in item["issues"]
+            or "revenue_missing" in item["issues"]
+        )),
+    }
+    return {
+        "status": "ok",
+        "summary": summary,
+        "verification_source": "runtime_database",
+        "final_acceptance_scope": "production",
+        "items": sorted(items, key=lambda item: (
+            {
+                "fail": 0,
+                "needs_refresh": 1,
+                "needs_business_data": 2,
+                "pass": 3,
+            }[item["status"]],
+            item["site"] or "",
+        )),
+    }
+
+
+def _aosen_action_plan_payload(
+    acceptance: dict,
+    *,
+    field_template: dict | None = None,
+    sku_target_template: dict | None = None,
+    promotion_template: dict | None = None,
+    sales_template: dict | None = None,
+    review_history_template: dict | None = None,
+) -> dict:
+    items = list(acceptance.get("items") or [])
+
+    def group(status: str, action: str) -> dict:
+        rows = [item for item in items if item.get("status") == status]
+        issue_counts: dict[str, int] = {}
+        for item in rows:
+            for issue in item.get("issues") or []:
+                issue_counts[issue] = issue_counts.get(issue, 0) + 1
+        return {
+            "status": status,
+            "count": len(rows),
+            "sites": [item.get("site") for item in rows if item.get("site")],
+            "issue_counts": dict(sorted(issue_counts.items())),
+            "action": action,
+            "items": rows,
+        }
+
+    field_fixes = group(
+        "fail",
+        "修复字段解析或站点配置后重抓：标题、币种、价格、类目、图片、SKU/SPU。",
+    )
+    promotion_refresh = group(
+        "needs_refresh",
+        "部署促销解析后重抓或重算；若页面无法稳定解析，先导入外部促销信号。",
+    )
+    business_data = group(
+        "needs_business_data",
+        "导入 30 日销量/营收，或补齐同 SKU 多次评论历史后重算。",
+    )
+    blocked = bool(
+        field_fixes["count"]
+        or promotion_refresh["count"]
+        or business_data["count"]
+    )
+    return {
+        "status": "blocked" if blocked else "ready",
+        "verification_source": acceptance.get("verification_source") or "runtime_database",
+        "final_acceptance_scope": acceptance.get("final_acceptance_scope") or "production",
+        "summary": acceptance.get("summary") or {},
+        "groups": {
+            "field_fixes": field_fixes,
+            "promotion_refresh": promotion_refresh,
+            "business_data": business_data,
+        },
+        "templates": {
+            "product_field_fixes": field_template or {},
+            "sku_targets": sku_target_template or {},
+            "promotion_signals": promotion_template or {},
+            "sales_signals": sales_template or {},
+            "review_history": review_history_template or {},
+        },
+        "next_steps": [
+            {
+                "key": "deploy",
+                "label": "部署代码到线上",
+                "done_when": "线上接口包含 Aosen 验收、促销信号、销量信号入口。",
+            },
+            {
+                "key": "promotion_refresh",
+                "label": "线上重抓或重算促销",
+                "done_when": "Homary / VidaXL / VonHaus 等站点 promotion_count 不再为 0，且 Aosen 验收不再出现 promotions_missing。",
+            },
+            {
+                "key": "business_data",
+                "label": "导入销量营收",
+                "done_when": "30 日销量/营收字段或同 SKU 历史快照足以支撑 sales/revenue 指标。",
+            },
+            {
+                "key": "sku_targets",
+                "label": "修正 SKU 验收目标",
+                "done_when": "workspace 的 target_sku_count 与客户验收口径一致，Aosen 验收不再出现 sku_deviation_high。",
+            },
+            {
+                "key": "production_acceptance",
+                "label": "线上验收复核",
+                "done_when": "生产环境 /api/admin/spine/acceptance/aosen/field-quality 返回 pass 达到交付要求。",
+            },
+        ],
+    }
+
+
+@router.get("/acceptance/aosen/action-plan")
+def admin_aosen_acceptance_action_plan(
+    tenant: int | None = None,
+    include_hidden: bool = Query(default=False),
+    include_deferred: bool = Query(default=False),
+    template_limit: int = Query(default=100, ge=1, le=5000),
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """把 Aosen 验收结果整理成部署后线上可执行清单。"""
+    acceptance = admin_aosen_field_quality_acceptance(
+        tenant=tenant,
+        include_hidden=include_hidden,
+        include_deferred=include_deferred,
+        user=user,
+        db=db,
+    )
+    include_hidden = _query_bool(include_hidden, default=False)
+    include_deferred = _query_bool(include_deferred, default=False)
+    template_limit = _query_int(template_limit, 100)
+    field_template = _field_fix_template_payload(
+        db,
+        tenant=tenant,
+        include_hidden=include_hidden,
+        exclude_deferred=not include_deferred,
+        limit=template_limit,
+        include_total_count=False,
+    )
+    sku_target_template = _sku_target_template_payload(
+        db,
+        tenant=tenant,
+        include_hidden=include_hidden,
+        exclude_deferred=not include_deferred,
+        limit=template_limit,
+        include_total_count=False,
+    )
+    promotion_template = _promotion_template_payload(
+        db,
+        tenant=tenant,
+        include_hidden=include_hidden,
+        exclude_deferred=not include_deferred,
+        limit=template_limit,
+        include_total_count=False,
+    )
+    sales_template = _sales_template_payload(
+        db,
+        tenant=tenant,
+        include_hidden=include_hidden,
+        exclude_deferred=not include_deferred,
+        limit=template_limit,
+        include_total_count=False,
+    )
+    review_history_template = _review_history_template_payload(
+        db,
+        tenant=tenant,
+        include_hidden=include_hidden,
+        exclude_deferred=not include_deferred,
+        limit=template_limit,
+        include_total_count=False,
+    )
+    return _aosen_action_plan_payload(
+        acceptance,
+        field_template=field_template,
+        sku_target_template=sku_target_template,
+        promotion_template=promotion_template,
+        sales_template=sales_template,
+        review_history_template=review_history_template,
+    )
+
+
 @router.get("/data-quality/{site}/products")
 def admin_data_quality_products(
     site: str,
@@ -1164,14 +2812,29 @@ def admin_data_quality_products(
     weak_title = _weak_product_title_filter()
     expected_currency = currency_for_site(site)
     currency_value = func.upper(func.trim(func.coalesce(Product.currency, "")))
+    sufficient_review_history_skus = (
+        db.query(PriceHistory.sku.label("sku"))
+        .filter(PriceHistory.site == site,
+                PriceHistory.review_count.isnot(None))
+        .group_by(PriceHistory.sku)
+        .having(func.count(func.distinct(PriceHistory.date)) >= 2)
+        .subquery()
+    )
     issue_filters = {
         "title_weak": weak_title,
+        "category_missing": func.length(
+            func.trim(func.coalesce(Product.category_path, ""))
+        ) == 0,
         "price_missing": ~(
             (func.coalesce(Product.sale_price, 0) > 0) |
             (func.coalesce(Product.original_price, 0) > 0)
         ),
         "sales_missing": func.coalesce(Product.thirty_day_sales, 0) <= 0,
         "revenue_missing": func.coalesce(Product.thirty_day_revenue, 0) <= 0,
+        "sales_history_insufficient": and_(
+            func.coalesce(Product.review_count, 0) > 0,
+            ~Product.sku.in_(db.query(sufficient_review_history_skus.c.sku)),
+        ),
     }
     if expected_currency:
         issue_filters["currency_missing"] = currency_value == ""
@@ -1179,6 +2842,15 @@ def admin_data_quality_products(
             currency_value != "",
             currency_value != expected_currency,
         )
+    image_missing_ids = [
+        int(product_id)
+        for product_id, image_urls in (
+            db.query(Product.id, Product.image_urls)
+            .filter(Product.site == site)
+            .all()
+        )
+        if _missing_image(image_urls)
+    ]
     product_count = int(db.query(func.count(Product.id))
                         .filter(Product.site == site).scalar() or 0)
     trend_count = int(db.query(func.count(Trend.id))
@@ -1225,10 +2897,16 @@ def admin_data_quality_products(
                  .scalar() or 0)
         for key, expr in issue_filters.items()
     }
-    product_issue_total = int(db.query(func.count(Product.id))
-                              .filter(Product.site == site,
-                                      or_(*issue_filters.values()))
-                              .scalar() or 0)
+    issue_counts["image_missing"] = len(image_missing_ids)
+    sql_issue_ids = {
+        int(product_id)
+        for (product_id,) in (
+            db.query(Product.id)
+            .filter(Product.site == site, or_(*issue_filters.values()))
+            .all()
+        )
+    }
+    product_issue_total = len(sql_issue_ids | set(image_missing_ids))
     issue_counts.update(trend_issue_counts)
     issue_counts.update(job_issue_counts)
     issue_counts.update(site_issue_counts)
@@ -1370,10 +3048,13 @@ def admin_data_quality_products(
 
     q = db.query(Product).filter(Product.site == site)
     if issue_value:
-        if issue_value not in issue_filters:
+        if issue_value == "image_missing":
+            q = q.filter(Product.id.in_(image_missing_ids or [-1]))
+        elif issue_value not in issue_filters:
             raise HTTPException(
                 422,
-                "issue 必须是 title_weak/price_missing/currency_missing/"
+                "issue 必须是 title_weak/category_missing/image_missing/"
+                "price_missing/currency_missing/"
                 "currency_mismatch/sales_missing/revenue_missing/"
                 "sales_history_insufficient/traffic_missing/conversion_missing/"
                 "latest_job_failed/partial_crawl/"
@@ -1382,15 +3063,29 @@ def admin_data_quality_products(
                 "no_products/coverage_low/sku_deviation_high/"
                 "promotions_missing/pdp_price_required/never_crawled",
             )
-        q = q.filter(issue_filters[issue_value])
+        else:
+            q = q.filter(issue_filters[issue_value])
     else:
-        q = q.filter(or_(*issue_filters.values()))
+        base_issue = or_(*issue_filters.values())
+        if image_missing_ids:
+            q = q.filter(or_(base_issue, Product.id.in_(image_missing_ids)))
+        else:
+            q = q.filter(base_issue)
 
     total = q.count()
     rows = (q.order_by(Product.updated_time.desc(), Product.id.desc())
             .offset((page_value - 1) * limit_value)
             .limit(limit_value)
             .all())
+    def product_issues(row: Product) -> list[str]:
+        issues = _product_quality_issues(row)
+        if (
+            issue_value == "sales_history_insufficient"
+            and "sales_history_insufficient" not in issues
+        ):
+            issues.append("sales_history_insufficient")
+        return issues
+
     return {
         "site": site,
         "issue": issue_value or "all",
@@ -1425,7 +3120,7 @@ def admin_data_quality_products(
             "updated_time": row.updated_time.isoformat() if row.updated_time else None,
             "latest_job": quality_row.get("latest_job"),
             "suggested_action": quality_row.get("suggested_action"),
-            "issues": _product_quality_issues(row),
+            "issues": product_issues(row),
         } for row in rows],
     }
 
@@ -1580,6 +3275,302 @@ def admin_promotions_rebuild(
     }
 
 
+@router.post("/sku-targets/import")
+def admin_sku_targets_import(
+    payload: dict,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+    ip: str = Header(default="", alias="X-Forwarded-For"),
+) -> dict:
+    """导入客户验收口径的目标 SKU 数，更新 workspace_sites.target_sku_count。"""
+    actor = _require_super_admin(user, db)
+    ip = ip if isinstance(ip, str) else ""
+    rows = _sku_target_rows_from_payload(payload)
+    validation = _validate_sku_target_rows(db, rows)
+    if validation["errors"] or not validation["valid_rows"]:
+        raise HTTPException(422, {"error": "invalid_sku_targets", **validation})
+
+    updated = 0
+    touched_sites: set[str] = set()
+    by_site: dict[str, dict] = {}
+    for raw in validation.get("valid_items") or validation["items"]:
+        workspace_site_ids = raw.get("workspace_site_ids") or []
+        rows_to_update = (
+            db.query(WorkspaceSite)
+            .filter(WorkspaceSite.id.in_(workspace_site_ids))
+            .all()
+        )
+        for row in rows_to_update:
+            row.target_sku_count = raw["target_sku_count"]
+            config = dict(row.report_config or {})
+            config["target_sku_count_source"] = "aosen_import"
+            if raw.get("note"):
+                config["target_sku_count_note"] = raw["note"]
+            row.report_config = config
+            updated += 1
+            touched_sites.add(row.site)
+            bucket = by_site.setdefault(row.site, {"rows": 0, "workspace_sites": 0})
+            bucket["rows"] += 1
+            bucket["workspace_sites"] += 1
+    if updated == 0:
+        raise HTTPException(422, {"error": "no_sku_targets_to_import"})
+    record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
+                 action="sku_targets.import", target_type="site",
+                 target_id=",".join(sorted(touched_sites)),
+                 detail={"sites": sorted(touched_sites), "rows": updated,
+                         "by_site": by_site},
+                 ip=ip or None)
+    db.commit()
+    return {
+        "status": "imported",
+        "rows": updated,
+        "sites": sorted(touched_sites),
+        "by_site": by_site,
+        "imported_at": datetime.utcnow().isoformat(),
+    }
+
+
+@router.get("/sku-targets/template")
+def admin_sku_targets_template(
+    tenant: int | None = None,
+    include_hidden: bool = Query(default=False),
+    include_deferred: bool = Query(default=False),
+    limit: int = Query(default=5000, ge=1, le=5000),
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """生成 SKU 目标口径修正模板，默认排除 vidaxl_us / vidaxl_ca。"""
+    _require_super_admin(user, db)
+    include_hidden = _query_bool(include_hidden, default=False)
+    include_deferred = _query_bool(include_deferred, default=False)
+    return _sku_target_template_payload(
+        db,
+        tenant=tenant,
+        include_hidden=include_hidden,
+        exclude_deferred=not include_deferred,
+        limit=limit,
+    )
+
+
+@router.post("/sku-targets/validate")
+def admin_sku_targets_validate(
+    payload: dict,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """预校验 SKU 目标口径 CSV，不写库。"""
+    _require_super_admin(user, db)
+    rows = _sku_target_rows_from_payload(payload)
+    return _validate_sku_target_rows(db, rows)
+
+
+@router.post("/product-field-fixes/import")
+def admin_product_field_fixes_import(
+    payload: dict,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+    ip: str = Header(default="", alias="X-Forwarded-For"),
+) -> dict:
+    """导入外部商品字段修正，补齐标题/币种/价格/类目/图片/SPU。"""
+    actor = _require_super_admin(user, db)
+    ip = ip if isinstance(ip, str) else ""
+    rows = _field_fix_rows_from_payload(payload)
+    validation = _validate_field_fix_rows(db, rows)
+    if validation["errors"] or not validation["valid_rows"]:
+        raise HTTPException(422, {"error": "invalid_product_field_fixes", **validation})
+
+    imported = 0
+    touched_sites: set[str] = set()
+    by_site: dict[str, dict] = {}
+    for raw in validation.get("valid_items") or validation["items"]:
+        product = (db.query(Product)
+                   .filter(Product.site == raw["site"], Product.sku == raw["sku"])
+                   .first())
+        if product is None:
+            continue
+        for field, value in (raw.get("updates") or {}).items():
+            setattr(product, field, value)
+        product.updated_time = datetime.utcnow()
+        imported += 1
+        touched_sites.add(raw["site"])
+        by_site.setdefault(raw["site"], {"rows": 0})
+        by_site[raw["site"]]["rows"] += 1
+    if imported == 0:
+        raise HTTPException(422, {"error": "no_product_field_fixes_to_import"})
+    db.flush()
+    refresh_site_metrics(db, sorted(touched_sites))
+    record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
+                 action="product_field_fixes.import", target_type="site",
+                 target_id=",".join(sorted(touched_sites)),
+                 detail={"sites": sorted(touched_sites), "rows": imported,
+                         "by_site": by_site},
+                 ip=ip or None)
+    db.commit()
+    return {
+        "status": "imported",
+        "rows": imported,
+        "sites": sorted(touched_sites),
+        "by_site": by_site,
+        "imported_at": datetime.utcnow().isoformat(),
+    }
+
+
+@router.get("/product-field-fixes/template")
+def admin_product_field_fixes_template(
+    tenant: int | None = None,
+    include_hidden: bool = Query(default=False),
+    include_deferred: bool = Query(default=False),
+    limit: int = Query(default=5000, ge=1, le=5000),
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """生成商品字段修正模板，默认排除 vidaxl_us / vidaxl_ca。"""
+    _require_super_admin(user, db)
+    include_hidden = _query_bool(include_hidden, default=False)
+    include_deferred = _query_bool(include_deferred, default=False)
+    return _field_fix_template_payload(
+        db,
+        tenant=tenant,
+        include_hidden=include_hidden,
+        exclude_deferred=not include_deferred,
+        limit=limit,
+    )
+
+
+@router.post("/product-field-fixes/validate")
+def admin_product_field_fixes_validate(
+    payload: dict,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """预校验商品字段修正 CSV，不写库。"""
+    _require_super_admin(user, db)
+    rows = _field_fix_rows_from_payload(payload)
+    return _validate_field_fix_rows(db, rows)
+
+
+@router.post("/promotion-signals/import")
+def admin_promotion_signals_import(
+    payload: dict,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+    ip: str = Header(default="", alias="X-Forwarded-For"),
+) -> dict:
+    """导入外部促销信号。
+
+    支持 payload.rows=[{site,sku,promotion_name,...}] 或 csv 文本。
+    适用于历史商品没有 PDP 促销字段、但业务侧能提供 coupon/bundle/free shipping
+    活动清单的场景。
+    """
+    actor = _require_super_admin(user, db)
+    ip = ip if isinstance(ip, str) else ""
+    rows = _promotion_rows_from_payload(payload)
+    validation = _validate_promotion_rows(db, rows)
+    if validation["errors"] or not validation["valid_rows"]:
+        raise HTTPException(422, {"error": "invalid_promotion_signals", **validation})
+
+    imported = 0
+    updated = 0
+    created = 0
+    touched_sites: set[str] = set()
+    by_site: dict[str, dict] = {}
+    for raw in validation.get("valid_items") or validation["items"]:
+        existing = (db.query(Promotion)
+                    .filter(Promotion.site == raw["site"],
+                            Promotion.sku == raw["sku"],
+                            Promotion.promotion_name == raw["promotion_name"])
+                    .first())
+        was_created = existing is None
+        start_time = _promotion_datetime(raw.get("start_time"))
+        end_time = _promotion_datetime(raw.get("end_time"))
+        if existing is None:
+            existing = Promotion(site=raw["site"], sku=raw["sku"])
+            db.add(existing)
+            created += 1
+        else:
+            updated += 1
+        existing.promotion_type = raw["promotion_type"]
+        existing.promotion_name = raw["promotion_name"]
+        existing.original_price = raw.get("original_price")
+        existing.promotion_price = raw.get("promotion_price")
+        existing.discount_percent = raw.get("discount_percent")
+        existing.threshold = raw.get("threshold")
+        existing.start_time = start_time
+        existing.end_time = end_time
+        existing.product_title = raw.get("product_title")
+        existing.product_image = raw.get("product_image")
+        imported += 1
+        touched_sites.add(raw["site"])
+        by_site.setdefault(raw["site"], {"rows": 0, "created": 0, "updated": 0})
+        by_site[raw["site"]]["rows"] += 1
+        if was_created:
+            by_site[raw["site"]]["created"] += 1
+        else:
+            by_site[raw["site"]]["updated"] += 1
+    if imported == 0:
+        raise HTTPException(422, {"error": "no_promotion_signals_to_import"})
+    db.flush()
+    # Recompute per-site created/updated from totals; audit detail only needs site rows.
+    for site in touched_sites:
+        by_site[site]["promotion_count"] = int(
+            db.query(func.count(Promotion.id))
+            .filter(Promotion.site == site)
+            .scalar() or 0
+        )
+    refresh_site_metrics(db, sorted(touched_sites))
+    record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
+                 action="promotion_signals.import", target_type="site",
+                 target_id=",".join(sorted(touched_sites)),
+                 detail={"sites": sorted(touched_sites), "rows": imported,
+                         "created": created, "updated": updated,
+                         "by_site": by_site},
+                 ip=ip or None)
+    db.commit()
+    return {
+        "status": "imported",
+        "rows": imported,
+        "created": created,
+        "updated": updated,
+        "sites": sorted(touched_sites),
+        "by_site": by_site,
+        "imported_at": datetime.utcnow().isoformat(),
+    }
+
+
+@router.get("/promotion-signals/template")
+def admin_promotion_signals_template(
+    tenant: int | None = None,
+    include_hidden: bool = Query(default=False),
+    include_deferred: bool = Query(default=False),
+    limit: int = Query(default=5000, ge=1, le=5000),
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """生成外部促销导入模板，默认排除 vidaxl_us / vidaxl_ca。"""
+    _require_super_admin(user, db)
+    include_hidden = _query_bool(include_hidden, default=False)
+    include_deferred = _query_bool(include_deferred, default=False)
+    return _promotion_template_payload(
+        db,
+        tenant=tenant,
+        include_hidden=include_hidden,
+        exclude_deferred=not include_deferred,
+        limit=limit,
+    )
+
+
+@router.post("/promotion-signals/validate")
+def admin_promotion_signals_validate(
+    payload: dict,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """预校验外部促销导入内容，不写库。"""
+    _require_super_admin(user, db)
+    rows = _promotion_rows_from_payload(payload)
+    return _validate_promotion_rows(db, rows)
+
+
 @router.post("/analytics/recompute")
 def admin_analytics_recompute(
     payload: dict,
@@ -1623,6 +3614,275 @@ def admin_analytics_recompute(
         "by_site": by_site,
         "recomputed_at": datetime.utcnow().isoformat(),
     }
+
+
+@router.post("/sales-signals/import")
+def admin_sales_signals_import(
+    payload: dict,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+    ip: str = Header(default="", alias="X-Forwarded-For"),
+) -> dict:
+    """导入外部 30 天销量/营收信号。
+
+    支持 payload.rows=[{site,sku,date,thirty_day_sales,thirty_day_revenue}]
+    或 csv 文本。用于评论历史不足时的显式业务闭环，不伪造估算。
+    """
+    actor = _require_super_admin(user, db)
+    rows = _sales_rows_from_payload(payload)
+    validation = _validate_sales_rows(db, rows)
+    if validation["errors"] or not validation["valid_rows"]:
+        raise HTTPException(422, {"error": "invalid_sales_signals", **validation})
+
+    imported = 0
+    by_site: dict[str, dict] = {}
+    touched_sites: set[str] = set()
+    touched_days: set[tuple[str, date]] = set()
+    for raw in validation.get("valid_items") or validation["items"]:
+        site = raw["site"]
+        sku = raw["sku"]
+        day = _parse_metric_date(raw["date"])
+        product = (db.query(Product)
+                   .filter(Product.site == site, Product.sku == sku)
+                   .first())
+        if product is None:
+            continue
+        sales = raw.get("thirty_day_sales")
+        revenue = raw.get("thirty_day_revenue")
+        if sales is not None:
+            product.thirty_day_sales = int(sales)
+        if revenue is None and sales is not None and product.sale_price is not None:
+            revenue = round(int(sales) * float(product.sale_price), 2)
+        if revenue is not None:
+            product.thirty_day_revenue = round(float(revenue), 2)
+        product.updated_time = datetime.utcnow()
+        imported += 1
+        touched_sites.add(site)
+        touched_days.add((site, day))
+        by_site.setdefault(site, {
+            "rows": 0,
+            "sales": 0,
+            "revenue": 0.0,
+        })
+        by_site[site]["rows"] += 1
+        by_site[site]["sales"] += int(product.thirty_day_sales or 0)
+        by_site[site]["revenue"] += float(product.thirty_day_revenue or 0)
+
+    if imported == 0:
+        raise HTTPException(422, {"error": "no_sales_signals_to_import"})
+
+    for site, day in touched_days:
+        trend = (db.query(Trend)
+                 .filter(Trend.site == site, Trend.date == day)
+                 .first())
+        seed = _trend_seed_for_site_date(db, site, day)
+        if trend is None:
+            trend = Trend(site=site, date=day, **seed)
+            db.add(trend)
+        else:
+            trend.sku_count = seed["sku_count"]
+            trend.new_product_count = seed["new_product_count"]
+            trend.estimated_sales = seed["estimated_sales"]
+            trend.estimated_revenue = seed["estimated_revenue"]
+            trend.avg_rating = seed["avg_rating"]
+            trend.review_total = seed["review_total"]
+    for site in touched_sites:
+        by_site[site]["revenue"] = round(float(by_site[site]["revenue"]), 2)
+    refresh_site_metrics(db, sorted(touched_sites))
+    record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
+                 action="sales_signals.import", target_type="site",
+                 target_id=",".join(sorted(touched_sites)),
+                 detail={"sites": sorted(touched_sites), "rows": imported,
+                         "by_site": by_site},
+                 ip=ip or None)
+    db.commit()
+    return {
+        "status": "imported",
+        "rows": imported,
+        "sites": sorted(touched_sites),
+        "by_site": by_site,
+        "imported_at": datetime.utcnow().isoformat(),
+    }
+
+
+@router.get("/sales-signals/template")
+def admin_sales_signals_template(
+    tenant: int | None = None,
+    include_hidden: bool = Query(default=False),
+    include_deferred: bool = Query(default=False),
+    date_value: str | None = Query(default=None, alias="date"),
+    limit: int = Query(default=5000, ge=1, le=5000),
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """生成外部销量/营收导入模板，默认排除 vidaxl_us / vidaxl_ca。"""
+    _require_super_admin(user, db)
+    include_hidden = _query_bool(include_hidden, default=False)
+    include_deferred = _query_bool(include_deferred, default=False)
+    date_text = date_value if isinstance(date_value, str) else None
+    day = _parse_metric_date(date_text) if date_text else date.today()
+    return _sales_template_payload(
+        db,
+        tenant=tenant,
+        include_hidden=include_hidden,
+        day=day,
+        exclude_deferred=not include_deferred,
+        limit=limit,
+    )
+
+
+@router.post("/sales-signals/validate")
+def admin_sales_signals_validate(
+    payload: dict,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """预校验 30 天销量/营收导入内容，不写库。"""
+    _require_super_admin(user, db)
+    rows = _sales_rows_from_payload(payload)
+    return _validate_sales_rows(db, rows)
+
+
+@router.post("/review-history/import")
+def admin_review_history_import(
+    payload: dict,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+    ip: str = Header(default="", alias="X-Forwarded-For"),
+) -> dict:
+    """导入同 SKU 评论数历史快照并立即重算 30 日销量/营收。
+
+    支持 payload.rows=[{site,sku,date,review_count,sale_price,original_price}]
+    或 csv 文本。用于补齐评论增量估算所需的至少两次历史快照。
+    """
+    actor = _require_super_admin(user, db)
+    rows = _review_history_rows_from_payload(payload)
+    validation = _validate_review_history_rows(db, rows)
+    if validation["errors"] or not validation["valid_rows"]:
+        raise HTTPException(422, {"error": "invalid_review_history", **validation})
+
+    imported = 0
+    created = 0
+    updated = 0
+    by_site: dict[str, dict] = {}
+    touched_sites: set[str] = set()
+    for raw in validation.get("valid_items") or validation["items"]:
+        site = raw["site"]
+        sku = raw["sku"]
+        day = _parse_metric_date(raw["date"])
+        product = (db.query(Product)
+                   .filter(Product.site == site, Product.sku == sku)
+                   .first())
+        if product is None:
+            continue
+        row = (db.query(PriceHistory)
+               .filter(PriceHistory.site == site,
+                       PriceHistory.sku == sku,
+                       PriceHistory.date == day)
+               .first())
+        is_new = row is None
+        if row is None:
+            row = PriceHistory(site=site, sku=sku, date=day)
+            db.add(row)
+        row.review_count = int(raw["review_count"])
+        sale_price = raw.get("sale_price")
+        original_price = raw.get("original_price")
+        row.sale_price = (
+            float(sale_price)
+            if sale_price is not None
+            else product.sale_price
+        )
+        row.original_price = (
+            float(original_price)
+            if original_price is not None
+            else product.original_price
+        )
+        if day >= date.today() and row.review_count is not None:
+            product.review_count = row.review_count
+        imported += 1
+        created += 1 if is_new else 0
+        updated += 0 if is_new else 1
+        touched_sites.add(site)
+        by_site.setdefault(site, {
+            "rows": 0,
+            "created": 0,
+            "updated": 0,
+            "estimated_skus": 0,
+            "estimated_sales": 0,
+            "estimated_revenue": 0.0,
+            "insufficient_history_skus": 0,
+        })
+        by_site[site]["rows"] += 1
+        by_site[site]["created" if is_new else "updated"] += 1
+
+    if imported == 0:
+        raise HTTPException(422, {"error": "no_review_history_to_import"})
+
+    db.flush()
+    from ..analytics import recompute_site
+    recomputed: dict[str, dict] = {}
+    for site in sorted(touched_sites):
+        result = recompute_site(db, site)
+        recomputed[site] = result
+        by_site[site]["estimated_skus"] = int(result.get("estimated_skus") or 0)
+        by_site[site]["estimated_sales"] = int(result.get("estimated_sales") or 0)
+        by_site[site]["estimated_revenue"] = round(
+            float(result.get("estimated_revenue") or 0), 2)
+        by_site[site]["insufficient_history_skus"] = int(
+            result.get("insufficient_history_skus") or 0)
+    refresh_site_metrics(db, sorted(touched_sites))
+    record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
+                 action="review_history.import", target_type="site",
+                 target_id=",".join(sorted(touched_sites)),
+                 detail={"sites": sorted(touched_sites), "rows": imported,
+                         "created": created, "updated": updated,
+                         "by_site": by_site, "recomputed": recomputed},
+                 ip=ip or None)
+    db.commit()
+    return {
+        "status": "imported",
+        "rows": imported,
+        "created": created,
+        "updated": updated,
+        "sites": sorted(touched_sites),
+        "by_site": by_site,
+        "recomputed": recomputed,
+        "imported_at": datetime.utcnow().isoformat(),
+    }
+
+
+@router.get("/review-history/template")
+def admin_review_history_template(
+    tenant: int | None = None,
+    include_hidden: bool = Query(default=False),
+    include_deferred: bool = Query(default=False),
+    limit: int = Query(default=5000, ge=1, le=5000),
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """生成评论历史快照导入模板，默认排除 vidaxl_us / vidaxl_ca。"""
+    _require_super_admin(user, db)
+    include_hidden = _query_bool(include_hidden, default=False)
+    include_deferred = _query_bool(include_deferred, default=False)
+    return _review_history_template_payload(
+        db,
+        tenant=tenant,
+        include_hidden=include_hidden,
+        exclude_deferred=not include_deferred,
+        limit=limit,
+    )
+
+
+@router.post("/review-history/validate")
+def admin_review_history_validate(
+    payload: dict,
+    user: str = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """预校验评论历史快照导入内容，不写库。"""
+    _require_super_admin(user, db)
+    rows = _review_history_rows_from_payload(payload)
+    return _validate_review_history_rows(db, rows)
 
 
 @router.post("/third-party-metrics/import")
@@ -1768,12 +4028,16 @@ def jobs_list(status: str | None = None, dataset: str | None = None,
               tenant: int | None = None, source: str = "all",
               page: int = 1, size: int = 20,
               failure_code: str | None = None,
+              created_from: str | None = None,
+              created_to: str | None = None,
               user: str = Depends(require_user), db: Session = Depends(get_db)) -> dict:
     _require_super_admin(user, db)
     return _queue_jobs_list(db, status=status, dataset=dataset,
                             tenant=tenant, source=source,
                             page=page, size=size,
-                            failure_code=failure_code)
+                            failure_code=failure_code,
+                            created_from=created_from,
+                            created_to=created_to)
 
 
 @router.post("/jobs/maintenance")
@@ -1818,7 +4082,7 @@ def job_detail(job_id: int, source: str = "spine",
         if j is None:
             raise HTTPException(404, {"error": "job_not_found", "job_id": job_id,
                                       "source": source})
-        return _crawl_job_dict(j, db=db)
+        return _crawl_job_dict(j, db=db, live_progress=True)
     if source == "ondemand":
         j = db.get(OnDemandJob, job_id)
         if j is None:

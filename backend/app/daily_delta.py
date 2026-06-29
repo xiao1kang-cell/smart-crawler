@@ -19,11 +19,12 @@ import re
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import desc, func
+from sqlalchemy import desc, exists, func, or_
 
 from .db import SessionLocal
 from .models import (
     CrawlJob, Product, PriceHistory, Promotion, Review, Site, Trend,
+    WorkspaceSite,
 )
 
 logger = logging.getLogger("smart-crawler.daily-delta")
@@ -104,7 +105,15 @@ def top_sku_refresh_job(top_n: int = 1000) -> dict:
                 Product.site,
                 func.count(Product.id).label("hi_value"),
             )
+            .join(Site, Site.site == Product.site)
             .filter(
+                or_(Site.track_status.is_(None), Site.track_status == "tracking"),
+                exists().where(
+                    WorkspaceSite.site == Product.site
+                ).where(
+                    WorkspaceSite.enabled.is_(True),
+                    WorkspaceSite.hidden.is_(False),
+                ),
                 (Product.thirty_day_sales >= 50) | (Product.review_count >= 100)
             )
             .group_by(Product.site)

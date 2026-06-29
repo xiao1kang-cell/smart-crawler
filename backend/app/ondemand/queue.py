@@ -38,6 +38,53 @@ TERMINAL = ("success", "partial", "failed")
 PENDING = ("queued", "running")
 
 
+def _enqueue_ondemand_webhook(s, job: OnDemandJob | None, *,
+                              event_type: str,
+                              result: dict | None = None,
+                              error: str | None = None) -> None:
+    if job is None:
+        return
+    try:
+        from ..webhooks import enqueue_delivery
+
+        enqueue_delivery(
+            s,
+            workspace_id=job.workspace_id,
+            event_type=event_type,
+            job_kind="ondemand",
+            job_id=job.id,
+            status=job.status or "queued",
+            created_at=job.created_at,
+            finished_at=job.finished_at,
+            error=error if error is not None else job.error,
+            result={
+                "url": job.url,
+                "platform": job.platform,
+                "kind": job.kind,
+                "batch_id": job.batch_id,
+                "listing_count": job.listing_count or 0,
+                "review_count": job.review_count or 0,
+                "attempts": job.attempts or 0,
+                "notes": job.notes or [],
+                "item_skus": job.item_skus or [],
+                **(result or {}),
+            },
+        )
+    except Exception as exc:
+        logger.warning("enqueue ondemand webhook failed job=%s: %s",
+                       getattr(job, "id", None), exc)
+
+
+def _dispatch_webhooks() -> None:
+    try:
+        from ..webhooks import dispatch_pending
+
+        with session_scope() as s:
+            dispatch_pending(s, limit=10)
+    except Exception as exc:
+        logger.warning("dispatch ondemand webhook failed: %s", exc)
+
+
 def _status_of(listing_count: int, review_count: int, notes: list) -> str:
     """与 ondemand_jobs.record_job 同口径:无数据=failed、有数据带 notes=partial。"""
     if listing_count == 0 and review_count == 0:
@@ -103,16 +150,20 @@ def process_one(job_id: int) -> None:
         job.notes = notes
         job.item_skus = skus
         job.error = error
+        _enqueue_ondemand_webhook(s, job, event_type="job.completed",
+                                  error=error)
 
 
 def _run_loop() -> None:
     while True:
+        _dispatch_webhooks()
         job_id = _q.get()
         try:
             process_one(job_id)
         except Exception:                          # 兜底,绝不让循环退出
             logger.exception("worker loop error on job %s", job_id)
         finally:
+            _dispatch_webhooks()
             _q.task_done()
 
 
@@ -131,6 +182,9 @@ def ensure_worker() -> None:
 
 def enqueue(job_id: int) -> None:
     """把一条 job 加入队列,并确保 worker 在跑。"""
+    with session_scope() as s:
+        _enqueue_ondemand_webhook(s, s.get(OnDemandJob, job_id),
+                                  event_type="job.triggered")
     ensure_worker()
     _q.put(job_id)
 
