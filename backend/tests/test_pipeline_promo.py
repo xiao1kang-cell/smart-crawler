@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.models import Product
+from app.models import PriceHistory, Product
 from app import pipeline
 from app.pipeline import normalize, to_price, upsert_products
 from app.runner import _detect_promotions
@@ -144,6 +144,42 @@ def test_detect_promotions_from_localized_discount_text():
     assert row.promotion_type == "price_promotion"
     assert row.discount_percent == 20
     assert "20 % Rabatt" in row.promotion_name
+
+
+def test_upsert_can_skip_empty_price_history_for_url_only_rows():
+    db = _session()
+    stats = upsert_products(db, "x", [{
+        "sku": "S1",
+        "title": "URL only product",
+        "product_url": "https://example.com/p/s1",
+        "site": "x",
+        "_skip_price_history_if_no_price": True,
+    }])
+    db.commit()
+
+    assert stats["inserted"] == 1
+    assert db.query(Product).filter(
+        Product.site == "x", Product.sku == "S1").count() == 1
+    assert db.query(PriceHistory).filter(
+        PriceHistory.site == "x", PriceHistory.sku == "S1").count() == 0
+
+
+def test_upsert_does_not_skip_price_history_when_price_is_present():
+    db = _session()
+    stats = upsert_products(db, "x", [{
+        "sku": "S1",
+        "title": "Priced product",
+        "product_url": "https://example.com/p/s1",
+        "site": "x",
+        "sale_price": 19.99,
+        "_skip_price_history_if_no_price": True,
+    }])
+    db.commit()
+
+    assert stats["inserted"] == 1
+    row = db.query(PriceHistory).filter(
+        PriceHistory.site == "x", PriceHistory.sku == "S1").one()
+    assert row.sale_price == 19.99
 
 
 def test_detect_promotions_extracts_common_campaign_metadata():
@@ -383,6 +419,80 @@ def test_upsert_preserves_better_existing_title_from_weak_update():
     assert row.title == "Premium Walnut Storage Cabinet with Doors"
     assert row.sale_price == 1399.0
     assert row.original_price is None
+
+
+def test_upsert_defaults_missing_review_count_to_zero_for_new_product():
+    db = _session()
+    upsert_products(db, "x", [{
+        "site": "x",
+        "sku": "SKU-1",
+        "title": "No Review Product",
+        "product_url": "https://example.com/products/sku-1",
+        "sale_price": "19.99",
+    }])
+    db.commit()
+
+    row = db.query(Product).filter(Product.site == "x", Product.sku == "SKU-1").one()
+    assert row.review_count == 0
+
+    from app.models import PriceHistory
+    history = db.query(PriceHistory).filter(
+        PriceHistory.site == "x",
+        PriceHistory.sku == "SKU-1",
+    ).one()
+    assert history.review_count == 0
+
+
+def test_upsert_missing_review_count_does_not_overwrite_existing_signal():
+    db = _session()
+    upsert_products(db, "x", [{
+        "site": "x",
+        "sku": "SKU-1",
+        "title": "Reviewed Product",
+        "product_url": "https://example.com/products/sku-1",
+        "sale_price": "19.99",
+        "review_count": 12,
+    }])
+    db.commit()
+
+    upsert_products(db, "x", [{
+        "site": "x",
+        "sku": "SKU-1",
+        "title": "Reviewed Product Updated",
+        "product_url": "https://example.com/products/sku-1",
+        "sale_price": "21.99",
+    }])
+    db.commit()
+
+    row = db.query(Product).filter(Product.site == "x", Product.sku == "SKU-1").one()
+    assert row.review_count == 12
+    assert row.sale_price == 21.99
+
+
+def test_upsert_explicit_zero_review_count_can_overwrite_existing_signal():
+    db = _session()
+    upsert_products(db, "x", [{
+        "site": "x",
+        "sku": "SKU-1",
+        "title": "Reviewed Product",
+        "product_url": "https://example.com/products/sku-1",
+        "sale_price": "19.99",
+        "review_count": "1,234 reviews",
+    }])
+    db.commit()
+
+    upsert_products(db, "x", [{
+        "site": "x",
+        "sku": "SKU-1",
+        "title": "Reviewed Product",
+        "product_url": "https://example.com/products/sku-1",
+        "sale_price": "19.99",
+        "review_count": 0,
+    }])
+    db.commit()
+
+    row = db.query(Product).filter(Product.site == "x", Product.sku == "SKU-1").one()
+    assert row.review_count == 0
 
 
 def test_upsert_products_chunks_existing_sku_lookup(monkeypatch):

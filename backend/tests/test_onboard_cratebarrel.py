@@ -73,6 +73,26 @@ _SITEMAP_PDP_TWO_XML = (
     "</urlset>"
 )
 
+_BROWSE_MODEL_URL = (
+    f"https://www.crateandbarrel.com/single-product-page/get-browse-model/{_SKU}"
+)
+_BROWSE_MODEL_JSON = """
+{
+  "browseDto": {
+    "rewards": {
+      "currentPrice": 1299.0,
+      "sku": 507728
+    },
+    "description": "A refined upholstered bed frame.",
+    "reviews": {
+      "averageRating": 4.7,
+      "reviewCount": 234
+    },
+    "heroImageUrl": "https://cb.scene7.com/is/image/Crate/LowellBedHero"
+  }
+}
+"""
+
 
 def _site() -> Site:
     s = Site()
@@ -133,6 +153,15 @@ def test_cratebarrel_curl_path_counts_api(monkeypatch):
             final_url="https://www.crateandbarrel.com/assets/sitemap-pdp.xml",
             fetcher="curl_cffi",
         ),
+        _BROWSE_MODEL_URL: FetchResult(
+            ok=True,
+            url=_BROWSE_MODEL_URL,
+            status=200,
+            text=_BROWSE_MODEL_JSON,
+            content=_BROWSE_MODEL_JSON.encode(),
+            final_url=_BROWSE_MODEL_URL,
+            fetcher="curl_cffi",
+        ),
     }
 
     monkeypatch.setattr(crawler, "make_fetcher",
@@ -158,6 +187,43 @@ def test_cratebarrel_curl_path_counts_api(monkeypatch):
     assert p["product_url"] == _PDP_URL
     assert p["site"] == "cratebarrel"
     assert p["currency"] == "USD"
+    assert p["sale_price"] == 1299.0
+    assert p["original_price"] == 1299.0
+    assert p["ratings"] == 4.7
+    assert p["review_count"] == 234
+
+
+def test_cratebarrel_merge_from_browse_model():
+    from app.crawlers.cratebarrel import CrateBarrelCrawler
+
+    crawler = CrateBarrelCrawler(_site())
+    row = {
+        "sku": _SKU,
+        "title": "Lowell Bed",
+        "image_urls": [],
+        "currency": "USD",
+    }
+
+    changed = crawler._merge_from_browse_model(
+        row,
+        {
+            "browseDto": {
+                "rewards": {"currentPrice": 1299.0},
+                "regularPrice": 1499.0,
+                "description": "A refined upholstered bed frame.",
+                "reviewSummary": {"averageRating": "4.5", "reviewCount": "123"},
+                "imageUrl": "https://cb.scene7.com/is/image/Crate/LowellBed",
+            }
+        },
+    )
+
+    assert changed is True
+    assert row["sale_price"] == 1299.0
+    assert row["original_price"] == 1499.0
+    assert row["description"] == "A refined upholstered bed frame."
+    assert row["ratings"] == 4.5
+    assert row["review_count"] == 123
+    assert row["image_urls"] == ["https://cb.scene7.com/is/image/Crate/LowellBed"]
 
 
 def test_cratebarrel_counts_full_sitemap_total_even_when_limited(monkeypatch):
@@ -281,6 +347,7 @@ def test_cratebarrel_parse_sitemap_entry_not_degraded():
     assert row["site"] == "cratebarrel"
     assert row["status"] == "on_sale"
     assert row["currency"] == "USD"
+    assert row["_skip_price_history_if_no_price"] is True
 
 
 # ---------------------------------------------------------------------------

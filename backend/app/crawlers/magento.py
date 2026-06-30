@@ -256,14 +256,16 @@ class MagentoCrawler(BaseCrawler):
         tree = HTMLParser(html)
 
         title = data.get("name") or self._meta(tree, "og:title")
-        sale = data.get("price")
-        if sale is None:
-            sale = self._og_price(tree)
+        sale = GenericCrawler._num(data.get("price"))
+        if sale is None or sale <= 0:
+            sale = self._dom_price(tree) or self._og_price(tree)
         if not title or sale is None:        # 无商品价格 → 分类/内容页
             return None
 
         self.snapshot(url.rstrip("/").split("/")[-1][:80], html)
-        original = data.get("original_price") or sale
+        original = GenericCrawler._num(data.get("original_price")) or sale
+        if original is None or original <= 0:
+            original = sale
         imgs = data.get("images") or (
             [self._meta(tree, "og:image")] if self._meta(tree, "og:image") else [])
         slug = url.rstrip("/").split("/")[-1].split("?")[0][:80]
@@ -387,6 +389,25 @@ class MagentoCrawler(BaseCrawler):
                     return p
         return None
 
+    def _dom_price(self, tree: HTMLParser):
+        for sel in (
+            '[data-price-amount]',
+            'meta[x-itemprop="price"]',
+            'meta[itemprop="price"]',
+            '[content][x-itemprop="price"]',
+            '[content][itemprop="price"]',
+        ):
+            for node in tree.css(sel):
+                val = (
+                    node.attributes.get("data-price-amount")
+                    or node.attributes.get("content")
+                    or node.text(strip=True)
+                )
+                price = GenericCrawler._num(val)
+                if price and price > 0:
+                    return price
+        return None
+
     def _remember_sitemap_meta(self, text: str) -> None:
         if not hasattr(self, "_sitemap_meta"):
             self._sitemap_meta = {}
@@ -422,6 +443,8 @@ class MagentoCrawler(BaseCrawler):
             slug = slug[:-5]
         if not slug:
             return None
+        if _slug_title_equal(slug, title):
+            return None
         return {
             "sku": slug[:180],
             "spu": slug[:180],
@@ -434,6 +457,7 @@ class MagentoCrawler(BaseCrawler):
             "product_url": url,
             "site": self.site.site,
             "published_at": meta.get("lastmod"),
+            "_skip_price_history_if_no_price": True,
         }
 
 
@@ -456,6 +480,15 @@ def _title_from_url(url: str) -> str | None:
         slug = slug[:-5]
     text = re.sub(r"[-_]+", " ", slug).strip()
     return text or None
+
+
+def _slug_title_equal(slug: str | None, title: str | None) -> bool:
+    if not slug or not title:
+        return False
+    slug_text = re.sub(r"[-_]+", " ", slug)
+    norm_slug = re.sub(r"[^a-z0-9]+", " ", slug_text.lower()).strip()
+    norm_title = re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+    return bool(norm_slug and norm_slug == norm_title)
 
 
 def _category_from_url(url: str) -> str | None:

@@ -473,7 +473,7 @@ onMounted(async () => {
       <USelect v-model="pageSize" class="pager-select" variant="outline" :items="pageSizeItems" value-key="value" @update:model-value="page = 1; load()" />
     </div>
 
-    <UModal v-model:open="showAdd" title="Add Tracking" :ui="{ content: 'tracking-dialog', header: 'dialog-head', body: 'dialog-body', footer: 'dialog-foot', title: 'dialog-title' }">
+    <UModal v-model:open="showAdd" title="Add Tracking" :ui="{ overlay: 'tracking-dialog-overlay', content: 'tracking-dialog', header: 'dialog-head', body: 'dialog-body', footer: 'dialog-foot', title: 'dialog-title' }">
       <template #body>
         <UFormField label="URL" class="dialog-field">
           <UInput v-model="addForm.url" placeholder="https://brand.example.com" />
@@ -495,7 +495,7 @@ onMounted(async () => {
       </template>
     </UModal>
 
-    <UModal :open="Boolean(editing)" title="Edit Tracking" :ui="{ content: 'tracking-dialog', header: 'dialog-head', body: 'dialog-body', footer: 'dialog-foot', title: 'dialog-title' }" @update:open="(open: boolean) => { if (!open) editing = null }">
+    <UModal :open="Boolean(editing)" title="Edit Tracking" :ui="{ overlay: 'tracking-dialog-overlay', content: 'tracking-dialog', header: 'dialog-head', body: 'dialog-body', footer: 'dialog-foot', title: 'dialog-title' }" @update:open="(open: boolean) => { if (!open) editing = null }">
       <template #body>
         <UFormField v-if="editing" label="Brand" class="dialog-field">
           <UInput v-model="editing.brand" maxlength="50" />
@@ -516,7 +516,7 @@ onMounted(async () => {
       </template>
     </UModal>
 
-    <UModal :open="Boolean(deleteTarget)" title="移出追踪站点" :ui="{ content: 'tracking-dialog', header: 'dialog-head', body: 'dialog-body', footer: 'dialog-foot', title: 'dialog-title' }" @update:open="(open: boolean) => { if (!open && !deleteBusy) deleteTarget = null }">
+    <UModal :open="Boolean(deleteTarget)" title="移出追踪站点" :ui="{ overlay: 'tracking-dialog-overlay', content: 'tracking-dialog', header: 'dialog-head', body: 'dialog-body', footer: 'dialog-foot', title: 'dialog-title' }" @update:open="(open: boolean) => { if (!open && !deleteBusy) deleteTarget = null }">
       <template #body>
         <div v-if="deleteTarget" class="delete-confirm">
           <Trash2 class="size-5" />
@@ -597,7 +597,7 @@ onMounted(async () => {
 
 .tracking-table-wrap { width:100%; overflow:auto; border:1px solid var(--ui-border); border-radius:8px; background:var(--ui-card); box-shadow:0 14px 32px rgba(37,29,61,.08); }
 .tracking-table :deep(table) { width:100%; min-width:1280px; border-collapse:separate; border-spacing:0; font-size:.84rem; }
-.tracking-table :deep(thead) { position:sticky; top:0; z-index:2; }
+.tracking-table :deep(thead) { position:sticky; top:0; z-index:1; }
 .tracking-table :deep(th) { text-align:left; padding:10px 12px; background:var(--ui-card-soft); color:var(--ui-muted); border-bottom:1px solid var(--ui-border); font-size:.72rem; font-weight:800; white-space:nowrap; }
 .tracking-table :deep(td) { padding:10px 12px; border-bottom:1px solid var(--ui-border); color:var(--ui-text); vertical-align:middle; }
 .tracking-table :deep(tbody tr:hover td) { background:rgba(20,184,166,.06); }
@@ -637,7 +637,8 @@ onMounted(async () => {
 .tracking-pager .pager-info { color:var(--ui-heading); min-width:62px; text-align:center; }
 .tracking-pager .pager-select { width:108px; flex:0 0 auto; }
 
-:global(.tracking-dialog) { width:430px; max-width:calc(100vw - 32px); max-height:calc(100vh - 28px); display:flex; flex-direction:column; background:var(--ui-card); color:var(--ui-text); border:1px solid var(--ui-border); border-radius:8px; box-shadow:0 26px 70px rgba(0,0,0,.36); overflow:hidden; }
+:global(.tracking-dialog-overlay) { z-index:1200!important; }
+:global(.tracking-dialog) { position:relative; z-index:1201!important; width:430px; max-width:calc(100vw - 32px); max-height:calc(100vh - 28px); display:flex; flex-direction:column; background:var(--ui-card); color:var(--ui-text); border:1px solid var(--ui-border); border-radius:8px; box-shadow:0 26px 70px rgba(0,0,0,.36); overflow:hidden; isolation:isolate; }
 :global(.dialog-head) { position:relative; min-height:54px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 56px 14px 16px; border-bottom:1px solid var(--ui-border); background:linear-gradient(180deg,var(--ui-card-soft),var(--ui-card)); }
 :global(.dialog-head button[aria-label="Close"]) { width:36px!important; min-width:36px!important; height:36px!important; padding:0!important; top:9px!important; right:10px!important; display:inline-flex!important; align-items:center!important; justify-content:center!important; border-radius:9px!important; color:var(--ui-muted)!important; }
 :global(.dialog-head button[aria-label="Close"]:hover) { background:var(--ui-card-soft)!important; color:var(--ui-heading)!important; }
