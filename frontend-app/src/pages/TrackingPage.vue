@@ -11,6 +11,7 @@ import {
   Search,
   SlidersHorizontal,
   Trash2,
+  X,
 } from 'lucide-vue-next'
 import { computed, onMounted, ref } from 'vue'
 import DataLoadingPanel from '../components/common/DataLoadingPanel.vue'
@@ -86,17 +87,17 @@ const statusSelect = computed({
   },
 })
 const trackingColumns = [
-  { accessorKey: 'country', header: 'Market' },
-  { accessorKey: 'brand', header: 'Brand' },
+  { accessorKey: 'country', header: '市场' },
+  { accessorKey: 'brand', header: '品牌' },
   { accessorKey: 'site', header: 'URL' },
-  { accessorKey: 'track_status', header: 'Status' },
-  { accessorKey: 'products', header: 'Products', meta: { class: { th: 'num', td: 'num' } } },
-  { accessorKey: 'thirty_day_sales', header: '30-Day Sales', meta: { class: { th: 'num', td: 'num' } } },
-  { accessorKey: 'thirty_day_revenue', header: '30-Day Revenue', meta: { class: { th: 'num', td: 'num' } } },
-  { accessorKey: 'display_updated_at', header: 'Updated Time' },
-  { accessorKey: 'created_at', header: 'Created Time' },
-  { accessorKey: 'creator', header: 'Creator' },
-  { id: 'actions', header: 'Action', meta: { class: { th: 'actions-head', td: 'actions-cell' } } },
+  { accessorKey: 'track_status', header: '状态' },
+  { accessorKey: 'products', header: '商品数', meta: { class: { th: 'num', td: 'num' } } },
+  { accessorKey: 'thirty_day_sales', header: '30天销量', meta: { class: { th: 'num', td: 'num' } } },
+  { accessorKey: 'thirty_day_revenue', header: '30天销售额', meta: { class: { th: 'num', td: 'num' } } },
+  { accessorKey: 'display_updated_at', header: '更新时间' },
+  { accessorKey: 'created_at', header: '创建时间' },
+  { accessorKey: 'creator', header: '创建人' },
+  { id: 'actions', header: '操作', meta: { class: { th: 'actions-head', td: 'actions-cell' } } },
 ]
 
 const canEdit = computed(() => {
@@ -127,6 +128,20 @@ function statusMeta(s?: string) {
     skipped: { label: '已跳过', tone: 'idle' },
     unknown: { label: '同步中', tone: 'busy' },
   } as Record<string, { label: string; tone: string }>)[key] || { label: s || '未知', tone: 'idle' }
+}
+
+function failureCodeLabel(code?: string) {
+  const key = (code || '').toLowerCase()
+  return ({
+    zero_products: '无商品',
+    proxy_unavailable: '代理不可用',
+    network_timeout: '网络超时',
+    anti_bot_challenge: '反爬验证',
+    http_403: '403 拦截',
+    http_5xx: '服务错误',
+    worker_interrupted: '任务中断',
+    unknown: '未知错误',
+  } as Record<string, string>)[key] || code || ''
 }
 
 function displayStatus(row: Record<string, any>) {
@@ -260,6 +275,10 @@ function remove(row: Record<string, any>) {
   deleteTarget.value = row
 }
 
+function closeDeleteDialog() {
+  if (!deleteBusy.value) deleteTarget.value = null
+}
+
 async function confirmRemove() {
   if (!deleteTarget.value) return
   deleteBusy.value = true
@@ -311,7 +330,7 @@ onMounted(async () => {
       </div>
       <button v-if="canEdit" type="button" class="btn-prim tracking-add" @click="showAdd = true">
         <Plus class="size-4" />
-        <span>Add Tracking</span>
+        <span>添加标杆</span>
       </button>
     </div>
 
@@ -339,18 +358,18 @@ onMounted(async () => {
     <div class="tracking-toolbar">
       <label class="tracking-field search-field">
         <Search class="size-4 field-icon" />
-        <UInput v-model="search" variant="none" placeholder="URL / Brand name / Site code" @keyup.enter="applySearch" />
+        <UInput v-model="search" variant="none" placeholder="URL / 品牌 / 站点代码" @keyup.enter="applySearch" />
       </label>
       <label class="tracking-field small">
-        <span>Market</span>
+        <span>市场</span>
         <USelect v-model="marketSelect" :items="marketItems" value-key="value" />
       </label>
       <label class="tracking-field brand-filter">
-        <span>Brand</span>
+        <span>品牌</span>
         <USelect v-model="brandSelect" :items="brandItems" value-key="value" />
       </label>
       <label class="tracking-field select-field">
-        <span>Status</span>
+        <span>状态</span>
         <USelect v-model="statusSelect" :items="statusItems" value-key="value" />
       </label>
       <button type="button" class="tool-btn primary" :disabled="loading" @click="applySearch">
@@ -396,8 +415,8 @@ onMounted(async () => {
         <template #track_status-cell="{ row }">
           <div class="status-cell">
             <span class="status-pill" :class="statusMeta(displayStatus(row.original)).tone">{{ statusMeta(displayStatus(row.original)).label }}</span>
-            <small v-if="row.original.last_error_code" class="status-detail">{{ row.original.last_error_code }}</small>
-            <small v-else-if="row.original.latest_job?.status === 'pending' || row.original.latest_job?.status === 'running'" class="status-detail">{{ row.original.latest_job.status }}</small>
+            <small v-if="row.original.last_error_code" class="status-detail">{{ failureCodeLabel(row.original.last_error_code) }}</small>
+            <small v-else-if="row.original.latest_job?.status === 'pending' || row.original.latest_job?.status === 'running'" class="status-detail">{{ statusMeta(row.original.latest_job.status).label }}</small>
           </div>
         </template>
         <template #products-cell="{ row }">
@@ -473,69 +492,93 @@ onMounted(async () => {
       <USelect v-model="pageSize" class="pager-select" variant="outline" :items="pageSizeItems" value-key="value" @update:model-value="page = 1; load()" />
     </div>
 
-    <UModal v-model:open="showAdd" title="Add Tracking" :ui="{ overlay: 'tracking-dialog-overlay', content: 'tracking-dialog', header: 'dialog-head', body: 'dialog-body', footer: 'dialog-foot', title: 'dialog-title' }">
-      <template #body>
-        <UFormField label="URL" class="dialog-field">
-          <UInput v-model="addForm.url" placeholder="https://brand.example.com" />
-        </UFormField>
-        <UFormField label="Brand" class="dialog-field">
-          <UInput v-model="addForm.brand" maxlength="50" />
-        </UFormField>
-        <UFormField label="Market" class="dialog-field">
-          <UInput v-model="addForm.country" maxlength="8" placeholder="US" />
-        </UFormField>
-      </template>
-      <template #footer>
-        <button type="button" class="dialog-btn ghost" @click="showAdd = false">取消</button>
-        <button type="button" class="dialog-btn primary" :disabled="addBusy" @click="submitAdd">
-          <Plus v-if="!addBusy" class="size-4" />
-          <RefreshCw v-else class="size-4 spin" />
-          <span>{{ addBusy ? '探测中' : '添加并抓取' }}</span>
-        </button>
-      </template>
-    </UModal>
+    <div v-if="showAdd" class="tracking-modal-backdrop" @click.self="showAdd = false">
+      <section class="tracking-dialog" role="dialog" aria-modal="true" aria-labelledby="add-tracking-title">
+        <header class="dialog-head">
+          <h2 id="add-tracking-title" class="dialog-title">添加标杆</h2>
+          <button type="button" class="dialog-close" aria-label="关闭" @click="showAdd = false">
+            <X class="size-5" />
+          </button>
+        </header>
+        <div class="dialog-body">
+          <UFormField label="URL" class="dialog-field">
+            <UInput v-model="addForm.url" placeholder="https://brand.example.com" />
+          </UFormField>
+          <UFormField label="品牌" class="dialog-field">
+            <UInput v-model="addForm.brand" maxlength="50" />
+          </UFormField>
+          <UFormField label="市场" class="dialog-field">
+            <UInput v-model="addForm.country" maxlength="8" placeholder="US" />
+          </UFormField>
+        </div>
+        <footer class="dialog-foot">
+          <button type="button" class="dialog-btn ghost" @click="showAdd = false">取消</button>
+          <button type="button" class="dialog-btn primary" :disabled="addBusy" @click="submitAdd">
+            <Plus v-if="!addBusy" class="size-4" />
+            <RefreshCw v-else class="size-4 spin" />
+            <span>{{ addBusy ? '探测中' : '添加并抓取' }}</span>
+          </button>
+        </footer>
+      </section>
+    </div>
 
-    <UModal :open="Boolean(editing)" title="Edit Tracking" :ui="{ overlay: 'tracking-dialog-overlay', content: 'tracking-dialog', header: 'dialog-head', body: 'dialog-body', footer: 'dialog-foot', title: 'dialog-title' }" @update:open="(open: boolean) => { if (!open) editing = null }">
-      <template #body>
-        <UFormField v-if="editing" label="Brand" class="dialog-field">
-          <UInput v-model="editing.brand" maxlength="50" />
-        </UFormField>
-        <UFormField v-if="editing" label="Market" class="dialog-field">
-          <UInput v-model="editing.country" maxlength="8" />
-        </UFormField>
-        <UFormField v-if="editing" label="Review Rate" class="dialog-field">
-          <UInput v-model="editing.review_rate" type="number" step="0.001" />
-        </UFormField>
-      </template>
-      <template #footer>
-        <button type="button" class="dialog-btn ghost" @click="editing = null">取消</button>
-        <button type="button" class="dialog-btn primary" @click="saveEdit">
-          <Pencil class="size-4" />
-          <span>保存</span>
-        </button>
-      </template>
-    </UModal>
+    <div v-if="editing" class="tracking-modal-backdrop" @click.self="editing = null">
+      <section class="tracking-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-tracking-title">
+        <header class="dialog-head">
+          <h2 id="edit-tracking-title" class="dialog-title">编辑标杆</h2>
+          <button type="button" class="dialog-close" aria-label="关闭" @click="editing = null">
+            <X class="size-5" />
+          </button>
+        </header>
+        <div class="dialog-body">
+          <UFormField label="品牌" class="dialog-field">
+            <UInput v-model="editing.brand" maxlength="50" />
+          </UFormField>
+          <UFormField label="市场" class="dialog-field">
+            <UInput v-model="editing.country" maxlength="8" />
+          </UFormField>
+          <UFormField label="评论率" class="dialog-field">
+            <UInput v-model="editing.review_rate" type="number" step="0.001" />
+          </UFormField>
+        </div>
+        <footer class="dialog-foot">
+          <button type="button" class="dialog-btn ghost" @click="editing = null">取消</button>
+          <button type="button" class="dialog-btn primary" @click="saveEdit">
+            <Pencil class="size-4" />
+            <span>保存</span>
+          </button>
+        </footer>
+      </section>
+    </div>
 
-    <UModal :open="Boolean(deleteTarget)" title="移出追踪站点" :ui="{ overlay: 'tracking-dialog-overlay', content: 'tracking-dialog', header: 'dialog-head', body: 'dialog-body', footer: 'dialog-foot', title: 'dialog-title' }" @update:open="(open: boolean) => { if (!open && !deleteBusy) deleteTarget = null }">
-      <template #body>
-        <div v-if="deleteTarget" class="delete-confirm">
-          <Trash2 class="size-5" />
-          <div>
-            <b>{{ deleteTarget.brand || deleteTarget.site }}</b>
-            <p>确认从当前工作区移出该标杆站点？历史商品数据不会在其他仍启用该站点的工作区被删除。</p>
-            <small>{{ deleteTarget.url || deleteTarget.site }}</small>
+    <div v-if="deleteTarget" class="tracking-modal-backdrop" @click.self="closeDeleteDialog">
+      <section class="tracking-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-tracking-title">
+        <header class="dialog-head">
+          <h2 id="delete-tracking-title" class="dialog-title">移出追踪站点</h2>
+          <button type="button" class="dialog-close" aria-label="关闭" :disabled="deleteBusy" @click="deleteTarget = null">
+            <X class="size-5" />
+          </button>
+        </header>
+        <div class="dialog-body">
+          <div class="delete-confirm">
+            <Trash2 class="size-5" />
+            <div>
+              <b>{{ deleteTarget.brand || deleteTarget.site }}</b>
+              <p>确认从当前工作区移出该标杆站点？历史商品数据不会在其他仍启用该站点的工作区被删除。</p>
+              <small>{{ deleteTarget.url || deleteTarget.site }}</small>
+            </div>
           </div>
         </div>
-      </template>
-      <template #footer>
-        <button type="button" class="dialog-btn ghost" :disabled="deleteBusy" @click="deleteTarget = null">取消</button>
-        <button type="button" class="dialog-btn danger-solid" :disabled="deleteBusy" @click="confirmRemove">
-          <Trash2 v-if="!deleteBusy" class="size-4" />
-          <RefreshCw v-else class="size-4 spin" />
-          <span>{{ deleteBusy ? '移出中' : '确认移出' }}</span>
-        </button>
-      </template>
-    </UModal>
+        <footer class="dialog-foot">
+          <button type="button" class="dialog-btn ghost" :disabled="deleteBusy" @click="deleteTarget = null">取消</button>
+          <button type="button" class="dialog-btn danger-solid" :disabled="deleteBusy" @click="confirmRemove">
+            <Trash2 v-if="!deleteBusy" class="size-4" />
+            <RefreshCw v-else class="size-4 spin" />
+            <span>{{ deleteBusy ? '移出中' : '确认移出' }}</span>
+          </button>
+        </footer>
+      </section>
+    </div>
   </section>
 </template>
 
@@ -637,18 +680,19 @@ onMounted(async () => {
 .tracking-pager .pager-info { color:var(--ui-heading); min-width:62px; text-align:center; }
 .tracking-pager .pager-select { width:108px; flex:0 0 auto; }
 
-:global(.tracking-dialog-overlay) { z-index:1200!important; }
-:global(.tracking-dialog) { position:relative; z-index:1201!important; width:430px; max-width:calc(100vw - 32px); max-height:calc(100vh - 28px); display:flex; flex-direction:column; background:var(--ui-card); color:var(--ui-text); border:1px solid var(--ui-border); border-radius:8px; box-shadow:0 26px 70px rgba(0,0,0,.36); overflow:hidden; isolation:isolate; }
-:global(.dialog-head) { position:relative; min-height:54px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 56px 14px 16px; border-bottom:1px solid var(--ui-border); background:linear-gradient(180deg,var(--ui-card-soft),var(--ui-card)); }
-:global(.dialog-head button[aria-label="Close"]) { width:36px!important; min-width:36px!important; height:36px!important; padding:0!important; top:9px!important; right:10px!important; display:inline-flex!important; align-items:center!important; justify-content:center!important; border-radius:9px!important; color:var(--ui-muted)!important; }
-:global(.dialog-head button[aria-label="Close"]:hover) { background:var(--ui-card-soft)!important; color:var(--ui-heading)!important; }
-:global(.dialog-head button[aria-label="Close"] svg) { width:18px!important; height:18px!important; }
-:global(.dialog-title) { color:var(--ui-heading); font-size:1rem; font-weight:900; }
-:global(.dialog-body) { position:relative; z-index:1; display:flex; flex-direction:column; gap:12px; padding:16px 16px 20px; overflow:auto; max-height:calc(100vh - 170px); background:var(--ui-card); }
-:global(.dialog-foot) { position:relative; z-index:2; display:flex; align-items:center; justify-content:flex-end; gap:8px; padding:12px 16px; border-top:1px solid var(--ui-border); background:var(--ui-card-soft); flex-shrink:0; }
-:global(.dialog-field) { display:flex; flex-direction:column; gap:6px; color:var(--ui-muted); font-size:.76rem; font-weight:800; }
-:global(.dialog-field input) { width:100%; height:38px; border:1px solid var(--ui-border); border-radius:7px; background:var(--ui-card-soft); color:var(--ui-heading); padding:0 11px; outline:0; font-size:.84rem; box-shadow:none; }
-:global(.dialog-field input:focus) { border-color:var(--ui-purple-line); background:var(--ui-card); }
+.tracking-modal-backdrop { position:fixed; inset:0; z-index:1200; display:flex; align-items:center; justify-content:center; padding:16px; background:rgba(16,18,27,.34); backdrop-filter:blur(4px); }
+.tracking-dialog { position:relative; z-index:1201; width:430px; max-width:calc(100vw - 32px); max-height:calc(100vh - 28px); display:flex; flex-direction:column; background:var(--ui-card); color:var(--ui-text); border:1px solid var(--ui-border); border-radius:8px; box-shadow:0 26px 70px rgba(0,0,0,.36); overflow:hidden; isolation:isolate; }
+.dialog-head { position:relative; min-height:54px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 14px 14px 16px; border-bottom:1px solid var(--ui-border); background:linear-gradient(180deg,var(--ui-card-soft),var(--ui-card)); }
+.dialog-title { margin:0; color:var(--ui-heading); font-size:1rem; font-weight:900; }
+.dialog-close { width:36px!important; min-width:36px!important; height:36px!important; padding:0!important; display:inline-flex!important; align-items:center!important; justify-content:center!important; border:1px solid transparent!important; border-radius:9px!important; color:var(--ui-muted)!important; background:transparent!important; cursor:pointer; transition:background .15s,color .15s,border-color .15s; }
+.dialog-close:hover { background:var(--ui-card-soft)!important; color:var(--ui-heading)!important; border-color:var(--ui-border)!important; }
+.dialog-close:disabled { opacity:.52; cursor:not-allowed; }
+.dialog-close svg { width:18px!important; height:18px!important; }
+.dialog-body { position:relative; z-index:1; display:flex; flex-direction:column; gap:12px; padding:16px 16px 20px; overflow:auto; max-height:calc(100vh - 170px); background:var(--ui-card); }
+.dialog-foot { position:relative; z-index:2; display:flex; align-items:center; justify-content:flex-end; gap:8px; padding:12px 16px; border-top:1px solid var(--ui-border); background:var(--ui-card-soft); flex-shrink:0; }
+.dialog-field { display:flex; flex-direction:column; gap:6px; color:var(--ui-muted); font-size:.76rem; font-weight:800; }
+.dialog-field :deep(input) { width:100%; height:38px; border:1px solid var(--ui-border); border-radius:7px; background:var(--ui-card-soft); color:var(--ui-heading); padding:0 11px; outline:0; font-size:.84rem; box-shadow:none; }
+.dialog-field :deep(input:focus) { border-color:var(--ui-purple-line); background:var(--ui-card); }
 .delete-confirm { display:flex; gap:12px; align-items:flex-start; color:var(--ui-text); min-width:0; }
 .delete-confirm > svg { margin-top:2px; color:var(--ui-red,#be123c); flex-shrink:0; }
 .delete-confirm b { display:block; color:var(--ui-heading); margin-bottom:5px; }
@@ -673,7 +717,7 @@ onMounted(async () => {
   .tracking-field :deep(input), .tracking-field.search-field :deep(input) { width:100%; }
   .tracking-field :deep(button) { width:100%; }
   .tracking-pager { justify-content:center; flex-wrap:wrap; }
-  :global(.dialog-foot) { flex-wrap:wrap; }
-  :global(.dialog-foot .dialog-btn) { flex:1 1 132px; }
+  .dialog-foot { flex-wrap:wrap; }
+  .dialog-foot .dialog-btn { flex:1 1 132px; }
 }
 </style>

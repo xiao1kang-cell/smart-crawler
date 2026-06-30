@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BarChart3, Info } from 'lucide-vue-next'
+import { BarChart3 } from 'lucide-vue-next'
 import { computed, onMounted, ref } from 'vue'
 import { asList } from '../api/client'
 import { listCoverage } from '../api/coverage'
@@ -15,33 +15,19 @@ const sortedRows = computed(() => rows.value.slice().sort((a, b) => actualProduc
 const jobTrigger = useJobTrigger({ onDone: () => load() })
 
 function actualProductCount(row: Record<string, any>) {
-  return skuCount(row)
+  return capturedCount(row)
 }
 
-function skuCount(row: Record<string, any>) {
-  return Number(row.sku_count ?? row.products ?? row.count ?? 0)
+function expectedCount(row: Record<string, any>) {
+  return Number(row.estimated_full ?? row.target_sku_count ?? row.sku_count ?? row.products ?? row.count ?? 0)
 }
 
-function spuCount(row: Record<string, any>) {
-  return Number(row.spu_count ?? row.product_listing_count ?? row.actual_product_count ?? 0)
+function capturedCount(row: Record<string, any>) {
+  return Number(row.current_raw ?? row.current ?? row.report_product_count ?? row.detail_sku_count ?? row.sku_count ?? row.products ?? row.count ?? 0)
 }
 
 function detailCount(row: Record<string, any>) {
   return Number(row.detail_sku_count ?? row.product_detail_count ?? row.report_product_count ?? 0)
-}
-
-function productCountSource(row: Record<string, any>) {
-  return String(row.actual_product_count_source || '无来源信息')
-}
-
-function productCountSourceTip(row: Record<string, any>) {
-  return `SKU 总数来自商品主表；SPU 数来源：${productCountSource(row)}；详情 SKU 为已有价格/评论/销量/营收信号的 SKU 数`
-}
-
-function countIssue(row: Record<string, any>) {
-  const issues = Array.isArray(row.count_consistency_issues) ? row.count_consistency_issues : []
-  if (issues.includes('detail_sku_gt_sku_count')) return '详情 SKU 数大于 SKU 总数，请检查 SiteMetric 刷新或商品主表去重口径'
-  return ''
 }
 
 async function load() {
@@ -90,18 +76,11 @@ onMounted(load)
         <div class="country">{{ s.brand || '—' }} · {{ s.country || '—' }}</div>
         <div class="nums">
           <div class="item">
-            <div class="lbl report-metric-label">
-              <span>SKU 总数</span>
-              <span class="report-source-tip" :data-tooltip="productCountSourceTip(s)" :title="productCountSourceTip(s)" :aria-label="productCountSourceTip(s)" tabindex="0">
-                <Info class="report-source-icon" />
-              </span>
-            </div>
-            <div class="v">{{ skuCount(s).toLocaleString() }}</div>
+            <div class="lbl">应抓</div>
+            <div class="v">{{ expectedCount(s).toLocaleString() }}</div>
           </div>
-          <div class="item"><div class="lbl">SPU 数</div><div class="v dim">{{ spuCount(s).toLocaleString() }}</div></div>
-          <div class="item"><div class="lbl">详情 SKU</div><div class="v dim" :class="{ warn: detailCount(s) > skuCount(s) }">{{ detailCount(s).toLocaleString() }}</div></div>
+          <div class="item"><div class="lbl">实抓</div><div class="v dim">{{ capturedCount(s).toLocaleString() }}</div></div>
         </div>
-        <div v-if="countIssue(s)" class="count-warning">{{ countIssue(s) }}</div>
         <div class="btns" :class="{ two: detailCount(s) > 0 }">
           <a v-if="detailCount(s) > 0" :href="reportHref(s)" target="_blank" rel="noopener" class="btn-prim">
             <BarChart3 class="report-btn-icon" />
