@@ -51,7 +51,7 @@ import requests
 import json
 import time
 from typing import List, Dict
-from urllib.parse import urlparse
+from urllib.parse import quote, unquote, urlparse
 
 # ====================== 配置 ======================
 BIT_BROWSER_API_URL = "http://127.0.0.1:54345"  # 指纹浏览器默认地址
@@ -203,6 +203,24 @@ def read_excel_to_accounts(file_path: str,country = 'US') -> List[Dict]:
     return parse_account_excel(file_path, country).get("accounts", [])
 
 
+def _normalize_proxy_scheme(value: str = "") -> str:
+    scheme = str(value or "").strip().lower()
+    if scheme in {"socks5", "socks5h", "socks4", "http", "https"}:
+        return scheme
+    return "http"
+
+
+def _bitbrowser_proxy_type(proxy_: Dict) -> str:
+    scheme = _normalize_proxy_scheme((proxy_ or {}).get("scheme", "http"))
+    if scheme == "socks5h":
+        return "socks5"
+    return scheme if scheme in {"socks5", "socks4", "https"} else "http"
+
+
+def _random_browser_core_version() -> str:
+    return random.choice(["146", "148"])
+
+
 def _normalize_single_proxy_item(item) -> Dict:
     if isinstance(item, dict):
         proxy_url = str(item.get("http") or item.get("https") or item.get("url") or "").strip()
@@ -213,7 +231,13 @@ def _normalize_single_proxy_item(item) -> Dict:
         user = str(item.get("user") or item.get("username") or "").strip()
         password = str(item.get("password") or "").strip()
         if host and port > 0 and user and password:
-            return {"host": host, "port": port, "user": user, "password": password}
+            return {
+                "scheme": _normalize_proxy_scheme(item.get("scheme") or item.get("proxy_type") or item.get("type")),
+                "host": host,
+                "port": port,
+                "user": user,
+                "password": password,
+            }
         return {}
 
     raw = str(item or "").strip()
@@ -223,10 +247,11 @@ def _normalize_single_proxy_item(item) -> Dict:
         parsed = urlparse(raw)
         if parsed.hostname and parsed.port and parsed.username and parsed.password:
             return {
+                "scheme": _normalize_proxy_scheme(parsed.scheme),
                 "host": parsed.hostname,
                 "port": int(parsed.port),
-                "user": parsed.username,
-                "password": parsed.password,
+                "user": unquote(parsed.username),
+                "password": unquote(parsed.password),
             }
         return {}
     parts = [p.strip() for p in raw.split(":")]
@@ -239,7 +264,7 @@ def _normalize_single_proxy_item(item) -> Dict:
         return {}
     if not host or port <= 0 or not user or not password:
         return {}
-    return {"host": host, "port": port, "user": user, "password": password}
+    return {"scheme": "http", "host": host, "port": port, "user": user, "password": password}
 
 
 def normalize_static_proxy_pool(static_ip_pool: List = None) -> List[Dict]:
@@ -254,7 +279,10 @@ def normalize_static_proxy_pool(static_ip_pool: List = None) -> List[Dict]:
 def proxy_to_url(proxy_: Dict) -> str:
     if not proxy_:
         return ""
-    return f'http://{proxy_["user"]}:{proxy_["password"]}@{proxy_["host"]}:{proxy_["port"]}'
+    scheme = _normalize_proxy_scheme(proxy_.get("scheme", "http"))
+    user = quote(str(proxy_["user"]), safe="")
+    password = quote(str(proxy_["password"]), safe="")
+    return f'{scheme}://{user}:{password}@{proxy_["host"]}:{proxy_["port"]}'
 
 
 def normalize_account_username(username: str, country: str) -> str:
@@ -433,15 +461,16 @@ def create_browser(account: Dict, suffix, static_ip_count: int = 0, static_ip_po
     proxy_, static_ip = resolve_account_proxy(account, suffix, static_ip_count, static_ip_pool)
 
     os_config = get_random_os_config()
+    core_version = _random_browser_core_version()
 
     # 2. 构建指纹 (只传核心字段，其余交给系统)
     fingerprint = {
         "coreProduct": os_config["coreProduct"],
-        "coreVersion": "146",  # 内核版本保持最新
+        "coreVersion": core_version,
         "ostype": "PC",
         "os": os_config["os"],  # 随机系统 (Win/Mac/Linux)
         "osVersion": os_config["osVersion"],  # 随机版本
-        "version": "146"
+        "version": core_version
     }
 
     # 构造请求参数
@@ -451,7 +480,7 @@ def create_browser(account: Dict, suffix, static_ip_count: int = 0, static_ip_po
         "remark": f"{country}_{username}",
         "browserFingerPrint":fingerprint,
         "proxyMethod": 2,
-        "proxyType": "http",
+        "proxyType": _bitbrowser_proxy_type(proxy_),
         "host": proxy_["host"],
         "port": proxy_["port"],
         "ipCheckService":'IP2Location',

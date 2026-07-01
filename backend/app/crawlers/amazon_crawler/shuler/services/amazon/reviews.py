@@ -474,6 +474,12 @@ class Reviews(AmazonBase):
                             or 'show-more-button' in review_html
                     ):
                         html_content = html_content + "\n" + json.loads(review_html)[2]
+                if not html_content.strip():
+                    logger.warning(
+                        f"[翻页] AJAX响应无评论HTML片段，按空页处理: "
+                        f"asin={asin}, page={resp.get('page', '')}, bytes={len(resp.get('resp', ''))}"
+                    )
+                    return [], None
                 soup = BeautifulSoup(html_content, "html.parser")
                 del array_str_list  # 释放临时变量内存
             else:

@@ -85,9 +85,35 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-# 固定日志目录（绝对路径），避免因不同 cwd 写到不同 logs 目录
-LOG_DIR = os.path.join(BASE_DIR, "logs")
-os.makedirs(LOG_DIR, exist_ok=True)
+def _choose_log_dir() -> str:
+    configured = (
+        os.getenv("AMAZON_CRAWLER_LOG_DIR")
+        or os.getenv("AMAZON_VOC_LOG_DIR")
+        or os.getenv("SC_LOG_DIR")
+    )
+    candidates = [
+        configured,
+        os.path.join(BASE_DIR, "logs"),
+        str(PROJECT_DIR / "data" / "logs" / "amazon_crawler"),
+    ]
+    last_error: Exception | None = None
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            os.makedirs(candidate, exist_ok=True)
+            return candidate
+        except OSError as exc:
+            last_error = exc
+            logger.warning(f"日志目录不可写，尝试下一个: {candidate} ({exc})")
+    if last_error:
+        raise last_error
+    raise RuntimeError("未找到可用日志目录")
+
+
+# 固定日志目录（绝对路径），避免因不同 cwd 写到不同 logs 目录。
+# Docker 生产环境会把 backend 只读挂载，此时自动落到 /app/data/logs/amazon_crawler。
+LOG_DIR = _choose_log_dir()
 
 # 共享日志格式（daemon/api 等多线程共用一个文件，保留 worker 字段方便区分）
 def _format_shared(record):

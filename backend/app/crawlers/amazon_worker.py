@@ -48,8 +48,17 @@ def _bridge_redis_env() -> None:
     os.environ.setdefault("REDIS_QUEUE_DB", os.getenv("AMAZON_VOC_REDIS_QUEUE_DB", db or "0"))
 
 
-def _bootstrap_runtime(*, init_database: bool = True) -> None:
+def _env_bool(name: str, default: bool = True) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _bootstrap_runtime(*, init_database: bool | None = None) -> None:
     _normalize_env()
+    if init_database is None:
+        init_database = _env_bool("AMAZON_VOC_INIT_DB", True)
     if init_database:
         from app.db import init_db
 

@@ -16,6 +16,7 @@ from .api.v2 import router as v2_router
 from .api.discovery import router as discovery_router
 from .api.influencer_discover import router as influencer_discover_router
 from .api.amazon_voc import router as amazon_voc_router
+from .api.account_import import router as account_import_router
 from .api.tracking import router as tracking_router
 from .api.admin_spine import router as admin_spine_router
 from .config import FRONTEND_DIR, PROJECT_DIR
@@ -134,6 +135,7 @@ app.include_router(tracking_router)
 app.include_router(v1_router)
 app.include_router(v2_router)
 app.include_router(amazon_voc_router)
+app.include_router(account_import_router)
 app.include_router(admin_spine_router)   # 超管后台 · spine 管理端点
 app.mount("/mcp", _mcp_app)              # AI Agent MCP 入口
 if (FRONTEND_APP_DIST / "assets").exists():
@@ -161,6 +163,11 @@ def _spa_or_legacy(legacy_file):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/heartbeat")
+def heartbeat():
+    return {"alive": True}
 
 
 @app.get("/")
