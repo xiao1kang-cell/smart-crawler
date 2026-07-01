@@ -68,10 +68,72 @@ def payload_bytes(payload: dict) -> bytes:
                       sort_keys=True).encode("utf-8")
 
 
+def _is_dingtalk_robot_url(url: str) -> bool:
+    parsed = urlparse(url or "")
+    host = (parsed.hostname or "").lower()
+    return host == "oapi.dingtalk.com" and "/robot/send" in parsed.path
+
+
+def _dingtalk_text_payload(payload: dict) -> dict:
+    job = payload.get("job") or {}
+    result = job.get("result") or {}
+    lines = [
+        f"SmartCrawler {payload.get('event') or 'job.event'}",
+        f"workspace: {payload.get('workspace_id')}",
+        f"job: {job.get('kind') or '-'} #{job.get('id') or '-'} {job.get('status') or '-'}",
+    ]
+    site = result.get("site")
+    if site:
+        lines.append(f"site: {site}")
+    trigger = result.get("trigger")
+    if trigger:
+        lines.append(f"trigger: {trigger}")
+    for key, label in (
+        ("products_count", "products"),
+        ("products", "products"),
+        ("new_count", "new"),
+        ("new", "new"),
+        ("promotion_count", "promotions"),
+        ("promotions", "promotions"),
+    ):
+        value = result.get(key)
+        if value not in (None, ""):
+            lines.append(f"{label}: {value}")
+    error = job.get("error")
+    if error:
+        lines.append(f"error: {str(error)[:300]}")
+    return {
+        "msgtype": "text",
+        "text": {"content": "\n".join(lines)},
+    }
+
+
+def _outbound_payload(url: str, payload: dict) -> dict:
+    if _is_dingtalk_robot_url(url):
+        return _dingtalk_text_payload(payload)
+    return payload
+
+
 def sign_payload(payload: dict, secret: str) -> str:
     digest = hmac.new((secret or "").encode("utf-8"), payload_bytes(payload),
                       hashlib.sha256).hexdigest()
     return f"sha256={digest}"
+
+
+def _response_success(url: str, resp) -> bool:
+    if not 200 <= resp.status_code < 300:
+        return False
+    if _is_dingtalk_robot_url(url):
+        try:
+            data = resp.json()
+        except Exception:
+            try:
+                data = json.loads(resp.text or "{}")
+            except Exception:
+                data = {}
+        if isinstance(data, dict) and data.get("errcode") not in (None, 0):
+            return False
+    return True
 
 
 def build_payload(*, delivery_id: int, workspace_id: int,
@@ -204,15 +266,16 @@ def dispatch_pending(db: Session, *, limit: int = 20,
             SIGNATURE_HEADER: sign_payload(payload, cfg.secret or ""),
         }
         try:
+            outbound = _outbound_payload(cfg.url, payload)
             resp = requests.post(
                 cfg.url,
-                data=payload_bytes(payload),
+                data=payload_bytes(outbound),
                 headers=headers,
                 timeout=timeout,
             )
             delivery.http_status = resp.status_code
             delivery.response_snippet = (resp.text or "")[:500]
-            if 200 <= resp.status_code < 300:
+            if _response_success(cfg.url, resp):
                 delivery.status = "success"
                 delivery.finished_at = datetime.utcnow()
             else:

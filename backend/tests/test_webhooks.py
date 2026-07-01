@@ -1,4 +1,5 @@
 """租户 webhook 通知测试。"""
+import json
 from datetime import datetime
 
 from sqlalchemy import inspect
@@ -112,6 +113,60 @@ def test_enqueue_delivery_and_dispatch(monkeypatch):
         assert calls and calls[0]["url"] == "https://example.com/hook"
         assert calls[0]["headers"][SIGNATURE_HEADER].startswith("sha256=")
         assert db.get(WebhookDelivery, row.id).status == "success"
+    finally:
+        db.close()
+
+
+def test_dingtalk_robot_dispatch_uses_text_message(monkeypatch):
+    from app.models import WebhookConfig, WebhookDelivery, Workspace
+    from app.webhooks import dispatch_pending, enqueue_delivery
+
+    init_db()
+    calls = []
+
+    class Resp:
+        status_code = 200
+        text = '{"errcode":0,"errmsg":"ok"}'
+
+        def json(self):
+            return {"errcode": 0, "errmsg": "ok"}
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        calls.append({"url": url, "body": json.loads(data.decode("utf-8"))})
+        return Resp()
+
+    monkeypatch.setattr("app.webhooks.requests.post", fake_post)
+
+    db = SessionLocal()
+    try:
+        ws = db.query(Workspace).filter(Workspace.slug == "internal").first()
+        db.query(WebhookDelivery).delete()
+        db.query(WebhookConfig).delete()
+        db.add(WebhookConfig(
+            workspace_id=ws.id,
+            url="https://oapi.dingtalk.com/robot/send?access_token=x",
+            secret="secret",
+            active=True,
+        ))
+        db.commit()
+
+        assert enqueue_delivery(
+            db,
+            workspace_id=ws.id,
+            event_type="job.completed",
+            job_kind="crawl",
+            job_id=10,
+            status="success",
+            result={"site": "costway_de", "products": 12},
+        ) == 1
+        db.commit()
+
+        assert dispatch_pending(db) == 1
+        assert calls
+        assert calls[0]["body"]["msgtype"] == "text"
+        assert "SmartCrawler" in calls[0]["body"]["text"]["content"]
+        assert "costway_de" in calls[0]["body"]["text"]["content"]
+        assert db.query(WebhookDelivery).one().status == "success"
     finally:
         db.close()
 
