@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>账号导入</title>
+  <style>
+    :root {
+      --bg: #f7f9fc;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --primary: #0f766e;
+      --primary-hover: #0b5d58;
+      --border: #dbe3ef;
+      --ok-bg: #ecfdf3;
+      --ok-text: #065f46;
+      --err-bg: #fef2f2;
+      --err-text: #991b1b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .wrap { max-width: 840px; margin: 0 auto; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
+    }
+    h1 { margin: 0 0 10px; font-size: 24px; }
+    .desc { color: var(--muted); margin-bottom: 16px; }
+    .row { margin-bottom: 14px; }
+    label { display: block; font-size: 14px; margin-bottom: 6px; }
+    input, select {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 14px;
+      outline: none;
+      background: #fff;
+    }
+    textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 14px;
+      outline: none;
+      background: #fff;
+      min-height: 90px;
+      resize: vertical;
+    }
+    input:focus, select:focus {
+      border-color: #0ea5e9;
+      box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.1);
+    }
+    textarea:focus {
+      border-color: #0ea5e9;
+      box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.1);
+    }
+    .inline { display: flex; gap: 10px; align-items: center; }
+    .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+    button {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      background: var(--primary);
+      color: #fff;
+    }
+    button:hover { background: var(--primary-hover); }
+    .btn-secondary { background: #475569; }
+    .btn-secondary:hover { background: #334155; }
+    .result {
+      margin-top: 14px;
+      border-radius: 10px;
+      padding: 10px 12px;
+      white-space: pre-wrap;
+      display: none;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .result.ok { display: block; background: var(--ok-bg); color: var(--ok-text); }
+    .result.err { display: block; background: var(--err-bg); color: var(--err-text); }
+    .hint { margin-top: 10px; color: var(--muted); font-size: 13px; }
+    .ip-preview {
+      margin-top: 10px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #f8fafc;
+      padding: 10px;
+      display: none;
+    }
+    .ip-preview-title {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .ip-line {
+      font-size: 12px;
+      line-height: 1.5;
+      border-radius: 8px;
+      padding: 6px 8px;
+      margin-bottom: 6px;
+      border: 1px solid transparent;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .ip-line.ok {
+      background: #ecfdf3;
+      border-color: #a7f3d0;
+      color: #065f46;
+    }
+    .ip-line.err {
+      background: #fef2f2;
+      border-color: #fecaca;
+      color: #991b1b;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="inline" style="justify-content: space-between; margin-bottom: 8px;">
+        <h1 style="margin:0;">账号导入</h1>
+        <div class="inline">
+          <button id="goTaskBtn" type="button" class="btn-secondary" style="display:none;">任务批次页</button>
+          <button id="logoutBtn" type="button" class="btn-secondary">退出</button>
+        </div>
+      </div>
+      <p class="desc">Excel 支持旧格式前三列 username/password/totp；有表头时必须包含 username、password、totp，可选 browser_id、proxy。填写静态代理则使用静态代理，不填则使用动态代理。</p>
+
+      <form id="importForm">
+        <div class="row">
+          <label for="excelFile">账号Excel文件（xlsx/xls）</label>
+          <input id="excelFile" type="file" accept=".xlsx,.xls" required />
+        </div>
+
+        <div class="row">
+          <label for="accountType">账号类型</label>
+          <select id="accountType">
+            <option value="US" selected>US</option>
+            <option value="JP">JP</option>
+            <option value="AE">AE</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <label for="targetCountry">目标国家（默认跟账号类型一致）</label>
+          <input id="targetCountry" type="text" placeholder="例如 US / JP / AE / DE" maxlength="10" />
+        </div>
+
+        <div class="row" id="staticIpRow">
+          <div class="hint" style="margin-top:6px;">不填静态代理则使用动态代理。每行一个代理，格式：hostname:port:username:password 或 http://user:pass@host:port</div>
+          <textarea id="staticIps" placeholder="38.213.121.20:2333:PsFaJMphAU0hH1s20E:iWrz7GbWhm&#10;http://PsFaJMphAU0hH1s20E:iWrz7GbWhm@31.59.245.28:2333"></textarea>
+        </div>
+
+        <div class="row">
+          <label for="limit">最大导入数量（0=不限制）</label>
+          <input id="limit" type="number" min="0" value="0" />
+        </div>
+
+        <div class="btn-row">
+          <button id="previewBtn" type="button" class="btn-secondary">校验列名/预览</button>
+          <button id="validateStaticBtn" type="button" class="btn-secondary">预览静态IP格式</button>
+          <button id="submitBtn" type="submit">开始导入</button>
+        </div>
+
+        <div id="staticIpPreview" class="ip-preview"></div>
+      </form>
+
+      <div id="result" class="result"></div>
+      <div id="detail" class="result" style="display:none;"></div>
+      <div class="hint">注意：没有 browser_id 的行会交给 Windows browser-node 创建指纹；已有 browser_id 的行可直接写入 `crawler_accounts`。</div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('importForm');
+    const resultEl = document.getElementById('result');
+    const detailEl = document.getElementById('detail');
+    const previewBtn = document.getElementById('previewBtn');
+    const validateStaticBtn = document.getElementById('validateStaticBtn');
+    const submitBtn = document.getElementById('submitBtn');
+    const accountType = document.getElementById('accountType');
+    const staticIpRow = document.getElementById('staticIpRow');
+    const staticIpsInput = document.getElementById('staticIps');
+    const staticIpPreviewEl = document.getElementById('staticIpPreview');
+    const logoutBtn = document.getElementById('logoutBtn');
+    const goTaskBtn = document.getElementById('goTaskBtn');
+
+    function setResult(ok, msg) {
+      resultEl.className = `result ${ok ? 'ok' : 'err'}`;
+      resultEl.textContent = msg;
+    }
+
+    function setDetail(ok, msg) {
+      if (!msg) {
+        detailEl.style.display = 'none';
+        detailEl.textContent = '';
+        detailEl.className = 'result';
+        return;
+      }
+      detailEl.className = `result ${ok ? 'ok' : 'err'}`;
+      detailEl.textContent = msg;
+      detailEl.style.display = 'block';
+    }
+
+    function lockActions(lock) {
+      submitBtn.disabled = lock;
+      previewBtn.disabled = lock;
+      validateStaticBtn.disabled = lock;
+    }
+
+    function clearStaticIpPreview() {
+      staticIpPreviewEl.innerHTML = '';
+      staticIpPreviewEl.style.display = 'none';
+    }
+
+    function parseStaticIpLine(rawLine) {
+      const raw = String(rawLine || '').trim();
+      if (!raw) return { ok: false, reason: 'empty_line' };
+
+      if (raw.startsWith('{') && raw.endsWith('}')) {
+        try {
+          const obj = JSON.parse(raw);
+          const proxyUrl = String(obj.http || obj.https || obj.url || '').trim();
+          if (proxyUrl) {
+            return parseStaticIpLine(proxyUrl);
+          } else {
+            const host = String(obj.host || obj.hostname || '').trim();
+            const user = String(obj.user || obj.username || '').trim();
+            const password = String(obj.password || '').trim();
+            const port = Number(obj.port || 0);
+            if (!host || !user || !password || !Number.isInteger(port) || port <= 0) {
+              return { ok: false, reason: 'json_missing_fields' };
+            }
+            return { ok: true, proxy: { host, port, user, password } };
+          }
+        } catch (e) {
+          return { ok: false, reason: 'invalid_json' };
+        }
+      }
+
+      if (raw.includes('://')) {
+        try {
+          const url = new URL(raw);
+          const host = url.hostname;
+          const port = Number(url.port || 0);
+          const user = decodeURIComponent(url.username || '');
+          const password = decodeURIComponent(url.password || '');
+          if (!host || !user || !password || !Number.isInteger(port) || port <= 0) {
+            return { ok: false, reason: 'invalid_url_fields' };
+          }
+          return { ok: true, proxy: { host, port, user, password } };
+        } catch (e) {
+          return { ok: false, reason: 'invalid_url' };
+        }
+      }
+
+      const parts = raw.split(':').map(v => v.trim());
+      if (parts.length !== 4) {
+        return { ok: false, reason: 'bad_parts_count' };
+      }
+      const [host, portText, user, password] = parts;
+      const port = Number(portText);
+      if (!host || !user || !password || !Number.isInteger(port) || port <= 0) {
+        return { ok: false, reason: 'invalid_fields' };
+      }
+      return { ok: true, proxy: { host, port, user, password } };
+    }
+
+    function reasonText(reason) {
+      const mapping = {
+        empty_line: '空行（已忽略）',
+        invalid_json: 'JSON格式错误',
+        json_missing_fields: 'JSON字段缺失（需要host/port/user/password）',
+        invalid_url: 'URL格式错误',
+        invalid_url_fields: 'URL字段缺失（需要user/password/host/port）',
+        bad_parts_count: '字段数量不对（应为4段）',
+        invalid_fields: '字段无效（host/user/password不能为空，port需为正整数）',
+      };
+      return mapping[reason] || '格式错误';
+    }
+
+    function renderStaticIpPreview(summary, rows) {
+      staticIpPreviewEl.innerHTML = '';
+      staticIpPreviewEl.style.display = 'block';
+      let firstErrorEl = null;
+
+      const title = document.createElement('div');
+      title.className = 'ip-preview-title';
+      title.textContent = summary;
+      staticIpPreviewEl.appendChild(title);
+
+      rows.forEach((row) => {
+        const line = document.createElement('div');
+        line.className = `ip-line ${row.ok ? 'ok' : 'err'}`;
+        if (row.ok) {
+          line.textContent = `第${row.lineNo}行 ✅ ${row.raw}`;
+        } else {
+          line.textContent = `第${row.lineNo}行 ❌ ${row.raw} ｜ ${reasonText(row.reason)}`;
+          if (!firstErrorEl) {
+            firstErrorEl = line;
+          }
+        }
+        staticIpPreviewEl.appendChild(line);
+      });
+
+      if (!rows.length) {
+        const empty = document.createElement('div');
+        empty.className = 'ip-line err';
+        empty.textContent = '未检测到可校验内容';
+        staticIpPreviewEl.appendChild(empty);
+      }
+
+      if (firstErrorEl) {
+        firstErrorEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+
+    function validateStaticIps(showSuccessToast = true) {
+      const text = String(staticIpsInput.value || '');
+      const lines = text.split('\n');
+      const rows = [];
+      let validCount = 0;
+      let errorCount = 0;
+
+      for (let i = 0; i < lines.length; i += 1) {
+        const rawLine = lines[i];
+        if (!rawLine.trim()) continue;
+        const parsed = parseStaticIpLine(rawLine);
+        const item = {
+          lineNo: i + 1,
+          raw: rawLine.trim(),
+          ok: parsed.ok,
+          reason: parsed.reason || '',
+        };
+        rows.push(item);
+        if (parsed.ok) validCount += 1;
+        else errorCount += 1;
+      }
+
+      const summary = `静态代理本地校验：有效 ${validCount} 行，错误 ${errorCount} 行。${validCount ? '导入时会使用静态代理' : '未填写则导入时使用动态代理'}`;
+      renderStaticIpPreview(summary, rows);
+
+      if (showSuccessToast) {
+        if (errorCount > 0) {
+          setResult(false, `静态IP格式校验失败：${errorCount} 行错误，请修正后再导入`);
+        } else {
+          setResult(true, `静态IP格式校验通过：${validCount} 行有效`);
+        }
+      }
+
+      return { validCount, errorCount, rows };
+    }
+
+    function collectParams() {
+      const fileInput = document.getElementById('excelFile');
+      if (!fileInput.files.length) {
+        throw new Error('请选择 Excel 文件');
+      }
+
+      const type = accountType.value;
+      const countryRaw = (document.getElementById('targetCountry').value || '').trim().toUpperCase();
+      const targetCountry = countryRaw || type;
+      const staticIps = (document.getElementById('staticIps').value || '').trim();
+      const limit = Number(document.getElementById('limit').value || 0);
+
+      return {
+        file: fileInput.files[0],
+        type,
+        targetCountry,
+        staticIps,
+        limit,
+      };
+    }
+
+    function toggleStaticField() {
+      staticIpRow.style.display = 'block';
+    }
+
+    async function ensureLogin() {
+      const resp = await fetch('/admin/me');
+      if (resp.status === 401) {
+        location.href = '/static/admin_login.html?next=/account-import';
+        return false;
+      }
+      return true;
+    }
+
+    accountType.addEventListener('change', toggleStaticField);
+    staticIpsInput.addEventListener('input', () => {
+      clearStaticIpPreview();
+    });
+    toggleStaticField();
+
+    validateStaticBtn.addEventListener('click', () => {
+      setDetail(true, '');
+      validateStaticIps(true);
+    });
+
+    function buildPreviewFormData(p) {
+      const fd = new FormData();
+      fd.append('file', p.file);
+      fd.append('account_type', p.type);
+      fd.append('target_country', p.targetCountry);
+      return fd;
+    }
+
+    async function fetchAccountPreview(p) {
+      const resp = await fetch('/preview_accounts_excel', { method: 'POST', body: buildPreviewFormData(p) });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+      return data;
+    }
+
+    function renderAccountPreview(data) {
+      setResult(true, [
+        '预览成功',
+        `账号类型: ${data.account_type}`,
+        `目标国家: ${data.target_country}`,
+        `代理策略: ${data.proxy_strategy}`,
+        `Excel格式: ${data.has_header ? '表头模式' : '旧格式前三列'}`,
+        `表头校验: ${data.has_header ? '通过' : '未检测到表头，按前三列读取'}`,
+        `识别表头: ${(data.header_columns || []).join(', ') || '-'}`,
+        `必需列: ${(data.required_columns || []).join(', ')}`,
+        `可选列: ${(data.optional_columns || []).join(', ')}`,
+        `Excel数据行数: ${data.total_rows}`,
+        `有效行数(账号+密码): ${data.valid_rows}`,
+        `带browser_id行数: ${data.browser_id_rows || 0}`,
+        `带文件proxy行数: ${data.file_proxy_rows || 0}`,
+      ].join('\n'));
+
+      const lines = (data.preview_rows || []).map(r => {
+        const proxy = r.proxy_present ? (r.proxy_valid ? 'Y' : '格式错误') : 'N';
+        return `第${r.row_no}行 | user=${r.username || '-'} | pwd=${r.password_present ? 'Y' : 'N'} | totp=${r.totp_present ? 'Y' : 'N'} | browser_id=${r.browser_id_present ? 'Y' : 'N'} | proxy=${proxy} | valid=${r.valid ? 'Y' : 'N'}`;
+      });
+      setDetail(true, ['前20行预览:', ...(lines.length ? lines : ['(无数据)'])].join('\n'));
+    }
+
+    function renderImportReport(data, title = '账号导入成功') {
+      const isFailed = Number(data.status_code || 0) === 3;
+      const statusLine = data.async ? `任务状态: ${data.status || '-'}${data.node_id ? ` | 节点: ${data.node_id}` : ''}` : '';
+      setResult(!isFailed, [
+        title,
+        data.job_id ? `任务ID: ${data.job_id}` : '',
+        statusLine,
+        `账号类型: ${data.account_type}`,
+        `目标国家: ${data.target_country}`,
+        `代理策略: ${data.proxy_strategy}`,
+        `使用静态代理数: ${data.static_ip_count}`,
+        `填写静态代理数: ${data.provided_static_ip_count}`,
+        `使用已有browser_id数: ${data.existing_browser_count || 0}`,
+        `使用文件proxy数: ${data.file_proxy_count || 0}`,
+        `源数据行数: ${data.source_rows}`,
+        data.queued_rows !== undefined ? `入队行数: ${data.queued_rows}` : '',
+        `实际尝试行数: ${data.attempted_rows}`,
+        `成功数量: ${data.created_count}`,
+        `失败数量: ${data.failed_count}`,
+        `用户名(前50): ${(data.created_usernames || []).join(', ') || '-'}`,
+        data.error ? `错误: ${data.error}` : '',
+      ].filter(Boolean).join('\n'));
+
+      const failedLines = (data.failed_items || []).map((item, idx) => {
+        const row = item.row_no ? `第${item.row_no}行 | ` : '';
+        return `${idx + 1}. ${row}${item.username || '-'} | ${item.reason || 'unknown'}`;
+      });
+      if (failedLines.length) {
+        setDetail(false, ['失败明细(最多200条):', ...failedLines].join('\n'));
+      } else {
+        setDetail(true, '');
+      }
+    }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async function pollAccountImportJob(jobId) {
+      for (let i = 0; i < 2400; i += 1) {
+        await sleep(3000);
+        const resp = await fetch(`/account_import_jobs/${encodeURIComponent(jobId)}`);
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+        renderImportReport(data, '账号导入任务处理中');
+        if (Number(data.status_code || 0) === 2) {
+          renderImportReport(data, '账号导入完成');
+          return data;
+        }
+        if (Number(data.status_code || 0) === 3) {
+          renderImportReport(data, '账号导入任务失败');
+          return data;
+        }
+      }
+      throw new Error('账号导入任务等待超时，请稍后刷新页面或查看 browser-node 日志');
+    }
+
+    previewBtn.addEventListener('click', async () => {
+      setResult(true, '');
+      setDetail(true, '');
+
+      try {
+        const p = collectParams();
+        lockActions(true);
+        previewBtn.textContent = '预览中...';
+        renderAccountPreview(await fetchAccountPreview(p));
+      } catch (err) {
+        setResult(false, `预览失败: ${err.message}`);
+      } finally {
+        lockActions(false);
+        previewBtn.textContent = '校验列名/预览';
+      }
+    });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      setResult(true, '');
+      setDetail(true, '');
+
+      let p;
+      try {
+        p = collectParams();
+        if (p.staticIps) {
+          const check = validateStaticIps(false);
+          if (check.errorCount > 0) {
+            setResult(false, `静态IP格式不正确：${check.errorCount} 行错误，请先点击“预览静态IP格式”修正`);
+            return;
+          }
+        }
+      } catch (err) {
+        setResult(false, err.message || String(err));
+        return;
+      }
+
+      const fd = new FormData();
+      fd.append('file', p.file);
+      fd.append('account_type', p.type);
+      fd.append('target_country', p.targetCountry);
+      fd.append('static_ip_count', '0');
+      fd.append('static_ips', p.staticIps);
+      fd.append('limit', String(p.limit));
+
+      lockActions(true);
+      submitBtn.textContent = '校验列名中...';
+      try {
+        renderAccountPreview(await fetchAccountPreview(p));
+        submitBtn.textContent = '导入中...';
+        const resp = await fetch('/import_accounts_excel', { method: 'POST', body: fd });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+
+        if (data.async && data.job_id) {
+          renderImportReport(data, '账号导入任务已入队');
+          submitBtn.textContent = '等待browser-node处理...';
+          await pollAccountImportJob(data.job_id);
+        } else {
+          renderImportReport(data, '账号导入成功');
+        }
+      } catch (err) {
+        setResult(false, `账号导入失败: ${err.message}`);
+      } finally {
+        lockActions(false);
+        submitBtn.textContent = '开始导入';
+      }
+    });
+
+    logoutBtn.addEventListener('click', async () => {
+      await fetch('/admin/logout', { method: 'POST' });
+      location.href = '/static/admin_login.html?next=/account-import';
+    });
+
+    goTaskBtn.addEventListener('click', () => {
+      location.href = '/account-import';
+    });
+
+    (async function init() {
+      const ok = await ensureLogin();
+      if (!ok) return;
+    })();
+  </script>
+</body>
+</html>
