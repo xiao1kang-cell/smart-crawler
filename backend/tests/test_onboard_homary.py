@@ -355,6 +355,39 @@ def test_homary_product_uses_jsonld_category_and_review_count(monkeypatch):
     assert product["review_count"] == 123
 
 
+def test_homary_product_reads_review_count_from_js_variable():
+    site = _site()
+    crawler = _make_crawler(site, limit=1)
+    html = _PRODUCT_HTML.replace(
+        "</body>",
+        """
+        <script>
+          var ks = 13;
+          var hB = 4.7;
+          pU.reviewCount = ks;
+          pU.aggregateRating = {"@type":"AggregateRating", ratingValue: hB, reviewCount: ks};
+        </script>
+        </body>
+        """,
+    )
+    url_map = {
+        _PRODUCT_URL: FetchResult(
+            ok=True, url=_PRODUCT_URL, status=200,
+            text=html, content=html.encode("utf-8"),
+            final_url=_PRODUCT_URL, fetcher="curl_cffi",
+        ),
+    }
+
+    product = crawler._parse_product(
+        _make_fake_fetcher(crawler, url_map),
+        _PRODUCT_URL,
+        set(),
+    )
+
+    assert product is not None
+    assert product["review_count"] == 13
+
+
 def test_homary_concurrency_requires_proxy_lease_config():
     site = _site()
     site.crawler_config = {"detail_concurrency": 8}

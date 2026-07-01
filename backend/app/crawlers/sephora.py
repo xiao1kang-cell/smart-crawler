@@ -28,8 +28,11 @@ _REVIEW_RE = re.compile(r"(\d[\d\s.,]*)\s+avis", re.IGNORECASE)
 _BLOCK_MARKS = (
     "Access Denied",
     "errors.edgesuite.net",
-    "akamai",
     "captcha",
+    "sec-if-cpt-container",
+    "behavioral-content",
+    "akam/13/pixel",
+    "You don't have permission to access",
 )
 
 
@@ -167,7 +170,11 @@ class SephoraCrawler(BaseCrawler):
                     raise BlockedError(
                         f"{self.site.site} Sephora US PDP 连续被拦截")
                 continue
-            row = self._parse_us_pdp(res.text, url)
+            row = (
+                self._parse_fr_pdp(res.text, url)
+                if ".fr" in urlparse(self.base).netloc
+                else self._parse_us_pdp(res.text, url)
+            )
             if row:
                 result.products.append(row)
             self.sleep()
@@ -217,6 +224,10 @@ class SephoraCrawler(BaseCrawler):
 
     def _parse_us_pdp(self, text: str, url: str) -> dict | None:
         data = GenericCrawler._from_jsonld(text)
+        if not data or not data.get("price"):
+            hydrated = self._parse_us_hydration(text, url)
+            if hydrated:
+                return hydrated
         if not data:
             return None
         sku = data.get("sku") or self._slug(url)
@@ -236,6 +247,166 @@ class SephoraCrawler(BaseCrawler):
             "product_url": url,
             "site": self.site.site,
         }
+
+    def _parse_fr_pdp(self, text: str, url: str) -> dict | None:
+        data = GenericCrawler._from_jsonld(text) or {}
+        tree = HTMLParser(text or "")
+        sku = self._fr_sku_from_url(url) or data.get("sku") or self._slug(url)
+        sale_price = GenericCrawler._num(data.get("price"))
+        if sale_price is None or sale_price <= 0:
+            sale_price = self._price(self._first_fr_price_text(text))
+        if sale_price is None or sale_price <= 0:
+            return None
+        original_price = GenericCrawler._num(data.get("original_price")) or sale_price
+        title = (
+            data.get("name")
+            or self._meta(tree, "og:title")
+            or self._title_from_slug(self._slug(url))
+        )
+        review_count = data.get("review_count")
+        if review_count is None:
+            review_count = self._fr_review_count(text)
+        return {
+            "sku": str(sku),
+            "spu": str(sku),
+            "title": title,
+            "description": data.get("description") or self._meta(tree, "og:description"),
+            "image_urls": data.get("images") or (
+                [self._meta(tree, "og:image")] if self._meta(tree, "og:image") else []),
+            "category_path": data.get("category") or "Sephora",
+            "sale_price": sale_price,
+            "original_price": original_price,
+            "currency": data.get("currency") or "EUR",
+            "ratings": data.get("rating"),
+            "review_count": review_count if review_count is not None else 0,
+            "status": data.get("status", "on_sale"),
+            "brand": data.get("brand") or self.site.brand,
+            "product_url": url,
+            "site": self.site.site,
+        }
+
+    def _parse_us_hydration(self, text: str, url: str) -> dict | None:
+        blob = html.unescape(text or "")
+        blob = (
+            blob.replace('\\"', '"')
+            .replace("\\/", "/")
+            .replace("\\u002F", "/")
+            .replace("\\u0026", "&")
+        )
+        sku = self._sku_from_url(url) or self._slug(url)
+        windows = self._hydration_windows(blob, sku)
+        for window in windows:
+            sale_price = (
+                self._json_price(window, "salePrice")
+                or self._json_price(window, "currentPrice")
+                or self._json_price(window, "valuePrice")
+                or self._json_price(window, "regularPrice")
+                or self._json_price(window, "listPrice")
+            )
+            original_price = (
+                self._json_price(window, "regularPrice")
+                or self._json_price(window, "listPrice")
+                or sale_price
+            )
+            title = (
+                self._json_text(window, "displayName")
+                or self._json_text(window, "productName")
+                or self._json_text(window, "name")
+                or self._title_from_slug(self._slug(url))
+            )
+            if not sale_price or not title:
+                continue
+            sku_id = self._json_text(window, "skuId")
+            image = (
+                self._json_text(window, "imageUrl")
+                or self._json_text(window, "heroImage")
+                or self._json_text(window, "productImage")
+            )
+            attrs = {"source": "pdp_hydration"}
+            if sku_id:
+                attrs["sku_id"] = sku_id
+            return {
+                "sku": sku,
+                "spu": sku,
+                "title": title,
+                "description": self._json_text(window, "description"),
+                "image_urls": [image] if image else [],
+                "category_path": "Sephora",
+                "sale_price": sale_price,
+                "original_price": original_price,
+                "currency": "USD",
+                "variant_id": sku_id,
+                "attributes": attrs,
+                "ratings": self._json_float(
+                    window, "rating", "averageRating", "reviewAverageRating"),
+                "review_count": self._json_int(
+                    window,
+                    "reviewCount",
+                    "reviewsCount",
+                    "numReviews",
+                    "reviews",
+                ) or 0,
+                "status": "on_sale",
+                "brand": self._json_text(window, "brandName") or self.site.brand,
+                "product_url": url,
+                "site": self.site.site,
+            }
+        return None
+
+    @staticmethod
+    def _hydration_windows(blob: str, sku: str | None) -> list[str]:
+        windows: list[str] = []
+        if sku:
+            for match in re.finditer(re.escape(sku), blob, re.I):
+                start = max(0, match.start() - 8000)
+                end = min(len(blob), match.end() + 12000)
+                windows.append(blob[start:end])
+                if len(windows) >= 5:
+                    break
+        if not windows:
+            windows.append(blob[:200000])
+        return windows
+
+    @staticmethod
+    def _json_text(blob: str, key: str) -> str | None:
+        match = re.search(
+            rf'"{re.escape(key)}"\s*:\s*"((?:\\.|[^"\\])*)"', blob)
+        if not match:
+            return None
+        text = match.group(1)
+        try:
+            text = json.loads(f'"{text}"')
+        except Exception:
+            pass
+        text = html.unescape(str(text))
+        text = re.sub(r"\s+", " ", text).strip()
+        return text or None
+
+    @classmethod
+    def _json_price(cls, blob: str, key: str) -> float | None:
+        return cls._price(cls._json_text(blob, key))
+
+    @staticmethod
+    def _json_float(blob: str, *keys: str) -> float | None:
+        for key in keys:
+            match = re.search(
+                rf'"{re.escape(key)}"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)"?',
+                blob,
+            )
+            if match:
+                return round(float(match.group(1)), 2)
+        return None
+
+    @staticmethod
+    def _json_int(blob: str, *keys: str) -> int | None:
+        for key in keys:
+            match = re.search(
+                rf'"{re.escape(key)}"\s*:\s*"?(\d[\d,.\s]*)"?',
+                blob,
+            )
+            if match:
+                return int(re.sub(r"\D", "", match.group(1)) or "0")
+        return None
 
     def _row_from_sitemap(self, url: str) -> dict | None:
         parsed = urlparse(url)
@@ -265,6 +436,7 @@ class SephoraCrawler(BaseCrawler):
             "product_url": url,
             "site": self.site.site,
             "attributes": {"source": "sitemap"},
+            "_skip_price_history_if_no_price": True,
         }
 
     def _original_price(self, node):
@@ -290,6 +462,14 @@ class SephoraCrawler(BaseCrawler):
         return text or None
 
     @staticmethod
+    def _meta(tree: HTMLParser, prop: str) -> str | None:
+        node = (
+            tree.css_first(f'meta[property="{prop}"]')
+            or tree.css_first(f'meta[name="{prop}"]')
+        )
+        return node.attributes.get("content") if node else None
+
+    @staticmethod
     def _price(value: str | None) -> float | None:
         if not value:
             return None
@@ -312,6 +492,28 @@ class SephoraCrawler(BaseCrawler):
         return int(re.sub(r"\D", "", match.group(1)) or "0")
 
     @staticmethod
+    def _fr_review_count(value: str | None) -> int | None:
+        if not value:
+            return None
+        text = html.unescape(value.replace("\xa0", " "))
+        for pattern in (
+            r"\((\d[\d\s.]*)\s+avis sur le produit\)",
+            r"(\d[\d\s.]*)\s+avis",
+        ):
+            match = re.search(pattern, text, re.I)
+            if match:
+                return int(re.sub(r"\D", "", match.group(1)) or "0")
+        return None
+
+    @staticmethod
+    def _first_fr_price_text(value: str | None) -> str | None:
+        if not value:
+            return None
+        text = html.unescape(value.replace("\xa0", " "))
+        match = re.search(r"\d[\d\s.]*,\d{2}\s*€", text)
+        return match.group(0) if match else None
+
+    @staticmethod
     def _rating_from_tile(node) -> float | None:
         vals = []
         for star in node.css('[style*="--fillRatio"]'):
@@ -329,6 +531,11 @@ class SephoraCrawler(BaseCrawler):
     def _sku_from_url(url: str) -> str | None:
         match = re.search(r"-(P\d+)(?:\.html)?(?:[/?#]|$)", url, re.I)
         return match.group(1).upper() if match else None
+
+    @staticmethod
+    def _fr_sku_from_url(url: str) -> str | None:
+        match = re.search(r"-(\d{4,})(?:\.html)?(?:[/?#]|$)", url)
+        return match.group(1) if match else None
 
     @staticmethod
     def _looks_like_product_url(url: str) -> bool:

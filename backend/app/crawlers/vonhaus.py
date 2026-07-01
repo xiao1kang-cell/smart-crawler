@@ -159,6 +159,8 @@ class VonHausCrawler(BaseCrawler):
             re.I,
         )) or any(re.search(r"free\s+(?:delivery|shipping)|delivery\s+included|shipping\s+included",
                             label, re.I) for label in promo_labels)
+        if has_free_shipping and not promo_labels:
+            promo_labels = ["Free Delivery On All Orders"]
         slug = url.rstrip("/").split("/")[-1]
         # sku：优先 data-product-id，退化为 slug
         pid = tree.css_first("[data-product-id]")
@@ -179,11 +181,13 @@ class VonHausCrawler(BaseCrawler):
                 self._jsonld_breadcrumb(tree)
                 or self._breadcrumb(tree)
                 or self._category_from_url(url)
+                or self._category_from_title(title, url)
             ),
             "sale_price": price,
             "original_price": original_price or price,
             "currency": currency,
-            "ratings": self._jsonld_rating_value(jsonld_product),
+            "ratings": self._jsonld_rating_value(jsonld_product)
+            or self._microdata_rating_value(tree),
             "review_count": self._review_count(tree, html, jsonld_product),
             "status": "out_of_stock" if ("outofstock" in avail
                                          or "out of stock" in avail)
@@ -356,6 +360,17 @@ class VonHausCrawler(BaseCrawler):
         except (TypeError, ValueError):
             return None
 
+    @staticmethod
+    def _microdata_rating_value(tree: HTMLParser):
+        node = tree.css_first('[itemprop="ratingValue"]')
+        if not node:
+            return None
+        value = node.attributes.get("content") or node.text(strip=True)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
     @classmethod
     def _review_count(cls, tree: HTMLParser, html: str, product: dict | None) -> int | None:
         if isinstance(product, dict):
@@ -365,16 +380,22 @@ class VonHausCrawler(BaseCrawler):
                 parsed = cls._count_number(count)
                 if parsed is not None:
                     return parsed
+        for node in tree.css('[itemprop="reviewCount"], [itemprop="ratingCount"]'):
+            parsed = cls._count_number(
+                node.attributes.get("content") or node.text(strip=True)
+            )
+            if parsed is not None:
+                return parsed
         for selector in (
             "[class*=review-count]", "[class*=reviews-count]",
             "[class*=reviewCount]", "[data-review-count]",
         ):
             for node in tree.css(selector):
-                text = node.attributes.get("data-review-count") or node.text(" ", strip=True)
+                text = node.attributes.get("data-review-count") or node.text(separator=" ", strip=True)
                 count = cls._count_from_text(text)
                 if count is not None:
                     return count
-        return cls._count_from_text(html)
+        return cls._count_from_text(html) or 0
 
     @staticmethod
     def _count_number(value) -> int | None:
@@ -435,3 +456,25 @@ class VonHausCrawler(BaseCrawler):
         if len(parts) <= 1:
             return None
         return "/".join(parts[:-1][:3]) or None
+
+    @staticmethod
+    def _category_from_title(title: str | None, url: str | None = None) -> str | None:
+        text = f"{title or ''} {url or ''}".lower()
+        if not text.strip():
+            return None
+        rules = (
+            (r"garden|outdoor|patio|bbq|barbecue", "Garden & Outdoor"),
+            (r"sofa|corner sofa|lounger", "Furniture/Sofas"),
+            (r"dining table|side table|coffee table|desk|table", "Furniture/Tables"),
+            (r"chair|stool|bench", "Furniture/Chairs & Seating"),
+            (r"shelving|shelf|racking|rack|storage", "Storage & Shelving"),
+            (r"ladder|step ladder", "DIY & Tools/Ladders"),
+            (r"fryer|kettle|toaster|microwave|air fryer", "Kitchen Appliances"),
+            (r"hepa|filter|vacuum", "Appliances/Vacuum Accessories"),
+            (r"lamp|light|lighting", "Lighting"),
+            (r"bed|mattress|wardrobe|drawer|bedside", "Bedroom Furniture"),
+        )
+        for pattern, category in rules:
+            if re.search(pattern, text, re.I):
+                return category
+        return "Uncategorized"

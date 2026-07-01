@@ -238,6 +238,9 @@ def _auto_enqueue_job_retry(s, job: CrawlJob, *, reason_code: str | None) -> int
         status="pending",
         trigger=retry_trigger,
         created_at=now,
+        assigned_node=job.assigned_node,
+        assigned_at=now if job.assigned_node else None,
+        assigned_by="auto_job_retry" if job.assigned_node else None,
         requested_by_workspace_id=job.requested_by_workspace_id,
         requested_by_user_id=job.requested_by_user_id,
         suggested_action=source_marker,
@@ -290,6 +293,28 @@ def _platform_running_limits() -> dict[str, int]:
     return limits
 
 
+def _try_platform_lock(s, platform: str) -> bool:
+    if getattr(getattr(s, "bind", None), "dialect", None) is None:
+        return True
+    if s.bind.dialect.name != "postgresql":
+        return True
+    return bool(s.execute(
+        text("select pg_try_advisory_lock(hashtext(:lock_key))"),
+        {"lock_key": f"crawl-platform:{platform}"},
+    ).scalar())
+
+
+def _unlock_platform_lock(s, platform: str) -> None:
+    if getattr(getattr(s, "bind", None), "dialect", None) is None:
+        return
+    if s.bind.dialect.name != "postgresql":
+        return
+    s.execute(
+        text("select pg_advisory_unlock(hashtext(:lock_key))"),
+        {"lock_key": f"crawl-platform:{platform}"},
+    )
+
+
 def _platform_limit_reached(s, site: Site | None) -> bool:
     platform = (getattr(site, "platform", None) or "").strip().lower()
     if not platform:
@@ -297,44 +322,45 @@ def _platform_limit_reached(s, site: Site | None) -> bool:
     limit = _platform_running_limits().get(platform)
     if not limit:
         return False
-    if getattr(getattr(s, "bind", None), "dialect", None) is not None:
-        if s.bind.dialect.name == "postgresql":
-            s.execute(
-                text("select pg_advisory_xact_lock(hashtext(:lock_key))"),
-                {"lock_key": f"crawl-platform:{platform}"},
-            )
-    running = (
-        s.query(CrawlJob.id)
-        .join(Site, Site.site == CrawlJob.site)
-        .filter(CrawlJob.status == "running", Site.platform == platform)
-        .count()
-    )
-    return running >= limit
+    if not _try_platform_lock(s, platform):
+        return True
+    try:
+        running = (
+            s.query(CrawlJob.id)
+            .join(Site, Site.site == CrawlJob.site)
+            .filter(CrawlJob.status == "running", Site.platform == platform)
+            .count()
+        )
+        return running >= limit
+    finally:
+        _unlock_platform_lock(s, platform)
 
 
 def _platforms_at_running_limit(s) -> set[str]:
     limits = _platform_running_limits()
     if not limits:
         return set()
-    if getattr(getattr(s, "bind", None), "dialect", None) is not None:
-        if s.bind.dialect.name == "postgresql":
-            for platform in sorted(limits):
-                s.execute(
-                    text("select pg_advisory_xact_lock(hashtext(:lock_key))"),
-                    {"lock_key": f"crawl-platform:{platform}"},
-                )
-    rows = (
-        s.query(func.lower(Site.platform), func.count(CrawlJob.id))
-        .join(Site, Site.site == CrawlJob.site)
-        .filter(CrawlJob.status == "running",
-                func.lower(Site.platform).in_(tuple(limits)))
-        .group_by(func.lower(Site.platform))
-        .all()
-    )
-    return {
-        platform for platform, running in rows
-        if platform and int(running or 0) >= limits.get(platform, 0)
-    }
+    locked_platforms: list[str] = []
+    try:
+        for platform in sorted(limits):
+            if not _try_platform_lock(s, platform):
+                return set(limits)
+            locked_platforms.append(platform)
+        rows = (
+            s.query(func.lower(Site.platform), func.count(CrawlJob.id))
+            .join(Site, Site.site == CrawlJob.site)
+            .filter(CrawlJob.status == "running",
+                    func.lower(Site.platform).in_(tuple(limits)))
+            .group_by(func.lower(Site.platform))
+            .all()
+        )
+        return {
+            platform for platform, running in rows
+            if platform and int(running or 0) >= limits.get(platform, 0)
+        }
+    finally:
+        for platform in reversed(locked_platforms):
+            _unlock_platform_lock(s, platform)
 
 
 def _apply_platform_limit_filter(query, s):
@@ -408,6 +434,10 @@ def tracking_paused_issue(site: Site | None) -> FailureInfo | None:
 
 def proxy_preflight_issue(site: Site | None) -> FailureInfo | None:
     """Return a failure when site-level proxy prerequisites are not met."""
+    if os.environ.get("WORKER_SKIP_PROXY_PREFLIGHT", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }:
+        return None
     if site is None:
         return None
     tier = (site.proxy_tier or "").strip().lower()

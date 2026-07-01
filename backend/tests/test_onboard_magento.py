@@ -214,6 +214,74 @@ def test_magento_gzip_sitemap_uses_res_content(monkeypatch):
     assert result.products[0]["title"] == "Widget Pro"
 
 
+def test_magento_falls_back_to_positive_dom_price_when_meta_price_is_zero():
+    """Costway pages can expose og price=0 while data-price-amount has the real price."""
+    from app.crawlers.magento import MagentoCrawler
+    from app.crawlers.base import BaseCrawler
+
+    site = _site()
+    crawler = MagentoCrawler.__new__(MagentoCrawler)
+    BaseCrawler.__init__(crawler, site)
+    crawler.base = site.url.rstrip("/")
+    crawler.sitemap_hint = _SITEMAP_URL
+    crawler.product_match = ""
+    crawler.limit = 1
+    crawler.scan_cap = 100
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Camping Mat" />
+        <meta property="product:price:amount" content="0" />
+      </head>
+      <body>
+        <span id="product-price-2554" data-price-amount="160.99"
+              data-price-type="finalPrice" class="price-wrapper">
+          <span class="price">£0.00</span>
+        </span>
+        <meta x-itemprop="price" content="160.99" />
+      </body>
+    </html>
+    """
+    url_map = {
+        _PRODUCT_URL: FetchResult(
+            ok=True, url=_PRODUCT_URL, status=200, text=html,
+            content=html.encode("utf-8"), final_url=_PRODUCT_URL,
+            fetcher="curl_cffi",
+        ),
+    }
+    crawler._fetcher = _make_fake_fetcher(crawler, url_map)
+
+    row = crawler._fetch_one(_PRODUCT_URL)
+
+    assert row is not None
+    assert row["sale_price"] == 160.99
+    assert row["original_price"] == 160.99
+
+
+def test_magento_sitemap_only_rows_skip_empty_price_history():
+    """URL-only sitemap rows should not create empty daily price history."""
+    from app.crawlers.magento import MagentoCrawler
+    from app.crawlers.base import BaseCrawler
+
+    site = _site()
+    crawler = MagentoCrawler.__new__(MagentoCrawler)
+    BaseCrawler.__init__(crawler, site)
+    crawler._sitemap_meta = {
+        _PRODUCT_URL: {
+            "title": "Widget Pro Premium Desk",
+            "images": ["https://www.example.com/images/widget-pro.jpg"],
+            "lastmod": "2026-06-29T00:00:00+00:00",
+        }
+    }
+
+    row = crawler._row_from_sitemap(_PRODUCT_URL)
+
+    assert row is not None
+    assert row["sku"] == "widget-pro"
+    assert row["_skip_price_history_if_no_price"] is True
+    assert "sale_price" not in row
+
+
 def test_magento_expands_all_sitemap_index_children(monkeypatch):
     """Sitemap index expansion must not stop at the first 12 child sitemaps."""
     from app.crawlers.magento import MagentoCrawler
@@ -327,6 +395,7 @@ def test_magento_costway_sitemap_only_rows(monkeypatch):
     site.url = "https://www.costway.de"
     site.country = "DE"
     site.brand = "Costway"
+    site.crawler_config = {"sitemap_only": True}
     crawler = MagentoCrawler.__new__(MagentoCrawler)
     from app.crawlers.base import BaseCrawler
     BaseCrawler.__init__(crawler, site)
@@ -339,8 +408,16 @@ def test_magento_costway_sitemap_only_rows(monkeypatch):
 
     product_url = "https://www.costway.de/costway-klappstuhl-rot.html"
     product_url_2 = "https://www.costway.de/costway-tisch-blau.html"
+    category_url = "https://www.costway.de/c/gartenstuehle.html"
     sitemap_xml = f"""
     <urlset xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+      <url>
+        <loc>{category_url}</loc>
+        <image:image>
+          <image:loc>https://www.costway.de/media/category.jpg</image:loc>
+          <image:title>Gartenstuehle</image:title>
+        </image:image>
+      </url>
       <url>
         <loc>{product_url}</loc>
         <lastmod>2026-06-17T13:23:52+00:00</lastmod>
@@ -378,9 +455,43 @@ def test_magento_costway_sitemap_only_rows(monkeypatch):
     assert row["title"] == "Klappstuhl Rot"
     assert row["image_urls"] == ["https://www.costway.de/media/chair.jpg"]
     assert row["currency"] == "EUR"
-    assert result.total_product_count == 2
+    assert result.total_product_count == 3
     assert result.coverage_complete is False
     assert result.coverage_code == "incomplete_detail_parse"
+
+
+def test_magento_sitemap_only_skips_slug_title_category_rows():
+    from app.crawlers.magento import MagentoCrawler
+    from app.crawlers.base import BaseCrawler
+
+    site = _site()
+    site.site = "costway_de"
+    site.url = "https://www.costway.de"
+    site.country = "DE"
+    site.brand = "Costway"
+    crawler = MagentoCrawler.__new__(MagentoCrawler)
+    BaseCrawler.__init__(crawler, site)
+    crawler._sitemap_meta = {
+        "https://www.costway.de/baby-kind/baby-walker.html": {
+            "title": "Baby Walker",
+            "images": ["https://www.costway.de/media/category.jpg"],
+        },
+        "https://www.costway.de/costway-klappstuhl-rot.html": {
+            "title": "Klappstuhl Rot",
+            "images": ["https://www.costway.de/media/chair.jpg"],
+        },
+    }
+
+    assert crawler._row_from_sitemap(
+        "https://www.costway.de/baby-kind/baby-walker.html"
+    ) is None
+    row = crawler._row_from_sitemap(
+        "https://www.costway.de/costway-klappstuhl-rot.html"
+    )
+
+    assert row is not None
+    assert row["sku"] == "costway-klappstuhl-rot"
+    assert row["title"] == "Klappstuhl Rot"
 
 
 def test_magento_total_counts_products_not_candidate_pages(monkeypatch):

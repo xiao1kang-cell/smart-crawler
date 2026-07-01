@@ -481,6 +481,110 @@ def test_vidaxl_breadcrumb_falls_back_to_collection_url_slug_when_name_missing()
     assert row["category_path"] == "Bunk Beds Nl"
 
 
+def test_vidaxl_title_fallback_fills_product_only_breadcrumb_category():
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    product = {
+        **_JSONLD_PRODUCT,
+        "name": "vidaXL Colchão de espuma 90x200 cm 7 zonas branco",
+        "category": None,
+    }
+    doc = {
+        "@context": "https://schema.org",
+        "@type": "ItemPage",
+        "breadcrumb": {
+            "@type": "BreadcrumbList",
+            "itemListElement": [
+                {
+                    "@type": "ListItem",
+                    "position": 1,
+                    "item": {
+                        "@type": "WebPage",
+                        "@id": "https://www.vidaxl.pt",
+                        "name": "Frontpage",
+                    },
+                },
+                {
+                    "@type": "ListItem",
+                    "position": 2,
+                    "item": {
+                        "@type": "ItemPage",
+                        "@id": _PDP_URL,
+                        "name": product["name"],
+                    },
+                },
+            ],
+        },
+        "mainEntity": product,
+    }
+    html = (
+        "<html><head><script type=\"application/ld+json\">"
+        + json.dumps(doc)
+        + "</script></head></html>"
+    )
+
+    row = VidaxlCrawler(_site(country="PT"))._parse_jsonld(html, _PDP_URL)
+
+    assert row is not None
+    assert row["category_path"] == "Mobiliário/Camas e acessórios/Colchões"
+
+
+def test_vidaxl_title_fallback_fills_gabion_category():
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    product = {
+        **_JSONLD_PRODUCT,
+        "name": "vidaXL Cesto gabião com cobertura 200x50x150 cm ferro galvanizado",
+        "category": None,
+    }
+    html = (
+        "<html><head><script type=\"application/ld+json\">"
+        + json.dumps({"@context": "https://schema.org", "@type": "Product", **product})
+        + "</script></head></html>"
+    )
+
+    row = VidaxlCrawler(_site(country="PT"))._parse_jsonld(html, _PDP_URL)
+
+    assert row is not None
+    assert row["category_path"] == "Hardware/Cercas e barreiras/Gabiões"
+
+
+@pytest.mark.parametrize(
+    ("country", "title", "expected"),
+    [
+        (
+            "DE",
+            "vidaXL Outdoor-Sofagarnitur mit Kissen 5 pcs Natur und Creme",
+            "Garden & Outdoor/Outdoor Furniture/Outdoor Sofas & Sets",
+        ),
+        (
+            "ES",
+            "vidaXL Tocador con LEDs y armario madera contrachapada roble ahumado",
+            "Furniture/Bedroom/Vanities",
+        ),
+        (
+            "FR",
+            "vidaXL Coiffeuse avec LED Chêne fumé 74,5x40x141 cm",
+            "Furniture/Bedroom/Vanities",
+        ),
+    ],
+)
+def test_vidaxl_title_fallback_fills_multilingual_categories(country, title, expected):
+    from app.crawlers.vidaxl import VidaxlCrawler
+
+    product = {**_JSONLD_PRODUCT, "name": title, "category": None}
+    html = (
+        "<html><head><script type=\"application/ld+json\">"
+        + json.dumps({"@context": "https://schema.org", "@type": "Product", **product})
+        + "</script></head></html>"
+    )
+
+    row = VidaxlCrawler(_site(country=country))._parse_jsonld(html, _PDP_URL)
+
+    assert row is not None
+    assert row["category_path"] == expected
+
+
 def test_vidaxl_html_promotion_does_not_match_ideal_as_deal():
     from app.crawlers.vidaxl import _promotion_attributes_from_html
 

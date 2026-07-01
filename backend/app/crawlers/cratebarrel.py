@@ -61,6 +61,7 @@ from .base import BaseCrawler, CrawlResult
 
 DEFAULT_LIMIT = int(os.environ.get("CRATEBARREL_LIMIT", "999999"))
 SITEMAP_INDEX = "https://www.crateandbarrel.com/assets/sitemap-index.xml"
+TRY_BROWSE_MODEL_ENRICH = os.environ.get("CRATEBARREL_TRY_BROWSE_MODEL", "1") == "1"
 TRY_PDP_ENRICH = os.environ.get("CRATEBARREL_TRY_PDP", "0") == "1"
 PDP_ENRICH_BUDGET = int(os.environ.get("CRATEBARREL_PDP_BUDGET", "50"))
 
@@ -195,7 +196,13 @@ class CrateBarrelCrawler(BaseCrawler):
                 f"（累计入库 {len(result.products)} / sitemap 去重 {len(seen)}）")
             self.sleep()
 
-        # ---- Step 3（可选）：PDP 兜底丰富 ----
+        # ---- Step 3：轻量 JSON 端点丰富价格/描述/评分 ----
+        if TRY_BROWSE_MODEL_ENRICH and result.products:
+            ok = self._enrich_from_browse_model(result.products)
+            result.notes.append(
+                f"browse-model 价格兜底尝试 {len(result.products)}，成功 {ok}")
+
+        # ---- Step 4（可选）：PDP 兜底丰富 ----
         if TRY_PDP_ENRICH and result.products:
             budget = min(PDP_ENRICH_BUDGET, len(result.products))
             ok = self._enrich_from_pdp(result.products[:budget])
@@ -273,7 +280,113 @@ class CrateBarrelCrawler(BaseCrawler):
             "product_url": url,
             "site": self.site.site,
             "brand": self.site.brand,
+            "_skip_price_history_if_no_price": True,
         }
+
+    def _enrich_from_browse_model(self, rows: list[dict]) -> int:
+        """Use Crate's JSON browse model endpoint.
+
+        PDP HTML is Akamai-gated, but the numeric SKU endpoint is readable in
+        production and carries the current price:
+        /single-product-page/get-browse-model/{sku}
+        """
+        fetcher = self.make_fetcher(kind="product", source="cratebarrel_browse_model")
+        ok = 0
+        for row in rows:
+            sku = str(row.get("sku") or "").strip()
+            if not sku or not sku.isdigit():
+                continue
+            url = f"{self.base}/single-product-page/get-browse-model/{sku}"
+            try:
+                res = fetcher.get(
+                    url,
+                    headers={
+                        **self._headers(),
+                        "Accept": "application/json,text/plain,*/*",
+                        "Referer": self.base + "/",
+                    },
+                    timeout=25,
+                )
+            except Exception:
+                continue
+            if (res.status or 0) != 200 or not (res.text or "").lstrip().startswith("{"):
+                continue
+            try:
+                data = json.loads(res.text)
+            except json.JSONDecodeError:
+                continue
+            if self._merge_from_browse_model(row, data):
+                ok += 1
+            self.sleep()
+        return ok
+
+    def _merge_from_browse_model(self, row: dict, data: dict) -> bool:
+        browse = data.get("browseDto") if isinstance(data, dict) else {}
+        if not isinstance(browse, dict):
+            browse = {}
+        rewards = browse.get("rewards") if isinstance(browse.get("rewards"), dict) else {}
+        price = (
+            self._num(rewards.get("currentPrice"))
+            or self._find_number(browse, "currentPrice")
+            or self._find_number(browse, "salePrice")
+            or self._find_number(browse, "price")
+        )
+        original = (
+            self._find_number(browse, "regularPrice")
+            or self._find_number(browse, "listPrice")
+            or self._find_number(browse, "wasPrice")
+            or price
+        )
+        changed = False
+        if price is not None and price > 0:
+            row["sale_price"] = price
+            row["original_price"] = original or price
+            row["currency"] = row.get("currency") or "USD"
+            changed = True
+
+        rating = (
+            self._find_number(browse, "ratingValue")
+            or self._find_number(browse, "averageRating")
+            or self._find_number(browse, "rating")
+        )
+        if rating is not None:
+            row["ratings"] = rating
+            changed = True
+        review_count = (
+            self._find_int(browse, "reviewCount")
+            or self._find_int(browse, "reviewsCount")
+            or self._find_int(browse, "ratingCount")
+        )
+        if review_count is not None:
+            row["review_count"] = review_count
+            changed = True
+
+        description = self._find_text(browse, "description")
+        if description and not row.get("description"):
+            row["description"] = description
+            changed = True
+
+        image = (
+            self._find_text(browse, "imageUrl")
+            or self._find_text(browse, "heroImageUrl")
+            or self._find_text(browse, "image")
+        )
+        if image:
+            images = list(row.get("image_urls") or [])
+            if image not in images:
+                images.append(image)
+                row["image_urls"] = images[:10]
+                changed = True
+
+        availability = str(
+            self._find_text(browse, "availability")
+            or self._find_text(browse, "stockStatus")
+            or ""
+        ).lower()
+        if "out" in availability and "stock" in availability:
+            row["status"] = "out_of_stock"
+            changed = True
+        return changed
 
     # ------------------------------------------------------------------
     # PDP 兜底（默认关）—— 试 make_fetcher().get() → 命中 Akamai 则 StealthyFetcher
@@ -461,3 +574,43 @@ class CrateBarrelCrawler(BaseCrawler):
             return float(m.group()) if m else None
         except ValueError:
             return None
+
+    @classmethod
+    def _find_number(cls, data, key: str) -> float | None:
+        val = cls._find_value(data, key)
+        return cls._num(val)
+
+    @classmethod
+    def _find_int(cls, data, key: str) -> int | None:
+        val = cls._find_value(data, key)
+        if val is None:
+            return None
+        try:
+            return int(float(str(val).replace(",", "")))
+        except ValueError:
+            return None
+
+    @classmethod
+    def _find_text(cls, data, key: str) -> str | None:
+        val = cls._find_value(data, key)
+        if val is None or isinstance(val, (dict, list)):
+            return None
+        text = str(val).strip()
+        return text or None
+
+    @classmethod
+    def _find_value(cls, data, key: str):
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if k == key:
+                    return v
+            for v in data.values():
+                found = cls._find_value(v, key)
+                if found is not None:
+                    return found
+        elif isinstance(data, list):
+            for item in data:
+                found = cls._find_value(item, key)
+                if found is not None:
+                    return found
+        return None

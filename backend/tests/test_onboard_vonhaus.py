@@ -353,3 +353,39 @@ def test_vonhaus_parse_product_collects_jsonld_category_and_promotions():
     assert row["attributes"]["free_shipping_label"] == "Free delivery"
     assert "Bundle deal: buy 2 save 15%" in row["attributes"]["promotions"]
     assert any("Summer sale save 20%" in item for item in row["attributes"]["promotions"])
+
+
+def test_vonhaus_parse_product_fallback_category_and_free_delivery():
+    from app.crawlers.vonhaus import VonHausCrawler
+
+    html = """
+    <html><head>
+      <meta property="product:price:amount" content="459.99" />
+      <meta property="product:price:currency" content="GBP" />
+      <meta property="og:title" content="Garden Sofa Set with Two Stools and Dining Table | VonHaus" />
+      <meta property="og:image" content="https://cdn.vonhaus.com/garden-sofa.jpg" />
+      <meta property="og:description" content="Free Delivery On All Orders*" />
+    </head><body>
+      <h1>Aruba Garden Corner Sofa with Table</h1>
+      <div itemprop="aggregateRating" itemtype="https://schema.org/AggregateRating" itemscope>
+        <meta itemprop="reviewCount" content="96"/>
+        <meta itemprop="ratingValue" content="4.80"/>
+      </div>
+      <a title="Free Delivery On All Orders*">Free Delivery On All Orders*</a>
+      <div data-product-id="7298"></div>
+    </body></html>
+    """
+
+    row = VonHausCrawler(_site())._parse_product(
+        html,
+        "https://www.vonhaus.com/vh_en/garden-corner-sofa-set",
+    )
+
+    assert row is not None
+    assert row["sku"] == "7298"
+    assert row["category_path"] == "Garden & Outdoor"
+    assert row["review_count"] == 96
+    assert row["ratings"] == 4.8
+    assert row["has_free_shipping"] is True
+    assert row["attributes"]["free_shipping_label"] == "Free delivery"
+    assert row["attributes"]["promotions"]

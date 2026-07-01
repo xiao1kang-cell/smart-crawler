@@ -16,6 +16,7 @@ from .models import PriceHistory, Product
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 _PRICE_RE = re.compile(r"[-+]?\d[\d\s\u00a0.,]*")
+_INT_RE = re.compile(r"\d[\d\s\u00a0,]*")
 _WEAK_TITLE_RE = re.compile(
     r"^(product|item|sku|untitled|detail|details|view product|shop now)$",
     re.I,
@@ -139,6 +140,7 @@ REQUIRED = ("sku", "title", "product_url", "site")
 def normalize(raw: dict) -> dict:
     """把采集器产出的原始 dict 清洗成可入库的标准 dict。"""
     p = dict(raw)
+    review_missing = p.get("review_count") in (None, "")
     p["title"] = clean_text(p.get("title"))
     p["description"] = clean_text(p.get("description"))
     p["sale_price"] = _first_price(p, _SALE_PRICE_ALIASES)
@@ -147,6 +149,8 @@ def normalize(raw: dict) -> dict:
         p["sale_price"] = p["original_price"]
     p["currency"] = normalize_currency_for_site(p.get("currency"), p.get("site"))
     p["published_at"] = parse_dt(p.get("published_at"))
+    p["review_count"] = _review_count_or_zero(p.get("review_count"))
+    p["_review_count_missing"] = review_missing
     return p
 
 
@@ -156,6 +160,24 @@ def _first_price(raw: dict, keys: tuple[str, ...]) -> float | None:
         if value is not None:
             return value
     return None
+
+
+def _review_count_or_zero(value) -> int:
+    if value in (None, ""):
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return max(0, int(value))
+    text = str(value)
+    m = _INT_RE.search(text)
+    if not m:
+        return 0
+    digits = re.sub(r"[\s\u00a0,]", "", m.group())
+    try:
+        return max(0, int(digits))
+    except ValueError:
+        return 0
 
 
 def is_valid(p: dict) -> bool:
@@ -223,6 +245,9 @@ def upsert_products(session: Session, site: str, items: list[dict]) -> dict:
             for k, v in _product_kwargs(p).items():
                 if k in ("created_time",):
                     continue
+                if (k == "review_count" and p.get("_review_count_missing")
+                        and getattr(row, k, None) is not None):
+                    continue
                 if k == "title":
                     v = _best_title(getattr(row, k, None), v, sku)
                 if k in _PRESERVE_ON_EMPTY and _is_empty(v):
@@ -234,7 +259,8 @@ def upsert_products(session: Session, site: str, items: list[dict]) -> dict:
             product_row = row
             stats["updated"] += 1
 
-        _upsert_price_history(session, site, sku, today, product_row)
+        if not _skip_price_history(p):
+            _upsert_price_history(session, site, sku, today, product_row)
     return stats
 
 
@@ -297,8 +323,18 @@ def _upsert_price_history(
             setattr(row, k, v)
 
 
+def _skip_price_history(p: dict) -> bool:
+    """Allow URL-only discovery rows to avoid creating empty daily history."""
+    if not p.get("_skip_price_history_if_no_price"):
+        return False
+    return p.get("sale_price") is None and p.get("original_price") is None
+
+
 def _has_changed(row: Product, p: dict) -> bool:
     for field in ("sale_price", "original_price", "status", "review_count"):
+        if (field == "review_count" and p.get("_review_count_missing")
+                and getattr(row, field) is not None):
+            continue
         if p.get(field) is not None and getattr(row, field) != p.get(field):
             return True
     return False
