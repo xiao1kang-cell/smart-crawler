@@ -492,93 +492,95 @@ onMounted(async () => {
       <USelect v-model="pageSize" class="pager-select" variant="outline" :items="pageSizeItems" value-key="value" @update:model-value="page = 1; load()" />
     </div>
 
-    <div v-if="showAdd" class="tracking-modal-backdrop" @click.self="showAdd = false">
-      <section class="tracking-dialog" role="dialog" aria-modal="true" aria-labelledby="add-tracking-title">
-        <header class="dialog-head">
-          <h2 id="add-tracking-title" class="dialog-title">添加标杆</h2>
-          <button type="button" class="dialog-close" aria-label="关闭" @click="showAdd = false">
-            <X class="size-5" />
-          </button>
-        </header>
-        <div class="dialog-body">
-          <UFormField label="URL" class="dialog-field">
-            <UInput v-model="addForm.url" placeholder="https://brand.example.com" />
-          </UFormField>
-          <UFormField label="品牌" class="dialog-field">
-            <UInput v-model="addForm.brand" maxlength="50" />
-          </UFormField>
-          <UFormField label="市场" class="dialog-field">
-            <UInput v-model="addForm.country" maxlength="8" placeholder="US" />
-          </UFormField>
-        </div>
-        <footer class="dialog-foot">
-          <button type="button" class="dialog-btn ghost" @click="showAdd = false">取消</button>
-          <button type="button" class="dialog-btn primary" :disabled="addBusy" @click="submitAdd">
-            <Plus v-if="!addBusy" class="size-4" />
-            <RefreshCw v-else class="size-4 spin" />
-            <span>{{ addBusy ? '探测中' : '添加并抓取' }}</span>
-          </button>
-        </footer>
-      </section>
-    </div>
+    <Teleport to="body">
+      <div v-if="showAdd" class="tracking-modal-backdrop" @click.self="showAdd = false">
+        <section class="tracking-dialog" role="dialog" aria-modal="true" aria-labelledby="add-tracking-title">
+          <header class="dialog-head">
+            <h2 id="add-tracking-title" class="dialog-title">添加标杆</h2>
+            <button type="button" class="dialog-close" aria-label="关闭" @click="showAdd = false">
+              <X class="size-5" />
+            </button>
+          </header>
+          <div class="dialog-body">
+            <UFormField label="URL" class="dialog-field">
+              <UInput v-model="addForm.url" placeholder="https://brand.example.com" />
+            </UFormField>
+            <UFormField label="品牌" class="dialog-field">
+              <UInput v-model="addForm.brand" maxlength="50" />
+            </UFormField>
+            <UFormField label="市场" class="dialog-field">
+              <UInput v-model="addForm.country" maxlength="8" placeholder="US" />
+            </UFormField>
+          </div>
+          <footer class="dialog-foot">
+            <button type="button" class="dialog-btn ghost" @click="showAdd = false">取消</button>
+            <button type="button" class="dialog-btn primary" :disabled="addBusy" @click="submitAdd">
+              <Plus v-if="!addBusy" class="size-4" />
+              <RefreshCw v-else class="size-4 spin" />
+              <span>{{ addBusy ? '探测中' : '添加并抓取' }}</span>
+            </button>
+          </footer>
+        </section>
+      </div>
 
-    <div v-if="editing" class="tracking-modal-backdrop" @click.self="editing = null">
-      <section class="tracking-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-tracking-title">
-        <header class="dialog-head">
-          <h2 id="edit-tracking-title" class="dialog-title">编辑标杆</h2>
-          <button type="button" class="dialog-close" aria-label="关闭" @click="editing = null">
-            <X class="size-5" />
-          </button>
-        </header>
-        <div class="dialog-body">
-          <UFormField label="品牌" class="dialog-field">
-            <UInput v-model="editing.brand" maxlength="50" />
-          </UFormField>
-          <UFormField label="市场" class="dialog-field">
-            <UInput v-model="editing.country" maxlength="8" />
-          </UFormField>
-          <UFormField label="评论率" class="dialog-field">
-            <UInput v-model="editing.review_rate" type="number" step="0.001" />
-          </UFormField>
-        </div>
-        <footer class="dialog-foot">
-          <button type="button" class="dialog-btn ghost" @click="editing = null">取消</button>
-          <button type="button" class="dialog-btn primary" @click="saveEdit">
-            <Pencil class="size-4" />
-            <span>保存</span>
-          </button>
-        </footer>
-      </section>
-    </div>
+      <div v-if="editing" class="tracking-modal-backdrop" @click.self="editing = null">
+        <section class="tracking-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-tracking-title">
+          <header class="dialog-head">
+            <h2 id="edit-tracking-title" class="dialog-title">编辑标杆</h2>
+            <button type="button" class="dialog-close" aria-label="关闭" @click="editing = null">
+              <X class="size-5" />
+            </button>
+          </header>
+          <div class="dialog-body">
+            <UFormField label="品牌" class="dialog-field">
+              <UInput v-model="editing.brand" maxlength="50" />
+            </UFormField>
+            <UFormField label="市场" class="dialog-field">
+              <UInput v-model="editing.country" maxlength="8" />
+            </UFormField>
+            <UFormField label="评论率" class="dialog-field">
+              <UInput v-model="editing.review_rate" type="number" step="0.001" />
+            </UFormField>
+          </div>
+          <footer class="dialog-foot">
+            <button type="button" class="dialog-btn ghost" @click="editing = null">取消</button>
+            <button type="button" class="dialog-btn primary" @click="saveEdit">
+              <Pencil class="size-4" />
+              <span>保存</span>
+            </button>
+          </footer>
+        </section>
+      </div>
 
-    <div v-if="deleteTarget" class="tracking-modal-backdrop" @click.self="closeDeleteDialog">
-      <section class="tracking-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-tracking-title">
-        <header class="dialog-head">
-          <h2 id="delete-tracking-title" class="dialog-title">移出追踪站点</h2>
-          <button type="button" class="dialog-close" aria-label="关闭" :disabled="deleteBusy" @click="deleteTarget = null">
-            <X class="size-5" />
-          </button>
-        </header>
-        <div class="dialog-body">
-          <div class="delete-confirm">
-            <Trash2 class="size-5" />
-            <div>
-              <b>{{ deleteTarget.brand || deleteTarget.site }}</b>
-              <p>确认从当前工作区移出该标杆站点？历史商品数据不会在其他仍启用该站点的工作区被删除。</p>
-              <small>{{ deleteTarget.url || deleteTarget.site }}</small>
+      <div v-if="deleteTarget" class="tracking-modal-backdrop" @click.self="closeDeleteDialog">
+        <section class="tracking-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-tracking-title">
+          <header class="dialog-head">
+            <h2 id="delete-tracking-title" class="dialog-title">移出追踪站点</h2>
+            <button type="button" class="dialog-close" aria-label="关闭" :disabled="deleteBusy" @click="deleteTarget = null">
+              <X class="size-5" />
+            </button>
+          </header>
+          <div class="dialog-body">
+            <div class="delete-confirm">
+              <Trash2 class="size-5" />
+              <div>
+                <b>{{ deleteTarget.brand || deleteTarget.site }}</b>
+                <p>确认从当前工作区移出该标杆站点？历史商品数据不会在其他仍启用该站点的工作区被删除。</p>
+                <small>{{ deleteTarget.url || deleteTarget.site }}</small>
+              </div>
             </div>
           </div>
-        </div>
-        <footer class="dialog-foot">
-          <button type="button" class="dialog-btn ghost" :disabled="deleteBusy" @click="deleteTarget = null">取消</button>
-          <button type="button" class="dialog-btn danger-solid" :disabled="deleteBusy" @click="confirmRemove">
-            <Trash2 v-if="!deleteBusy" class="size-4" />
-            <RefreshCw v-else class="size-4 spin" />
-            <span>{{ deleteBusy ? '移出中' : '确认移出' }}</span>
-          </button>
-        </footer>
-      </section>
-    </div>
+          <footer class="dialog-foot">
+            <button type="button" class="dialog-btn ghost" :disabled="deleteBusy" @click="deleteTarget = null">取消</button>
+            <button type="button" class="dialog-btn danger-solid" :disabled="deleteBusy" @click="confirmRemove">
+              <Trash2 v-if="!deleteBusy" class="size-4" />
+              <RefreshCw v-else class="size-4 spin" />
+              <span>{{ deleteBusy ? '移出中' : '确认移出' }}</span>
+            </button>
+          </footer>
+        </section>
+      </div>
+    </Teleport>
   </section>
 </template>
 
