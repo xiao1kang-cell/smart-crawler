@@ -9,7 +9,7 @@ x-app: &app-base
   build: .
   image: smart-crawler:latest
   environment: &app-env
-    DATABASE_URL: postgresql+psycopg://sc:${PG_PASSWORD:-changeme}@postgres:5432/smartcrawler
+    DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
     SC_SECRET: ${SC_SECRET:-change-me-strong-random}
     OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -18,9 +18,26 @@ x-app: &app-base
     SNAPSHOT_DIR: /data/snapshots
     HOMARY_LIMIT: ${HOMARY_LIMIT:-500}
     COSTWAY_PAGES_PER_CAT: ${COSTWAY_PAGES_PER_CAT:-3}
+    AMAZON_VOC_TOKEN: ${AMAZON_VOC_TOKEN:-}
+    AMAZON_VOC_PUBLIC_BASE_URL: ${AMAZON_VOC_PUBLIC_BASE_URL:-}
+    AMAZON_VOC_REDIS_URL: ${AMAZON_VOC_REDIS_URL:-redis://redis:6379/0}
+    AMAZON_VOC_QUEUE_PREFIX: ${AMAZON_VOC_QUEUE_PREFIX:-amazon:voc}
+    AMAZON_VOC_RESULT_PREFIX: ${AMAZON_VOC_RESULT_PREFIX:-crawler-data}
+    AMAZON_VOC_DEFAULT_TENANT: ${AMAZON_VOC_DEFAULT_TENANT:-default}
+    AMAZON_VOC_CALLBACK_SECRET: ${AMAZON_VOC_CALLBACK_SECRET:-}
+    AMAZON_VOC_OSS_ENDPOINT: ${AMAZON_VOC_OSS_ENDPOINT:-}
+    AMAZON_VOC_OSS_BUCKET: ${AMAZON_VOC_OSS_BUCKET:-}
+    AMAZON_VOC_OSS_ACCESS_KEY_ID: ${AMAZON_VOC_OSS_ACCESS_KEY_ID:-}
+    AMAZON_VOC_OSS_ACCESS_KEY_SECRET: ${AMAZON_VOC_OSS_ACCESS_KEY_SECRET:-}
+    AMAZON_VOC_CALLBACK_RETRY_INTERVAL_SECONDS: ${AMAZON_VOC_CALLBACK_RETRY_INTERVAL_SECONDS:-60}
+    AMAZON_VOC_CALLBACK_RETRY_MIN_INTERVAL_SECONDS: ${AMAZON_VOC_CALLBACK_RETRY_MIN_INTERVAL_SECONDS:-300}
+    AMAZON_VOC_CALLBACK_RETRY_MAX_ATTEMPTS: ${AMAZON_VOC_CALLBACK_RETRY_MAX_ATTEMPTS:-5}
+    AMAZON_VOC_CALLBACK_RETRY_BATCH_SIZE: ${AMAZON_VOC_CALLBACK_RETRY_BATCH_SIZE:-50}
   restart: unless-stopped
   depends_on:
     postgres:
+      condition: service_healthy
+    redis:
       condition: service_healthy
 
 services:
@@ -29,14 +46,41 @@ services:
     image: postgres:16-alpine
     container_name: sc-postgres
     restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - max_connections=100
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - effective_cache_size=4GB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - wal_level=replica
     environment:
-      POSTGRES_USER: sc
-      POSTGRES_PASSWORD: ${PG_PASSWORD:-changeme}
-      POSTGRES_DB: smartcrawler
+      POSTGRES_USER: ${POSTGRES_USER:-smart_crawler}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-smart_crawler}
     volumes:
       - /volume1/smart-crawler/pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sc -d smartcrawler"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-smart_crawler} -d ${POSTGRES_DB:-smart_crawler}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: sc-redis
+    restart: unless-stopped
+    volumes:
+      - /volume1/smart-crawler/redis:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -75,6 +119,32 @@ services:
       - /volume1/smart-crawler/config/proxies.txt:/app/backend/proxies.txt:ro
       - /volume1/smart-crawler/logs:/data/logs
 
+  amazon_voc_worker:
+    <<: *app-base
+    container_name: sc-amazon-voc-worker
+    command: python -m app.amazon_voc.worker
+    environment:
+      <<: *app-env
+      RUN_SCHEDULER: "0"
+      AMAZON_VOC_WORKER_ID: amazon-voc-worker-1
+      AMAZON_VOC_WORKER_JOB_TYPES: ${AMAZON_VOC_WORKER_JOB_TYPES:-}
+      AMAZON_VOC_WORKER_MARKETS: ${AMAZON_VOC_WORKER_MARKETS:-}
+      AMAZON_VOC_WORKER_EXCLUDE_MARKETS: ${AMAZON_VOC_WORKER_EXCLUDE_MARKETS:-}
+    volumes:
+      - /volume1/smart-crawler/snapshots:/data/snapshots
+      - /volume1/smart-crawler/logs:/data/logs
+
+  amazon_voc_daemon:
+    <<: *app-base
+    container_name: sc-amazon-voc-daemon
+    command: python -m app.amazon_voc.daemon
+    environment:
+      <<: *app-env
+      RUN_SCHEDULER: "0"
+    volumes:
+      - /volume1/smart-crawler/snapshots:/data/snapshots
+      - /volume1/smart-crawler/logs:/data/logs
+
   # ---- 备份：每日 pg_dump + 快照清理 ----
   backup:
     image: postgres:16-alpine
@@ -84,11 +154,11 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      PGPASSWORD: ${PG_PASSWORD:-changeme}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-change-me}
     volumes:
       - /volume1/smart-crawler/backups:/backups
     entrypoint: ["sh", "-c", "while true; do
-      pg_dump -h postgres -U sc smartcrawler | gzip > /backups/sc_$$(date +%Y%m%d).sql.gz;
+      pg_dump -h postgres -U ${POSTGRES_USER:-smart_crawler} ${POSTGRES_DB:-smart_crawler} | gzip > /backups/sc_$$(date +%Y%m%d).sql.gz;
       find /backups -name '*.sql.gz' -mtime +30 -delete;
       sleep 86400; done"]
 

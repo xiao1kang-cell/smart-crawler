@@ -6,6 +6,8 @@ data/*.db
 .DS_Store
 .claude/
 .env
+.env.*
+!.env.example
 data/
 backups/
 node_modules/
@@ -24,4 +26,3 @@ deliverables/*_key.md
 # 私有代理配置只允许放模板进仓库；真实凭证用 PROXIES_FILE 指到仓库外
 backend/proxies.local.txt
 backend/proxies.*.txt
-secrets/

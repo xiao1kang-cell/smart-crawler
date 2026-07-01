@@ -5,6 +5,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     Column,
     Date,
@@ -12,12 +13,15 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Index,
     String,
     Text,
     UniqueConstraint,
 )
 
 from .db import Base
+
+BIGINT_PK = BigInteger().with_variant(Integer, "sqlite")
 
 
 class Site(Base):
@@ -851,6 +855,341 @@ class WebhookDelivery(Base):
     finished_at = Column(DateTime)
 
 
+class AmazonVocJobFields:
+    id = Column(Integer, primary_key=True)
+    task_id = Column(String, unique=True, index=True)
+    tenant_id = Column(String, index=True)
+    app_id = Column(String, index=True)
+    req_ssn = Column(String, index=True)
+    job_type = Column(String, index=True)            # AmazonReviewJob / AmazonListingJob
+    market = Column(String, index=True)
+    asin = Column(String, index=True)
+    priority = Column(Integer, default=100, index=True)
+    priority_label = Column(String)
+    biz_source = Column(String, index=True)
+    sla = Column(Integer)
+    payload = Column(JSON)
+    raw_request = Column(JSON)
+    callback_url = Column(Text)
+    callback_status = Column(String, default="none", index=True)  # none/pending/success/failed
+    callback_attempts = Column(Integer, default=0)
+    callback_last_error = Column(Text)
+    callback_updated_at = Column(DateTime)
+    status = Column(String, default="queued", index=True)  # queued/running/completed/failed/partial
+    worker = Column(String)
+    result_count = Column(Integer, default=0)
+    result_data = Column(JSON)
+    result_url = Column(Text)
+    oss_object_key = Column(String)
+    snapshot_html = Column(Text)
+    snapshot_url = Column(Text)
+    snapshot_object_key = Column(String)
+    error_msg = Column(Text)
+    fail_reason = Column(String, index=True)
+    retries = Column(Integer, default=0)
+    max_retries = Column(Integer, default=3)
+    next_attempt_at = Column(DateTime, default=datetime.utcnow, index=True)
+    sla_deadline = Column(DateTime, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    started_at = Column(DateTime)
+    heartbeat_at = Column(DateTime, index=True)
+    completed_at = Column(DateTime)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AmazonVocJob(AmazonVocJobFields, Base):
+    """Legacy generic Amazon VOC task table.
+
+    New tasks are written to the type-specific tables below. This model remains
+    mapped so old rows can still be queried or drained during migration.
+    """
+
+    __tablename__ = "amazon_voc_jobs"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "app_id", "req_ssn", name="uq_amazon_voc_req"),
+        Index("ix_amazon_voc_claim", "status", "next_attempt_at", "priority", "id"),
+    )
+
+
+class AmazonReviewJob(AmazonVocJobFields, Base):
+    """Amazon review crawl task table."""
+
+    __tablename__ = "amazon_review_jobs"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "app_id", "req_ssn", name="uq_amazon_review_req"),
+        Index("ix_amazon_review_claim", "status", "next_attempt_at", "priority", "id"),
+    )
+
+
+class AmazonListingJob(AmazonVocJobFields, Base):
+    """Amazon listing/detail crawl task table."""
+
+    __tablename__ = "amazon_listing_jobs"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "app_id", "req_ssn", name="uq_amazon_listing_req"),
+        Index("ix_amazon_listing_claim", "status", "next_attempt_at", "priority", "id"),
+    )
+
+
+class AmazonJobIndex(Base):
+    """Routing index for Amazon jobs stored in type-specific tables."""
+
+    __tablename__ = "amazon_job_index"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "app_id", "req_ssn", "job_type", name="uq_amazon_job_index_req_type"),
+        Index("ix_amazon_job_index_job_ref", "job_type", "job_pk"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    task_id = Column(String, unique=True, index=True, nullable=False)
+    tenant_id = Column(String, index=True, nullable=False)
+    app_id = Column(String, index=True, nullable=False)
+    req_ssn = Column(String, index=True, nullable=False)
+    job_type = Column(String, index=True, nullable=False)
+    job_pk = Column(Integer, nullable=False)
+    table_name = Column(String, index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AmazonCrawlerAccount(Base):
+    """Amazon crawler account/proxy slot stored in Postgres.
+
+    The shape intentionally mirrors the legacy crawler_accounts table so the
+    migrated Amazon crawler can keep the old account scheduling behavior.
+    """
+
+    __tablename__ = "amazon_crawler_accounts"
+    __table_args__ = (
+        UniqueConstraint("platform", "username", name="uq_amazon_account_platform_username"),
+        Index("idx_amazon_account_platform_state_country", "platform", "state", "country"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    platform = Column(String, default="amazon", index=True)
+    username = Column(String, index=True)
+    password = Column(Text)
+    country = Column(String, index=True)
+    cookies = Column(JSON)
+    proxy_config = Column("proxy_", JSON)          # legacy Account.proxy_
+    fingerprint_id = Column(String, index=True)
+    static_ip = Column(String, index=True)           # listing/detail static proxy URL
+    totp_secret = Column(String)
+    state = Column(Integer, default=1, index=True)  # 1=enabled, 0=disabled
+    is_used = Column(Boolean, default=False, index=True)
+    last_used_time = Column(Float, default=0.0, index=True)
+    fail_count = Column(Integer, default=0, index=True)
+    cooldown_until = Column(Float, default=0.0, index=True)
+    city = Column(String)
+    user_agent = Column(Text)
+    refresh_time = Column(String)
+    create_time = Column(String, default=lambda: datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
+    update_time = Column(String, default=lambda: datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
+    quota_factor = Column(Float, default=1.0)
+    label = Column(String, index=True)
+
+
+class CrawlerEventLog(Base):
+    """Amazon crawler structured event log.
+
+    Ported from the legacy crawler_event_log table. Worker code emits these
+    events through Redis; the Amazon daemon consumes them into Postgres for
+    ban analysis and account daily aggregation.
+    """
+
+    __tablename__ = "crawler_event_log"
+    __table_args__ = (
+        Index("idx_el_event_type", "event_type"),
+        Index("idx_el_username", "username"),
+        Index("idx_el_asin", "asin"),
+        Index("idx_el_country", "country"),
+        Index("idx_el_created_at", "created_at"),
+        Index("idx_el_username_date", "username", "created_at"),
+    )
+
+    id = Column(BIGINT_PK, primary_key=True)
+    event_type = Column(String(32), nullable=False, default="")
+    username = Column(String(64), nullable=False, default="")
+    asin = Column(String(32), nullable=False, default="")
+    country = Column(String(10), nullable=False, default="")
+    page = Column(Integer, nullable=False, default=0)
+    http_status = Column(Integer, nullable=False, default=0)
+    daily_pages = Column(Integer, nullable=False, default=0)
+    session_seq = Column(Integer, nullable=False, default=0)
+    worker_id = Column(String(128), nullable=False, default="")
+    proxy = Column(String(512), nullable=False, default="")
+    error_msg = Column(Text)
+    extra = Column(JSON)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class AccountUsageLog(Base):
+    """Per-task account usage log, kept for daily aggregation."""
+
+    __tablename__ = "account_usage_log"
+    __table_args__ = (
+        Index("idx_ul_username", "username"),
+        Index("idx_ul_asin", "asin"),
+        Index("idx_ul_country", "country"),
+        Index("idx_ul_success", "success"),
+        Index("idx_ul_created_at", "created_at"),
+        Index("idx_ul_username_created", "username", "created_at"),
+    )
+
+    id = Column(BIGINT_PK, primary_key=True)
+    task_id = Column(String(64), nullable=False, default="")
+    asin = Column(String(32), nullable=False, default="")
+    country = Column(String(10), nullable=False, default="")
+    username = Column(String(64), nullable=False, default="")
+    success = Column(Boolean, nullable=False, default=False)
+    review_count = Column(Integer, nullable=False, default=0)
+    expected_count = Column(Integer, nullable=False, default=0)
+    start_time = Column(DateTime)
+    end_time = Column(DateTime)
+    duration_seconds = Column(Integer, nullable=False, default=0)
+    retry_count = Column(Integer, nullable=False, default=0)
+    error_msg = Column(Text)
+    worker_id = Column(String(128), default="")
+    ip = Column(String(128), default="")
+    task_type = Column(String(32), default="review")
+    created_at = Column(DateTime, default=datetime.now, nullable=False, index=True)
+
+
+class ReviewsError(Base):
+    """Raw review parsing/fetch error material for later manual diagnosis."""
+
+    __tablename__ = "reviews_error"
+    __table_args__ = (
+        Index("idx_reviews_error_asin", "asin"),
+        Index("idx_reviews_error_status", "status"),
+        Index("idx_reviews_error_created_at", "created_at"),
+    )
+
+    id = Column(BIGINT_PK, primary_key=True)
+    asin = Column(String(32), nullable=False, default="")
+    country = Column(String(10), nullable=False, default="")
+    resp = Column(Text, nullable=False, default="")
+    review_data = Column(JSON)
+    task_info = Column(JSON)
+    error_msg = Column(Text)
+    status = Column(Integer, default=0, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AccountDailySummary(Base):
+    """Daily account aggregate used by long-term risk scoring."""
+
+    __tablename__ = "account_daily_summary"
+    __table_args__ = (
+        UniqueConstraint("username", "date", "country", name="uq_account_daily_user_date_country"),
+        Index("idx_ads_date", "date"),
+        Index("idx_ads_country", "country"),
+        Index("idx_ads_error_rate", "error_rate"),
+    )
+
+    id = Column(BIGINT_PK, primary_key=True)
+    username = Column(String(64), nullable=False)
+    date = Column(Date, nullable=False)
+    country = Column(String(10), nullable=False, default="")
+    total_tasks = Column(Integer, nullable=False, default=0)
+    success_tasks = Column(Integer, nullable=False, default=0)
+    failed_tasks = Column(Integer, nullable=False, default=0)
+    total_pages = Column(Integer, nullable=False, default=0)
+    total_reviews = Column(Integer, nullable=False, default=0)
+    captcha_count = Column(Integer, nullable=False, default=0)
+    ban_count = Column(Integer, nullable=False, default=0)
+    login_redirect_count = Column(Integer, nullable=False, default=0)
+    robot_check_count = Column(Integer, nullable=False, default=0)
+    proxy_rotate_count = Column(Integer, nullable=False, default=0)
+    avg_duration_seconds = Column(Float, nullable=False, default=0.0)
+    total_duration_seconds = Column(Integer, nullable=False, default=0)
+    session_count = Column(Integer, nullable=False, default=0)
+    active_hour_distribution = Column(JSON)
+    request_interval_stddev = Column(Float)
+    last_fresh_login_at = Column(DateTime)
+    cookie_age_hours = Column(Float)
+    distinct_ips = Column(Integer, nullable=False, default=0)
+    distinct_asins = Column(Integer, nullable=False, default=0)
+    error_rate = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AccountRiskProfile(Base):
+    """Long-term account risk profile generated from AccountDailySummary."""
+
+    __tablename__ = "account_risk_profile"
+    __table_args__ = (
+        UniqueConstraint("username", "country", name="uq_account_risk_user_country"),
+        Index("idx_arp_risk_level", "risk_level"),
+        Index("idx_arp_risk_score", "risk_score"),
+    )
+
+    id = Column(BIGINT_PK, primary_key=True)
+    username = Column(String(64), nullable=False)
+    country = Column(String(10), nullable=False, default="")
+    risk_score = Column(Float, nullable=False, default=0.0)
+    risk_level = Column(String(16), nullable=False, default="low")
+    avg_daily_error_rate_7d = Column(Float, default=0.0)
+    avg_daily_ban_count_7d = Column(Float, default=0.0)
+    avg_daily_captcha_count_7d = Column(Float, default=0.0)
+    total_days_active_30d = Column(Integer, default=0)
+    trend_direction = Column(String(16), default="stable")
+    recommended_daily_budget = Column(Integer)
+    recommended_page_budget = Column(Integer)
+    recommended_rest_minutes = Column(Integer)
+    last_analyzed_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AccountIpLog(Base):
+    """Account to proxy/IP usage history."""
+
+    __tablename__ = "account_ip_log"
+    __table_args__ = (
+        UniqueConstraint("username", "ip", name="uq_account_ip_user_ip"),
+        Index("idx_ail_ip", "ip"),
+        Index("idx_ail_last_seen", "last_seen_at"),
+    )
+
+    id = Column(BIGINT_PK, primary_key=True)
+    username = Column(String(64), nullable=False)
+    ip = Column(String(512), nullable=False)
+    country = Column(String(10), nullable=False, default="")
+    first_seen_at = Column(DateTime, nullable=False)
+    last_seen_at = Column(DateTime, nullable=False)
+    request_count = Column(Integer, nullable=False, default=1)
+
+
+class CrawlerQueueDepthSnapshot(Base):
+    """Redis queue depth samples for Grafana/ops checks."""
+
+    __tablename__ = "crawler_queue_depth_snapshot"
+    __table_args__ = (
+        Index("idx_qds_queue_time", "queue_name", "created_at"),
+        Index("idx_qds_created_at", "created_at"),
+    )
+
+    id = Column(BIGINT_PK, primary_key=True)
+    queue_name = Column(String(64), nullable=False)
+    redis_key = Column(String(256), nullable=False, default="")
+    depth = Column(Integer, nullable=False, default=-1)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class CrawlerRuntimeStatus(Base):
+    """Latest heartbeat/status row per crawler component."""
+
+    __tablename__ = "crawler_runtime_status"
+
+    component = Column(String(128), primary_key=True)
+    status = Column(String(16), nullable=False, default="ok")
+    message = Column(Text, nullable=False, default="")
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
 class AdminAuditLog(Base):
     """超管后台写操作审计 —— 谁在何时对什么做了什么。"""
 
@@ -865,4 +1204,3 @@ class AdminAuditLog(Base):
     detail = Column(JSON)
     ip = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
-

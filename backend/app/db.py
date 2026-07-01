@@ -12,7 +12,10 @@ from contextlib import contextmanager
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 
+from .envfile import load_env_file
 from .config import DATA_DIR
+
+load_env_file()
 
 DB_PATH = DATA_DIR / "smart_crawler.db"
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DB_PATH}")
@@ -56,9 +59,11 @@ def init_db() -> None:
 
     with _init_lock() as conn:
         if conn is None:
+            _rename_legacy_tables()
             Base.metadata.create_all(bind=engine)
             _migrate()
         else:
+            _rename_legacy_tables(bind=conn)
             Base.metadata.create_all(bind=conn)
             _migrate(bind=conn)
             conn.commit()
@@ -117,6 +122,24 @@ def _migrate(bind=None) -> None:
 
     with engine.begin() as conn:
         _migrate_with_connection(conn)
+
+
+def _rename_legacy_tables(bind=None) -> None:
+    """Rename tables whose first implementation used customer-specific names."""
+    if bind is not None:
+        _rename_legacy_tables_with_connection(bind)
+        return
+
+    with engine.begin() as conn:
+        _rename_legacy_tables_with_connection(conn)
+
+
+def _rename_legacy_tables_with_connection(conn) -> None:
+    from sqlalchemy import inspect, text
+
+    insp = inspect(conn)
+    if insp.has_table("anker_voc_jobs") and not insp.has_table("amazon_voc_jobs"):
+        conn.execute(text("ALTER TABLE anker_voc_jobs RENAME TO amazon_voc_jobs"))
 
 
 def _migrate_with_connection(conn) -> None:
@@ -269,6 +292,76 @@ def _migrate_with_connection(conn) -> None:
             FOR EACH ROW
             EXECUTE FUNCTION normalize_crawl_job_total_count()
         """))
+    if insp.has_table("amazon_job_index"):
+        if IS_SQLITE:
+            indexes = conn.execute(text("PRAGMA index_list('amazon_job_index')")).fetchall()
+            needs_rebuild = False
+            for idx in indexes:
+                idx_name = idx[1]
+                if not idx[2]:
+                    continue
+                cols = [
+                    row[2]
+                    for row in conn.execute(text(f"PRAGMA index_info('{idx_name}')")).fetchall()
+                ]
+                if cols == ["tenant_id", "app_id", "req_ssn"]:
+                    needs_rebuild = True
+                    break
+            if needs_rebuild:
+                conn.execute(text("ALTER TABLE amazon_job_index RENAME TO amazon_job_index_old"))
+                Base.metadata.tables["amazon_job_index"].create(bind=conn)
+                conn.execute(text("""
+                    INSERT OR IGNORE INTO amazon_job_index (
+                        id, task_id, tenant_id, app_id, req_ssn, job_type, job_pk,
+                        table_name, created_at, updated_at
+                    )
+                    SELECT
+                        id, task_id, tenant_id, app_id, req_ssn, job_type, job_pk,
+                        table_name, created_at, updated_at
+                    FROM amazon_job_index_old
+                """))
+                conn.execute(text("DROP TABLE amazon_job_index_old"))
+        else:
+            conn.execute(text("ALTER TABLE amazon_job_index DROP CONSTRAINT IF EXISTS uq_amazon_job_index_req"))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_amazon_job_index_req_type "
+                "ON amazon_job_index (tenant_id, app_id, req_ssn, job_type)"))
+        for table_name in ("amazon_review_jobs", "amazon_listing_jobs", "amazon_voc_jobs"):
+            if not insp.has_table(table_name):
+                continue
+            conn.execute(text(f"""
+                INSERT INTO amazon_job_index (
+                    task_id, tenant_id, app_id, req_ssn, job_type, job_pk,
+                    table_name, created_at, updated_at
+                )
+                SELECT
+                    j.task_id, j.tenant_id, j.app_id, j.req_ssn, j.job_type, j.id,
+                    :table_name, j.created_at, j.updated_at
+                FROM {table_name} j
+                WHERE j.task_id IS NOT NULL
+                  AND j.tenant_id IS NOT NULL
+                  AND j.app_id IS NOT NULL
+                  AND j.req_ssn IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM amazon_job_index i
+                      WHERE i.task_id = j.task_id
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM amazon_job_index i
+                      WHERE i.tenant_id = j.tenant_id
+                        AND i.app_id = j.app_id
+                        AND i.req_ssn = j.req_ssn
+                        AND i.job_type = j.job_type
+                  )
+            """), {"table_name": table_name})
+    if insp.has_table("amazon_crawler_accounts"):
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_amazon_account_platform_state_country "
+            "ON amazon_crawler_accounts (platform, state, country)"))
+        if not IS_SQLITE:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_amazon_account_platform_username "
+                "ON amazon_crawler_accounts (platform, username)"))
 
 
 def _seed_sites() -> None:

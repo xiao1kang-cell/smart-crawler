@@ -109,6 +109,37 @@ def _parse_proxy_line(line: str, tier: str) -> ProxyEntry:
     return ProxyEntry(url=url, tier=tier, exclude=exclude)
 
 
+def _dedupe_proxy_entries(proxies: list[ProxyEntry]) -> list[ProxyEntry]:
+    """Deduplicate exact proxy URLs while preserving DB-managed metadata."""
+    deduped: dict[str, ProxyEntry] = {}
+    for proxy in proxies:
+        key = _proxy_hash(proxy.url)
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = proxy
+            continue
+
+        if existing.id is None and proxy.id is not None:
+            keep, other = proxy, existing
+            deduped[key] = keep
+        else:
+            keep, other = existing, proxy
+
+        keep.exclude.update(other.exclude)
+        keep.pool_slugs.update(other.pool_slugs)
+        keep.max_concurrency = max(
+            max(1, int(keep.max_concurrency or 1)),
+            max(1, int(other.max_concurrency or 1)),
+        )
+        if not keep.provider:
+            keep.provider = other.provider
+        if not keep.country:
+            keep.country = other.country
+        if not keep.source and other.source:
+            keep.source = other.source
+    return list(deduped.values())
+
+
 class ProxyPool:
     def __init__(self, *, use_persistent_health: bool = False, prefer_db: bool = True):
         import os
@@ -145,7 +176,7 @@ class ProxyPool:
             if env:
                 if not any(p.url == env for p in proxies):
                     proxies.insert(0, ProxyEntry(url=env, tier=tier))
-        self._proxies = proxies
+        self._proxies = _dedupe_proxy_entries(proxies)
         self._loaded = True
 
     def _load_from_db(self) -> list[ProxyEntry]:
@@ -272,11 +303,13 @@ class ProxyPool:
 
     def lease(self, tier: str | None = None, *, site: str | None = None,
               job_id: int | None = None, worker: str | None = None,
-              ttl_sec: int = 300) -> ProxyLeaseHandle | None:
+              ttl_sec: int = 300,
+              hourly_limit: int | None = None,
+              daily_limit: int | None = None) -> ProxyLeaseHandle | None:
         """租用一个代理端点。
 
         DB 管理的端点会写 proxy_leases 并按 endpoint.max_concurrency 控制
-        并发；文件/env 兜底代理没有 endpoint_id，只返回 URL，不登记租约。
+        并发/额度；文件/env 兜底代理没有 endpoint_id，只返回 URL，不登记租约。
         """
         candidate_tiers = _candidate_tiers_from_rules(site, tier)
         if not candidate_tiers or candidate_tiers[0] in (None, "none", ""):
@@ -297,6 +330,8 @@ class ProxyPool:
             job_id=job_id,
             worker=worker,
             ttl_sec=ttl_sec,
+            hourly_limit=hourly_limit,
+            daily_limit=daily_limit,
         )
         if handle:
             with self._lock:
@@ -572,9 +607,12 @@ def has_available_proxy(tier: str | None = None, site: str | None = None) -> boo
 
 def lease_proxy(tier: str | None = None, *, site: str | None = None,
                 job_id: int | None = None, worker: str | None = None,
-                ttl_sec: int = 300) -> ProxyLeaseHandle | None:
+                ttl_sec: int = 300,
+                hourly_limit: int | None = None,
+                daily_limit: int | None = None) -> ProxyLeaseHandle | None:
     return _pool.lease(tier, site=site, job_id=job_id, worker=worker,
-                       ttl_sec=ttl_sec)
+                       ttl_sec=ttl_sec, hourly_limit=hourly_limit,
+                       daily_limit=daily_limit)
 
 
 def release_proxy(lease_token: str | None, *, success: bool | None = None,
@@ -606,6 +644,43 @@ def release_proxy(lease_token: str | None, *, success: bool | None = None,
         db.close()
 
 
+def _proxy_quota_allows(
+    db,
+    endpoint_id: int,
+    *,
+    now: datetime,
+    hourly_limit: int | None,
+    daily_limit: int | None,
+    lease_model,
+    count_func,
+) -> bool:
+    if hourly_limit is not None and hourly_limit > 0:
+        hourly_count = (
+            db.query(count_func(lease_model.id))
+            .filter(
+                lease_model.endpoint_id == endpoint_id,
+                lease_model.created_at >= now - timedelta(hours=1),
+            )
+            .scalar()
+            or 0
+        )
+        if hourly_count >= hourly_limit:
+            return False
+    if daily_limit is not None and daily_limit > 0:
+        daily_count = (
+            db.query(count_func(lease_model.id))
+            .filter(
+                lease_model.endpoint_id == endpoint_id,
+                lease_model.created_at >= now - timedelta(days=1),
+            )
+            .scalar()
+            or 0
+        )
+        if daily_count >= daily_limit:
+            return False
+    return True
+
+
 def _try_create_proxy_lease(
     candidates: list[ProxyEntry],
     *,
@@ -613,6 +688,8 @@ def _try_create_proxy_lease(
     job_id: int | None,
     worker: str | None,
     ttl_sec: int,
+    hourly_limit: int | None = None,
+    daily_limit: int | None = None,
 ) -> ProxyLeaseHandle | None:
     if not candidates:
         return None
@@ -644,6 +721,16 @@ def _try_create_proxy_lease(
                             .scalar() or 0)
             max_concurrency = max(1, int(endpoint.max_concurrency or 1))
             if active_count >= max_concurrency:
+                continue
+            if not _proxy_quota_allows(
+                db,
+                endpoint.id,
+                now=now,
+                hourly_limit=hourly_limit,
+                daily_limit=daily_limit,
+                lease_model=ProxyLease,
+                count_func=func.count,
+            ):
                 continue
             token = uuid4().hex
             db.add(ProxyLease(

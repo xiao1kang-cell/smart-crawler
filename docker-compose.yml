@@ -6,6 +6,20 @@ services:
     image: postgres:16-alpine
     container_name: smart-crawler-pg
     restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - max_connections=100
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - effective_cache_size=4GB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - wal_level=replica
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-smart_crawler}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change-me}
@@ -17,6 +31,19 @@ services:
     #   - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-smart_crawler} -d ${POSTGRES_DB:-smart_crawler}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: smart-crawler-redis
+    restart: unless-stopped
+    volumes:
+      - ./data/redis:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -64,8 +91,21 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.flatkey.ai}
       - LLM_MODEL=${LLM_MODEL:-claude-haiku-4-5}
       - VOC_API_KEY=${VOC_API_KEY:-}      # Amazon VOC 工具用 —— apps.voc.ai/openapi
+      - AMAZON_VOC_TOKEN=${AMAZON_VOC_TOKEN:-}
+      - AMAZON_VOC_PUBLIC_BASE_URL=${AMAZON_VOC_PUBLIC_BASE_URL:-}
+      - AMAZON_VOC_REDIS_URL=${AMAZON_VOC_REDIS_URL:-redis://redis:6379/0}
+      - AMAZON_VOC_QUEUE_PREFIX=${AMAZON_VOC_QUEUE_PREFIX:-amazon:voc}
+      - AMAZON_VOC_RESULT_PREFIX=${AMAZON_VOC_RESULT_PREFIX:-crawler-data}
+      - AMAZON_VOC_DEFAULT_TENANT=${AMAZON_VOC_DEFAULT_TENANT:-default}
+      - AMAZON_VOC_CALLBACK_SECRET=${AMAZON_VOC_CALLBACK_SECRET:-}
+      - AMAZON_VOC_OSS_ENDPOINT=${AMAZON_VOC_OSS_ENDPOINT:-}
+      - AMAZON_VOC_OSS_BUCKET=${AMAZON_VOC_OSS_BUCKET:-}
+      - AMAZON_VOC_OSS_ACCESS_KEY_ID=${AMAZON_VOC_OSS_ACCESS_KEY_ID:-}
+      - AMAZON_VOC_OSS_ACCESS_KEY_SECRET=${AMAZON_VOC_OSS_ACCESS_KEY_SECRET:-}
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   # worker 副本 —— 不跑 FastAPI/scheduler，专跑 worker loop，连同一 PG。
@@ -148,6 +188,63 @@ services:
       - WORKER_DISTRIBUTOR_BATCH=${WORKER_DISTRIBUTOR_BATCH:-200}
       - WORKER_ASSIGNMENT_STALE_SECONDS=${WORKER_ASSIGNMENT_STALE_SECONDS:-300}
       - WORKER_POLL=${WORKER_DISTRIBUTOR_POLL:-10}
+
+  amazon_voc_worker:
+    build: .
+    image: smart-crawler:latest
+    container_name: smart-crawler-amazon-voc-worker
+    restart: unless-stopped
+    command: python -m app.amazon_voc.worker
+    volumes:
+      - ./data:/app/data
+      - ./backend:/app/backend:ro
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
+      - RUN_SCHEDULER=0
+      - AMAZON_VOC_WORKER_ID=amazon-voc-worker-1
+      - AMAZON_VOC_WORKER_JOB_TYPES=${AMAZON_VOC_WORKER_JOB_TYPES:-}
+      - AMAZON_VOC_WORKER_MARKETS=${AMAZON_VOC_WORKER_MARKETS:-}
+      - AMAZON_VOC_WORKER_EXCLUDE_MARKETS=${AMAZON_VOC_WORKER_EXCLUDE_MARKETS:-}
+      - AMAZON_VOC_REDIS_URL=${AMAZON_VOC_REDIS_URL:-redis://redis:6379/0}
+      - AMAZON_VOC_PUBLIC_BASE_URL=${AMAZON_VOC_PUBLIC_BASE_URL:-}
+      - AMAZON_VOC_QUEUE_PREFIX=${AMAZON_VOC_QUEUE_PREFIX:-amazon:voc}
+      - AMAZON_VOC_RESULT_PREFIX=${AMAZON_VOC_RESULT_PREFIX:-crawler-data}
+      - AMAZON_VOC_DEFAULT_TENANT=${AMAZON_VOC_DEFAULT_TENANT:-default}
+      - AMAZON_VOC_CALLBACK_SECRET=${AMAZON_VOC_CALLBACK_SECRET:-}
+      - AMAZON_VOC_OSS_ENDPOINT=${AMAZON_VOC_OSS_ENDPOINT:-}
+      - AMAZON_VOC_OSS_BUCKET=${AMAZON_VOC_OSS_BUCKET:-}
+      - AMAZON_VOC_OSS_ACCESS_KEY_ID=${AMAZON_VOC_OSS_ACCESS_KEY_ID:-}
+      - AMAZON_VOC_OSS_ACCESS_KEY_SECRET=${AMAZON_VOC_OSS_ACCESS_KEY_SECRET:-}
+      - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  amazon_voc_daemon:
+    build: .
+    image: smart-crawler:latest
+    container_name: smart-crawler-amazon-voc-daemon
+    restart: unless-stopped
+    command: python -m app.amazon_voc.daemon
+    volumes:
+      - ./data:/app/data
+      - ./backend:/app/backend:ro
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
+      - RUN_SCHEDULER=0
+      - AMAZON_VOC_REDIS_URL=${AMAZON_VOC_REDIS_URL:-redis://redis:6379/0}
+      - AMAZON_VOC_CALLBACK_SECRET=${AMAZON_VOC_CALLBACK_SECRET:-}
+      - AMAZON_VOC_CALLBACK_RETRY_INTERVAL_SECONDS=${AMAZON_VOC_CALLBACK_RETRY_INTERVAL_SECONDS:-60}
+      - AMAZON_VOC_CALLBACK_RETRY_MIN_INTERVAL_SECONDS=${AMAZON_VOC_CALLBACK_RETRY_MIN_INTERVAL_SECONDS:-300}
+      - AMAZON_VOC_CALLBACK_RETRY_MAX_ATTEMPTS=${AMAZON_VOC_CALLBACK_RETRY_MAX_ATTEMPTS:-5}
+      - AMAZON_VOC_CALLBACK_RETRY_BATCH_SIZE=${AMAZON_VOC_CALLBACK_RETRY_BATCH_SIZE:-50}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   worker_3:
     <<: *worker_template

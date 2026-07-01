@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Excel任务导入</title>
+  <style>
+    :root {
+      --bg: #f7f9fc;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --primary: #0f766e;
+      --primary-hover: #0b5d58;
+      --border: #d1d5db;
+      --ok: #166534;
+      --err: #b91c1c;
+    }
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(180deg, #edf6ff 0%, var(--bg) 40%);
+      color: var(--text);
+    }
+    .wrap {
+      max-width: 760px;
+      margin: 32px auto;
+      padding: 0 16px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid #e5e7eb;
+      border-radius: 14px;
+      padding: 20px;
+      box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 22px;
+    }
+    .desc {
+      margin: 0 0 20px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .row {
+      margin-bottom: 14px;
+    }
+    label {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 6px;
+      color: var(--text);
+    }
+    input[type="text"],
+    input[type="number"],
+    input[type="file"] {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 14px;
+      outline: none;
+      background: #fff;
+    }
+    input:focus {
+      border-color: #0ea5e9;
+      box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.12);
+    }
+    .inline {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 4px;
+    }
+    .inline label {
+      margin: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+    .stars {
+      display: none;
+      margin-top: 8px;
+      gap: 14px;
+    }
+    .stars.show {
+      display: flex;
+      flex-wrap: wrap;
+    }
+    button {
+      width: 100%;
+      border: none;
+      background: var(--primary);
+      color: #fff;
+      border-radius: 10px;
+      padding: 11px 14px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    button:hover { background: var(--primary-hover); }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    .btn-row {
+      display: flex;
+      gap: 10px;
+    }
+    .btn-secondary {
+      background: #e5e7eb;
+      color: #111827;
+    }
+    .btn-secondary:hover {
+      background: #d1d5db;
+    }
+    .result {
+      margin-top: 16px;
+      border-radius: 10px;
+      padding: 12px;
+      font-size: 14px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      display: none;
+    }
+    .result.ok { display: block; background: #ecfdf5; color: var(--ok); border: 1px solid #bbf7d0; }
+    .result.err { display: block; background: #fef2f2; color: var(--err); border: 1px solid #fecaca; }
+    .hint {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="inline" style="justify-content: space-between; margin-bottom: 8px;">
+        <h1 style="margin:0;">任务批次后台</h1>
+        <div class="inline">
+          <button id="goAccountBtn" type="button" class="btn-secondary" style="width:auto;padding:8px 12px;">账号导入</button>
+          <button id="logoutBtn" type="button" class="btn-secondary" style="width:auto;padding:8px 12px;">退出</button>
+        </div>
+      </div>
+      <p class="desc">支持 Excel/文本导入，按批次号跟踪进度与导出。</p>
+
+      <form id="importForm">
+        <div class="row">
+          <label for="batchLabel">批次名称（系统会自动加日期+序号）</label>
+          <input id="batchLabel" type="text" placeholder="例如 nike_us_复盘" maxlength="64" />
+        </div>
+
+        <div class="row">
+          <label for="excelFile">Excel 文件（需要 ASIN 列，国家列可选）</label>
+          <input id="excelFile" name="file" type="file" accept=".xlsx,.xls" />
+        </div>
+
+        <div class="row">
+          <label for="taskText">或文本导入（每行一个，格式: ASIN 国家）</label>
+          <textarea id="taskText" rows="5" style="width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:14px;"></textarea>
+        </div>
+
+        <div class="row">
+          <label for="countryOverride">国家兜底（Excel 无国家列 / 文本无国家时）</label>
+          <input id="countryOverride" type="text" placeholder="例如 US" maxlength="10" />
+        </div>
+
+        <div class="row">
+          <label for="maxPages">最大页数</label>
+          <input id="maxPages" type="number" min="1" max="20" value="10" />
+        </div>
+
+        <div class="row">
+          <label>导入选项</label>
+          <div class="inline">
+            <label><input id="filterByStars" type="checkbox" /> 根据星级筛选</label>
+            <label><input id="allVariants" type="checkbox" /> 需要所有子ASIN</label>
+            <label><input id="clearExisting" type="checkbox" /> 先清空旧任务</label>
+          </div>
+          <div id="starsBox" class="stars">
+            <label><input type="checkbox" value="1" checked /> 1星</label>
+            <label><input type="checkbox" value="2" checked /> 2星</label>
+            <label><input type="checkbox" value="3" checked /> 3星</label>
+            <label><input type="checkbox" value="4" checked /> 4星</label>
+            <label><input type="checkbox" value="5" checked /> 5星</label>
+          </div>
+        </div>
+
+        <div class="row">
+          <label for="dateFrom">
+            只抓近期评论（date_from）
+            <span style="color:var(--muted);font-weight:400;">— 留空=全量；填 <code>30d</code> 表示最近30天；填 <code>2026-04-01</code> 表示该日期之后</span>
+          </label>
+          <input id="dateFrom" type="text" placeholder="例如 30d 或 2026-04-01，留空则不限制" maxlength="20" />
+        </div>
+
+        <div class="btn-row">
+          <button id="previewBtn" type="button" class="btn-secondary">预览Excel</button>
+          <button id="submitBtn" type="submit">Excel导入</button>
+          <button id="submitTextBtn" type="button">文本导入</button>
+        </div>
+      </form>
+
+      <div style="margin-top:12px;" class="btn-row">
+        <button id="loadBatchesBtn" type="button" class="btn-secondary">刷新批次进度</button>
+        <button id="clearBatchesBtn" type="button" class="btn-secondary" style="color:#b91c1c;">清空批次记录</button>
+      </div>
+      <div id="batchesBox" class="hint" style="margin-top:8px; white-space:pre-wrap; font-family:monospace; font-size:13px;"></div>
+
+      <div id="result" class="result"></div>
+      <div class="hint">提示：若勾选“需要所有子ASIN”，请先配置环境变量 <code>SELLERSPRITE_API_KEY</code>。</div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('importForm');
+    const resultEl = document.getElementById('result');
+    const submitBtn = document.getElementById('submitBtn');
+    const submitTextBtn = document.getElementById('submitTextBtn');
+    const previewBtn = document.getElementById('previewBtn');
+    const filterByStars = document.getElementById('filterByStars');
+    const starsBox = document.getElementById('starsBox');
+    const loadBatchesBtn = document.getElementById('loadBatchesBtn');
+    const clearBatchesBtn = document.getElementById('clearBatchesBtn');
+    const batchesBox = document.getElementById('batchesBox');
+    const logoutBtn = document.getElementById('logoutBtn');
+    const goAccountBtn = document.getElementById('goAccountBtn');
+
+    filterByStars.addEventListener('change', () => {
+      starsBox.classList.toggle('show', filterByStars.checked);
+    });
+
+    function setResult(ok, msg) {
+      resultEl.className = `result ${ok ? 'ok' : 'err'}`;
+      resultEl.textContent = msg;
+    }
+
+    function getBatchLabel() {
+      const v = (document.getElementById('batchLabel').value || '').trim();
+      return v || 'default';
+    }
+
+    function getStars() {
+      return Array.from(starsBox.querySelectorAll('input[type="checkbox"]:checked')).map(i => i.value).join(',');
+    }
+
+    function lockActions(lock) {
+      submitBtn.disabled = lock;
+      submitTextBtn.disabled = lock;
+      previewBtn.disabled = lock;
+      loadBatchesBtn.disabled = lock;
+    }
+
+    async function ensureLogin() {
+      const resp = await fetch('/admin/me');
+      if (resp.status === 401) {
+        location.href = '/static/admin_login.html?next=/task-import';
+        return false;
+      }
+      return true;
+    }
+
+    async function pollImportJob(jobId, label, btnEl) {
+      let dots = 0;
+      while (true) {
+        await new Promise(r => setTimeout(r, 8000));
+        dots = (dots + 1) % 4;
+        btnEl.textContent = `处理中${'·'.repeat(dots + 1)}`;
+        let job;
+        try {
+          const r = await fetch(`/import_jobs/${jobId}`);
+          job = await r.json();
+        } catch (e) {
+          throw new Error('轮询失败: ' + e.message);
+        }
+        if (job.status === 'done') {
+          const d = job.result;
+          const variantMsg = d.variant_expanded_tasks ? `\n展开子ASIN: ${d.variant_expanded_tasks}` : '';
+          setResult(true, [
+            `${label}成功`,
+            `批次号: ${d.batch_no}`,
+            `源记录: ${d.source_rows}`,
+            `生成任务: ${d.generated_tasks}${variantMsg}`,
+          ].join('\n'));
+          await loadBatches();
+          return;
+        }
+        if (job.status === 'error') {
+          throw new Error(job.error || '未知错误');
+        }
+      }
+    }
+
+    async function loadBatches() {
+      try {
+        const resp = await fetch('/crawler_task_batches?limit=20');
+        if (resp.status === 401) {
+          location.href = '/static/admin_login.html?next=/task-import';
+          return;
+        }
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+
+        batchesBox.innerHTML = '';
+        if (!(data.items || []).length) {
+          batchesBox.textContent = '暂无批次';
+          return;
+        }
+        const statusMap = {0:'待执行', 1:'进行中', 2:'已完成', 3:'有失败'};
+        for (const item of data.items) {
+          const actual = item.actual_tasks ?? item.generated_tasks;
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;';
+
+          const migratedLabel = item.migrated ? ` ✓已迁移` : '';
+          const info = document.createElement('span');
+          info.textContent = `${item.batch_no}  任务=${actual}  ${statusMap[item.status]??item.status}${migratedLabel}`;
+          info.style.minWidth = '320px';
+          row.appendChild(info);
+
+          if (item.review_table_name) {
+            const btnCsv = document.createElement('a');
+            btnCsv.href = `/crawler_task_batches/${item.batch_no}/export.csv`;
+            btnCsv.textContent = '导出CSV';
+            btnCsv.style.cssText = 'padding:2px 8px;background:#0f766e;color:#fff;border-radius:6px;text-decoration:none;font-size:12px;';
+            row.appendChild(btnCsv);
+
+            const btnXlsx = document.createElement('a');
+            btnXlsx.href = `/crawler_task_batches/${item.batch_no}/export.xlsx`;
+            btnXlsx.textContent = '导出Excel';
+            btnXlsx.style.cssText = 'padding:2px 8px;background:#1d4ed8;color:#fff;border-radius:6px;text-decoration:none;font-size:12px;';
+            row.appendChild(btnXlsx);
+
+            if (item.migrated) {
+              const tagMigrated = document.createElement('span');
+              tagMigrated.textContent = '已迁移';
+              tagMigrated.style.cssText = 'padding:2px 8px;background:#e5e7eb;color:#6b7280;border-radius:6px;font-size:12px;';
+              row.appendChild(tagMigrated);
+            } else {
+              const btnMigrate = document.createElement('button');
+              btnMigrate.textContent = '迁移至主表';
+              btnMigrate.style.cssText = 'padding:2px 8px;background:#7c3aed;color:#fff;border-radius:6px;border:none;cursor:pointer;font-size:12px;';
+              btnMigrate.onclick = async () => {
+                btnMigrate.disabled = true;
+                btnMigrate.textContent = '迁移中...';
+                try {
+                  const r = await fetch(`/crawler_task_batches/${item.batch_no}/migrate`, {method:'POST'});
+                  const d = await r.json();
+                  if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+                  alert(`迁移完成: ${d.message}`);
+                  await loadBatches();
+                } catch(e) {
+                  alert(`迁移失败: ${e.message}`);
+                  btnMigrate.disabled = false;
+                  btnMigrate.textContent = '迁移至主表';
+                }
+              };
+              row.appendChild(btnMigrate);
+            }
+          } else {
+            const tag = document.createElement('span');
+            tag.textContent = '任务未完成';
+            tag.style.cssText = 'color:#9ca3af;font-size:12px;';
+            row.appendChild(tag);
+          }
+
+          batchesBox.appendChild(row);
+        }
+      } catch (err) {
+        batchesBox.textContent = `加载批次失败: ${err.message}`;
+      }
+    }
+
+    clearBatchesBtn.addEventListener('click', async () => {
+      if (!confirm('确认清空所有批次记录？（不会删除 crawler_asin_tasks_temp 中的任务）')) return;
+      try {
+        const resp = await fetch('/crawler_task_batches/clear', { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+        await loadBatches();
+      } catch (err) {
+        alert(`清空失败: ${err.message}`);
+      }
+    });
+
+    function buildPreviewFormData() {
+      const fileInput = document.getElementById('excelFile');
+      if (!fileInput.files.length) {
+        throw new Error('请选择 Excel 文件');
+      }
+      const fd = new FormData();
+      fd.append('file', fileInput.files[0]);
+      fd.append('country_override', document.getElementById('countryOverride').value.trim().toUpperCase());
+      return fd;
+    }
+
+    previewBtn.addEventListener('click', async () => {
+      resultEl.className = 'result';
+      resultEl.textContent = '';
+      try {
+        const fd = buildPreviewFormData();
+        lockActions(true);
+        previewBtn.textContent = '预览中...';
+
+        const resp = await fetch('/preview_temp_tasks_excel', { method: 'POST', body: fd });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+
+        const rowsText = (data.preview_rows || []).map((r, idx) => `${idx + 1}. asin=${r.asin || '-'} | country=${r.country || '-'}`).join('\n');
+        setResult(true, [
+          '预览成功',
+          `识别ASIN列: ${data.detected_columns?.asin || '未识别'}`,
+          `识别国家列: ${data.detected_columns?.country || '未识别（将使用国家兜底）'}`,
+          `总行数: ${data.total_rows}`,
+          '前5行标准化预览:',
+          rowsText || '(无数据)'
+        ].join('\n'));
+      } catch (err) {
+        setResult(false, `预览失败: ${err.message}`);
+      } finally {
+        lockActions(false);
+        previewBtn.textContent = '预览Excel';
+      }
+    });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      resultEl.className = 'result';
+      resultEl.textContent = '';
+
+      const fileInput = document.getElementById('excelFile');
+      if (!fileInput.files.length) {
+        setResult(false, '请选择 Excel 文件');
+        return;
+      }
+
+      const maxPages = Number(document.getElementById('maxPages').value || 10);
+      if (maxPages < 1 || maxPages > 20) {
+        setResult(false, 'max_pages 必须在 1~20');
+        return;
+      }
+
+      const fd = new FormData();
+      fd.append('file', fileInput.files[0]);
+      fd.append('batch_label', getBatchLabel());
+      fd.append('filter_by_stars', String(filterByStars.checked));
+      fd.append('stars', getStars());
+      fd.append('all_variants', String(document.getElementById('allVariants').checked));
+      fd.append('max_pages', String(maxPages));
+      fd.append('clear_existing', String(document.getElementById('clearExisting').checked));
+      fd.append('country_override', document.getElementById('countryOverride').value.trim().toUpperCase());
+      fd.append('date_from', document.getElementById('dateFrom').value.trim());
+
+      lockActions(true);
+      submitBtn.textContent = '上传中...';
+      try {
+        const resp = await fetch('/import_temp_tasks_excel', { method: 'POST', body: fd });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+        await pollImportJob(data.job_id, 'Excel导入', submitBtn);
+      } catch (err) {
+        setResult(false, `导入失败: ${err.message}`);
+      } finally {
+        lockActions(false);
+        submitBtn.textContent = 'Excel导入';
+      }
+    });
+
+    submitTextBtn.addEventListener('click', async () => {
+      const taskText = (document.getElementById('taskText').value || '').trim();
+      if (!taskText) {
+        setResult(false, '请填写文本任务内容');
+        return;
+      }
+      const maxPages = Number(document.getElementById('maxPages').value || 10);
+      const fd = new FormData();
+      fd.append('task_text', taskText);
+      fd.append('batch_label', getBatchLabel());
+      fd.append('filter_by_stars', String(filterByStars.checked));
+      fd.append('stars', getStars());
+      fd.append('max_pages', String(maxPages));
+      fd.append('country_override', document.getElementById('countryOverride').value.trim().toUpperCase());
+      fd.append('all_variants', String(document.getElementById('allVariants').checked));
+      fd.append('date_from', document.getElementById('dateFrom').value.trim());
+      fd.append('clear_existing', String(document.getElementById('clearExisting').checked));
+
+      lockActions(true);
+      submitTextBtn.textContent = '提交中...';
+      try {
+        const resp = await fetch('/import_temp_tasks_text', { method: 'POST', body: fd });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+        await pollImportJob(data.job_id, '文本导入', submitTextBtn);
+      } catch (err) {
+        setResult(false, `文本导入失败: ${err.message}`);
+      } finally {
+        lockActions(false);
+        submitTextBtn.textContent = '文本导入';
+      }
+    });
+
+    loadBatchesBtn.addEventListener('click', loadBatches);
+
+    logoutBtn.addEventListener('click', async () => {
+      await fetch('/admin/logout', { method: 'POST' });
+      location.href = '/static/admin_login.html?next=/task-import';
+    });
+
+    goAccountBtn.addEventListener('click', () => {
+      location.href = '/account-import';
+    });
+
+    (async function init() {
+      const ok = await ensureLogin();
+      if (!ok) return;
+      await loadBatches();
+    })();
+  </script>
+</body>
+</html>

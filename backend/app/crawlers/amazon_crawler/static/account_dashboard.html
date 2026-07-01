@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Amazon 采集账号管理与损耗分析看板</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+:root {
+    --primary: #1a73e8;
+    --bg: #f0f4f8;
+    --card-bg: #ffffff;
+    --kpi-blue: #e8f0fe;
+    --kpi-green: #e6f4ea;
+    --kpi-red: #fce8e6;
+    --kpi-orange: #fef7e0;
+    --kpi-purple: #f3e8fd;
+    --text-dark: #202124;
+    --text-secondary: #5f6368;
+    --border: #dadce0;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: var(--text-dark); margin: 0; }
+
+/* Header */
+.header { background: var(--primary); color: #fff; padding: 16px 28px; display: flex; align-items: center; justify-content: space-between; }
+.header h1 { font-size: 18px; margin: 0; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+.header h1 .icon { width: 32px; height: 32px; background: rgba(255,255,255,.2); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+.header-meta { font-size: 12px; color: rgba(255,255,255,.75); display: flex; gap: 16px; align-items: center; }
+.header-meta select { background: rgba(255,255,255,.18); color: #fff; border: 1px solid rgba(255,255,255,.35); border-radius: 6px; padding: 4px 8px; font-size: 12px; }
+.header-meta select option { color: #202124; }
+
+/* Container */
+.container-xl { max-width: 1400px; margin: 0 auto; padding: 20px 24px; }
+
+/* Filter bar */
+.filter-bar { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; margin-bottom: 16px; }
+.filter-bar .title { font-size: 13px; color: var(--text-secondary); margin-bottom: 10px; font-weight: 500; }
+.filter-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.filter-group { display: flex; flex-direction: column; gap: 4px; }
+.filter-group label { font-size: 11px; color: var(--text-secondary); }
+.filter-group select, .filter-group input { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; min-width: 130px; }
+.btn-refresh { background: var(--primary); color: #fff; border: none; border-radius: 6px; padding: 7px 18px; font-size: 13px; cursor: pointer; font-weight: 500; }
+.btn-refresh:hover { background: #1565c0; }
+.btn-reset { background: #f1f3f4; color: var(--text-dark); border: 1px solid var(--border); border-radius: 6px; padding: 7px 14px; font-size: 13px; cursor: pointer; }
+
+/* Alert banners */
+.alerts { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+.alert-tag { padding: 8px 16px; border-radius: 6px; font-size: 12px; font-weight: 500; }
+.alert-danger { background: #fce8e6; color: #c5221f; border: 1px solid #f5c6cb; }
+.alert-warning { background: #fef7e0; color: #e37400; border: 1px solid #ffeeba; }
+
+/* KPI grid */
+.kpi-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 16px; }
+.kpi-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; transition: box-shadow .2s; }
+.kpi-card:hover { box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+.kpi-card .value { font-size: 32px; font-weight: 700; margin: 4px 0; line-height: 1.2; }
+.kpi-card .label { font-size: 13px; font-weight: 600; color: var(--text-dark); }
+.kpi-card .sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+.kpi-blue .value { color: #1a73e8; }
+.kpi-green .value { color: #1e8e3e; }
+.kpi-red .value { color: #c5221f; }
+.kpi-orange .value { color: #e37400; }
+.kpi-purple .value { color: #7b1fa2; }
+
+/* Chart section */
+.chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+.chart-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; }
+.chart-card .chart-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+.chart-card .chart-subtitle { font-size: 11px; color: var(--text-secondary); margin-bottom: 12px; }
+.chart-box { width: 100%; height: 340px; }
+
+/* Account table */
+.table-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; }
+.table-card .table-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { background: #f8f9fa; text-align: left; padding: 8px 10px; font-weight: 600; border-bottom: 2px solid var(--border); }
+td { padding: 8px 10px; border-bottom: 1px solid #eee; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.badge-ok { background: #e6f4ea; color: #1e8e3e; }
+.badge-disabled { background: #fce8e6; color: #c5221f; }
+.badge-error { background: #fef7e0; color: #e37400; }
+.badge-used { background: #e8f0fe; color: #1a73e8; }
+.badge-free { background: #f1f3f4; color: #5f6368; }
+.pagination-bar { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; font-size: 13px; }
+.pagination-bar button { padding: 5px 14px; border: 1px solid var(--border); background: #fff; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.pagination-bar button:disabled { opacity: .4; cursor: default; }
+
+/* Loading */
+.loading-mask { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,.7); display: flex; align-items: center; justify-content: center; z-index: 9999; font-size: 16px; color: var(--primary); }
+.loading-mask.hidden { display: none; }
+
+@media (max-width: 1100px) { .kpi-grid { grid-template-columns: repeat(3, 1fr); } .chart-row { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { .kpi-grid { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+
+<div class="loading-mask" id="loadingMask">加载中...</div>
+
+<!-- Header -->
+<div class="header">
+    <h1><span class="icon">📊</span> Amazon 采集账号管理与损耗分析看板</h1>
+    <div class="header-meta">
+        <span id="headerDateRange"></span>
+        <select id="headerCountrySelect">
+            <option value="">全部国家</option>
+        </select>
+    </div>
+</div>
+
+<div class="container-xl">
+
+<!-- Filter bar -->
+<div class="filter-bar">
+    <div class="title">▼ 顶部筛选区（全局过滤）</div>
+    <div class="filter-row">
+        <div class="filter-group">
+            <label>时间范围</label>
+            <select id="fRange">
+                <option value="7">近7天</option>
+                <option value="14">近14天</option>
+                <option value="30" selected>近30天</option>
+                <option value="90">近90天</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label>开始日期</label>
+            <input type="date" id="fStart">
+        </div>
+        <div class="filter-group">
+            <label>结束日期</label>
+            <input type="date" id="fEnd">
+        </div>
+        <div class="filter-group">
+            <label>国家</label>
+            <select id="fCountry"><option value="">全部</option></select>
+        </div>
+        <div class="filter-group">
+            <label>账号状态</label>
+            <select id="fState">
+                <option value="">全部</option>
+                <option value="1">可用</option>
+                <option value="0">不可用</option>
+                <option value="-1">异常</option>
+            </select>
+        </div>
+        <div class="filter-group" style="flex-direction:row;gap:8px;align-items:flex-end;">
+            <button class="btn-refresh" onclick="refreshAll()">🔄 刷新看板</button>
+            <button class="btn-reset" onclick="resetFilters()">✕ 重置</button>
+        </div>
+    </div>
+</div>
+
+<!-- Alert banners -->
+<div class="alerts" id="alertsArea"></div>
+
+<!-- KPI Cards Row 1 -->
+<div class="kpi-grid" id="kpiGrid">
+    <div class="kpi-card kpi-blue"><div class="label">总账号数</div><div class="value" id="kTotal">-</div><div class="sub">筛选范围内账号量</div></div>
+    <div class="kpi-card kpi-green"><div class="label">可用账号数</div><div class="value" id="kAvailable">-</div><div class="sub">当前可分配</div></div>
+    <div class="kpi-card kpi-blue"><div class="label">使用中账号数</div><div class="value" id="kInUse">-</div><div class="sub">当前执行任务中</div></div>
+    <div class="kpi-card kpi-red"><div class="label">不可用账号数</div><div class="value" id="kUnavailable">-</div><div class="sub">封禁/失效</div></div>
+    <div class="kpi-card kpi-orange"><div class="label">今日新增封禁</div><div class="value" id="kBannedToday">-</div><div class="sub">结束日期当天</div></div>
+</div>
+<div class="kpi-grid">
+    <div class="kpi-card kpi-red"><div class="label">当前封禁率</div><div class="value" id="kBanRate">-</div><div class="sub">被封禁账号数 / 使用账号数</div></div>
+    <div class="kpi-card kpi-purple"><div class="label">平均账号寿命</div><div class="value" id="kLifespan">-</div><div class="sub">废弃时间 − 创建时间</div></div>
+    <div class="kpi-card kpi-green"><div class="label">单账号平均产出</div><div class="value" id="kOutput">-</div><div class="sub">总采集数据量 / 消耗账号数</div></div>
+    <div class="kpi-card kpi-orange"><div class="label">当日消耗速率</div><div class="value" id="kBurnRate">-</div><div class="sub">burn rate（账号/天）</div></div>
+    <div class="kpi-card kpi-blue"><div class="label">剩余可用天数</div><div class="value" id="kRemaining">-</div><div class="sub">可用账号 / burn rate</div></div>
+</div>
+<div class="kpi-grid" style="grid-template-columns: repeat(5, 1fr);">
+    <div class="kpi-card kpi-green"><div class="label">总ASIN数</div><div class="value" id="kTotalReq">-</div><div class="sub">account_usage_log 去重 ASIN 数</div></div>
+    <div class="kpi-card kpi-green"><div class="label">总页面请求数</div><div class="value" id="kTotalPageReq">-</div><div class="sub">SUM(CEIL(review_count/10))</div></div>
+    <div class="kpi-card kpi-green"><div class="label">成功 / 失败</div><div class="value" id="kSuccFail">-</div><div class="sub">成功率</div></div>
+    <div class="kpi-card kpi-purple"><div class="label">总采集评论数</div><div class="value" id="kTotalReviews">-</div><div class="sub">所有任务采集量</div></div>
+    <div class="kpi-card kpi-blue"><div class="label">平均耗时</div><div class="value" id="kAvgDur">-</div><div class="sub">每次任务平均秒数</div></div>
+</div>
+
+<!-- Charts -->
+<div class="chart-row">
+    <div class="chart-card">
+        <div class="chart-title">📉 消耗趋势（时间维度）</div>
+        <div class="chart-subtitle">每日封禁 / 累计封禁 / 每日封禁率（%）</div>
+        <div class="chart-box" id="trendChart"></div>
+    </div>
+    <div class="chart-card">
+        <div class="chart-title">⚡ 效率 vs 消耗</div>
+        <div class="chart-subtitle">X: 单账号产出 · Y: 封禁率 · 点大小: 请求量</div>
+        <div class="chart-box" id="effChart"></div>
+    </div>
+</div>
+
+<!-- Account table -->
+<div class="table-card">
+    <div class="table-title">账号列表
+        <input type="text" id="searchInput" placeholder="搜索用户名..." style="margin-left:16px;padding:4px 10px;border:1px solid #dadce0;border-radius:6px;font-size:13px;width:200px;">
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>用户名</th><th>国家</th><th>状态</th><th>使用中</th>
+                <th>失败次数</th><th>最后使用</th><th>创建时间</th><th>更新时间</th>
+            </tr>
+        </thead>
+        <tbody id="accountTbody"></tbody>
+    </table>
+    <div class="pagination-bar">
+        <span id="pageInfo">-</span>
+        <div>
+            <button id="btnPrev" onclick="changePage(-1)" disabled>上一页</button>
+            <button id="btnNext" onclick="changePage(1)">下一页</button>
+        </div>
+    </div>
+</div>
+
+</div>
+
+<script>
+// ========== Config ==========
+const API_BASE = window.location.origin;
+const PAGE_SIZE = 30;
+let currentPage = 0;
+let trendChartInstance = null;
+let effChartInstance = null;
+
+// ========== Utils ==========
+function $(id) { return document.getElementById(id); }
+function fmt(n, d=0) { return n == null ? '-' : Number(n).toFixed(d); }
+function fmtTs(ts) {
+    if (!ts || ts === 0) return '-';
+    if (typeof ts === 'number') {
+        const d = new Date(ts * 1000);
+        return d.toLocaleString('zh-CN');
+    }
+    return ts;
+}
+function stateBadge(s) {
+    if (s === 1) return '<span class="badge badge-ok">可用</span>';
+    if (s === 0) return '<span class="badge badge-disabled">不可用</span>';
+    return '<span class="badge badge-error">异常</span>';
+}
+function usedBadge(u) {
+    return u ? '<span class="badge badge-used">使用中</span>' : '<span class="badge badge-free">空闲</span>';
+}
+function showLoading(v) { $('loadingMask').classList.toggle('hidden', !v); }
+
+// ========== Filters ==========
+function initDates() {
+    const now = new Date();
+    const end = now.toISOString().slice(0,10);
+    const days = parseInt($('fRange').value) || 30;
+    const start = new Date(now - days * 864e5).toISOString().slice(0,10);
+    $('fStart').value = start;
+    $('fEnd').value = end;
+}
+$('fRange').addEventListener('change', () => { initDates(); refreshAll(); });
+
+function getFilters() {
+    return {
+        start_date: $('fStart').value,
+        end_date: $('fEnd').value,
+        country: $('fCountry').value || null,
+        state: $('fState').value !== '' ? parseInt($('fState').value) : null,
+    };
+}
+
+function resetFilters() {
+    $('fCountry').value = '';
+    $('headerCountrySelect').value = '';
+    $('fState').value = '';
+    $('fRange').value = '30';
+    $('searchInput').value = '';
+    currentPage = 0;
+    initDates();
+    refreshAll();
+}
+
+// ========== API calls ==========
+async function apiFetch(path, params={}) {
+    const url = new URL(API_BASE + path);
+    for (const [k, v] of Object.entries(params)) {
+        if (v != null && v !== '') url.searchParams.set(k, v);
+    }
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+    return resp.json();
+}
+
+async function loadCountries() {
+    try {
+        const list = await apiFetch('/accounts/countries');
+        const sel = $('fCountry');
+        const headerSel = $('headerCountrySelect');
+        list.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c; opt.textContent = c;
+            sel.appendChild(opt);
+
+            const headerOpt = document.createElement('option');
+            headerOpt.value = c; headerOpt.textContent = c;
+            headerSel.appendChild(headerOpt);
+        });
+    } catch(e) { console.warn('loadCountries failed', e); }
+}
+
+$('headerCountrySelect').addEventListener('change', () => {
+    $('fCountry').value = $('headerCountrySelect').value;
+    currentPage = 0;
+    refreshAll();
+});
+
+$('fCountry').addEventListener('change', () => {
+    $('headerCountrySelect').value = $('fCountry').value;
+    currentPage = 0;
+    refreshAll();
+});
+
+// ========== Render KPIs ==========
+async function renderOverview() {
+    const f = getFilters();
+    const d = await apiFetch('/accounts/stats/overview', {
+        country: f.country, start_date: f.start_date, end_date: f.end_date
+    });
+    $('kTotal').textContent = fmt(d.total);
+    $('kAvailable').textContent = fmt(d.available);
+    $('kInUse').textContent = fmt(d.in_use);
+    $('kUnavailable').textContent = fmt(d.unavailable);
+    $('kBannedToday').textContent = fmt(d.banned_today);
+    $('kBanRate').textContent = fmt(d.ban_rate_pct, 1) + '%';
+    $('kLifespan').textContent = fmt(d.avg_lifespan_days, 1) + '天';
+    $('kOutput').textContent = fmt(d.avg_output_per_account, 1);
+    $('kBurnRate').textContent = fmt(d.burn_rate, 2);
+    $('kRemaining').textContent = fmt(d.remaining_days, 1) + '天';
+
+    // Usage log KPI row
+    const u = d.usage_log || {};
+    $('kTotalReq').textContent = fmt(u.total_asins ?? u.total_requests);
+    $('kTotalPageReq').textContent = fmt(u.total_requests);
+    const totalTaskReq = Number(u.success_requests || 0) + Number(u.fail_requests || 0);
+    const succRate = totalTaskReq > 0 ? ((Number(u.success_requests || 0) / totalTaskReq) * 100).toFixed(1) + '%' : '-';
+    $('kSuccFail').textContent = `${fmt(u.success_requests)} / ${fmt(u.fail_requests)}`;
+    $('kSuccFail').closest('.kpi-card').querySelector('.sub').textContent = `成功率 ${succRate}`;
+    $('kTotalReviews').textContent = fmt(u.total_reviews);
+    $('kAvgDur').textContent = fmt(u.avg_duration, 1) + 's';
+
+    // Header meta
+    $('headerDateRange').textContent = `口径: ${f.start_date} ~ ${f.end_date}`;
+    $('headerCountrySelect').value = f.country || '';
+
+    // Alerts
+    let alerts = '';
+    if (d.available < 35) {
+        alerts += `<div class="alert-tag alert-danger">⚠ 可用账号低于安全阈值（${d.available}），建议立即补充或释放</div>`;
+    }
+    if (d.burn_rate > 5) {
+        alerts += `<div class="alert-tag alert-warning">⚠ 账号池消耗速率高（${d.burn_rate}/天），建议单独调整策略回放</div>`;
+    }
+    $('alertsArea').innerHTML = alerts;
+}
+
+// ========== Render Trend Chart ==========
+async function renderTrend() {
+    const f = getFilters();
+    const data = await apiFetch('/accounts/stats/trend', {
+        start_date: f.start_date, end_date: f.end_date, country: f.country
+    });
+    const dates = data.map(d => d.date);
+    const dailyBanned = data.map(d => d.daily_banned);
+    const cumBanned = data.map(d => d.cumulative_banned);
+    const dailyRate = data.map(d => d.daily_ban_rate);
+
+    if (!trendChartInstance) {
+        trendChartInstance = echarts.init($('trendChart'));
+        window.addEventListener('resize', () => trendChartInstance.resize());
+    }
+    trendChartInstance.setOption({
+        tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+        legend: { data: ['每日封禁账号数', '累计封禁账号数', '每日封禁率(%)'], top: 0, textStyle: { fontSize: 11 } },
+        grid: { left: 50, right: 50, bottom: 40, top: 40 },
+        xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 10, rotate: 30 } },
+        yAxis: [
+            { type: 'value', name: '账号数', position: 'left', axisLabel: { fontSize: 10 } },
+            { type: 'value', name: '封禁率%', position: 'right', axisLabel: { fontSize: 10 }, max: function(v) { return Math.ceil(v.max * 1.2 * 10) / 10; } },
+        ],
+        series: [
+            { name: '每日封禁账号数', type: 'bar', data: dailyBanned, itemStyle: { color: '#4285f4' }, barMaxWidth: 20 },
+            { name: '累计封禁账号数', type: 'line', data: cumBanned, smooth: true, lineStyle: { color: '#1e8e3e', width: 2 }, itemStyle: { color: '#1e8e3e' } },
+            { name: '每日封禁率(%)', type: 'line', yAxisIndex: 1, data: dailyRate, smooth: true, lineStyle: { color: '#ea4335', width: 2 }, itemStyle: { color: '#ea4335' } },
+        ],
+    });
+}
+
+// ========== Render Efficiency Bubble Chart ==========
+async function renderEfficiency() {
+    const f = getFilters();
+    const data = await apiFetch('/accounts/stats/efficiency', {
+        start_date: f.start_date, end_date: f.end_date
+    });
+
+    if (!effChartInstance) {
+        effChartInstance = echarts.init($('effChart'));
+        window.addEventListener('resize', () => effChartInstance.resize());
+    }
+
+    const colors = ['#4285f4','#ea4335','#fbbc04','#34a853','#ff6d01','#46bdc6','#7b1fa2','#c2185b'];
+    const series = data.map((d, i) => ({
+        name: d.country,
+        type: 'scatter',
+        symbolSize: Math.max(Math.sqrt(d.completed_tasks) / 2, 12),
+        data: [[d.avg_output, d.ban_rate_pct, d.completed_tasks]],
+        itemStyle: { color: colors[i % colors.length], opacity: 0.75 },
+        label: { show: true, formatter: d.country, position: 'top', fontSize: 12, fontWeight: 'bold' },
+    }));
+
+    effChartInstance.setOption({
+        tooltip: {
+            formatter: function(p) {
+                const v = p.value;
+                return `<b>${p.seriesName}</b><br>单账号产出: ${v[0]}<br>封禁率: ${v[1]}%<br>完成任务: ${v[2]}`;
+            }
+        },
+        grid: { left: 55, right: 20, bottom: 40, top: 20 },
+        xAxis: { name: '单账号产出', nameLocation: 'center', nameGap: 28, axisLabel: { fontSize: 10 } },
+        yAxis: { name: '封禁率(%)', axisLabel: { fontSize: 10 } },
+        series: series,
+    });
+}
+
+// ========== Render Account Table ==========
+async function renderAccounts() {
+    const f = getFilters();
+    const search = $('searchInput').value.trim();
+    const data = await apiFetch('/accounts/list', {
+        country: f.country,
+        state: f.state,
+        search: search || null,
+        limit: PAGE_SIZE,
+        offset: currentPage * PAGE_SIZE,
+    });
+    const tbody = $('accountTbody');
+    if (!data.items || data.items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;">暂无数据</td></tr>';
+    } else {
+        tbody.innerHTML = data.items.map(r => `
+            <tr>
+                <td>${r.username}</td>
+                <td>${r.country}</td>
+                <td>${stateBadge(r.state)}</td>
+                <td>${usedBadge(r.is_used)}</td>
+                <td>${r.fail_count}</td>
+                <td>${fmtTs(r.last_used_time)}</td>
+                <td>${r.create_time || '-'}</td>
+                <td>${r.update_time || '-'}</td>
+            </tr>
+        `).join('');
+    }
+    const totalPages = Math.ceil(data.total / PAGE_SIZE);
+    $('pageInfo').textContent = `共 ${data.total} 条，第 ${currentPage + 1} / ${totalPages || 1} 页`;
+    $('btnPrev').disabled = currentPage <= 0;
+    $('btnNext').disabled = currentPage >= totalPages - 1;
+}
+
+function changePage(dir) {
+    currentPage += dir;
+    if (currentPage < 0) currentPage = 0;
+    renderAccounts();
+}
+
+$('searchInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { currentPage = 0; renderAccounts(); }
+});
+
+// ========== Refresh All ==========
+async function refreshAll() {
+    showLoading(true);
+    try {
+        await Promise.all([renderOverview(), renderTrend(), renderEfficiency(), renderAccounts()]);
+    } catch (e) {
+        console.error('refreshAll error', e);
+        alert('数据加载失败: ' + e.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+// ========== Init ==========
+(async function init() {
+    initDates();
+    await loadCountries();
+    await refreshAll();
+})();
+</script>
+</body>
+</html>
