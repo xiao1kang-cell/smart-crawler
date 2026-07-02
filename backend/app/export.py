@@ -256,20 +256,25 @@ def _latest_snapshot_datetime(session: Session, site=None) -> datetime | None:
     return None
 
 
+def _product_available_time_expr():
+    return func.coalesce(Product.updated_time, Product.created_time,
+                         Product.published_at)
+
+
 def _trend_snapshot_rows(session: Session, site=None) -> list[dict]:
     product_q = _apply_site_filter(session.query(Product), Product, site)
     sku_count = int(product_q.count() or 0)
     if sku_count <= 0:
         return []
-    cutoff = datetime.utcnow() - timedelta(days=30)
+    snapshot_dt = _latest_snapshot_datetime(session, site) or datetime.utcnow()
+    cutoff = snapshot_dt - timedelta(days=30)
+    product_time = _product_available_time_expr()
     new_product_count = int(
-        product_q.filter(or_(Product.created_time >= cutoff,
-                             Product.published_at >= cutoff)).count() or 0)
+        product_q.filter(product_time >= cutoff).count() or 0)
     sales, revenue = product_q.with_entities(
         func.coalesce(func.sum(Product.thirty_day_sales), 0),
         func.coalesce(func.sum(Product.thirty_day_revenue), 0.0),
     ).first()
-    snapshot_dt = _latest_snapshot_datetime(session, site) or datetime.utcnow()
     return [{
         "NO.": 1,
         "Date": snapshot_dt.date().isoformat(),

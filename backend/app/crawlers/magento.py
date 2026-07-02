@@ -47,11 +47,75 @@ _CURRENCY = {"US": "USD", "UK": "GBP", "CA": "CAD", "IE": "EUR", "DE": "EUR",
              "NL": "EUR", "PL": "PLN"}
 _SKIP_RE = re.compile(
     r"(blog|/article|/news|/help|/about|/contact|/customer|/checkout|"
-    r"/catalogsearch|/privacy|/terms|\.(jpg|png|webp|pdf|css|js)(\?|$))", re.I)
+    r"/catalogsearch|/privacy|/terms|newsletter|subscribe|recall|"
+    r"right-of-withdrawal|privacy-policy|terms-and-conditions|"
+    r"\.(jpg|png|webp|pdf|css|js)(\?|$))", re.I)
 _URL_BLOCK_RE = re.compile(r"<url>(.*?)</url>", re.S)
 _IMG_LOC_RE = re.compile(r"<image:loc>\s*(.*?)\s*</image:loc>", re.S)
 _IMG_TITLE_RE = re.compile(r"<image:title>\s*(.*?)\s*</image:title>", re.S)
 _LASTMOD_RE = re.compile(r"<lastmod>\s*(.*?)\s*</lastmod>", re.S)
+_COSTWAY_CATEGORY_BASENAMES = {
+    "animalerie",
+    "appliances",
+    "arredamento",
+    "articoli-per-animali",
+    "baby-kind",
+    "ba-o",
+    "badezimmer",
+    "bagno",
+    "bambini-e-neonati",
+    "baby-kids",
+    "bath",
+    "canopies-gazebos",
+    "bebes-et-tout-petits",
+    "cuisine-et-salle-a-manger",
+    "cocina",
+    "decor",
+    "decoracion",
+    "decorations",
+    "deportes-y-aire-libre",
+    "dekoration",
+    "decorazione",
+    "electromenagers",
+    "electrodomesticos",
+    "elettrodomestici",
+    "garten",
+    "giochi-e-giocattoli",
+    "furniture",
+    "haushaltsgerate",
+    "haustierbedarf",
+    "health-beauty",
+    "jardin-et-pelouses",
+    "jardin",
+    "jeux-et-jouets",
+    "juguetes-y-aficiones",
+    "kitchen",
+    "kuche",
+    "infantil",
+    "mascotas",
+    "meubles",
+    "mobel",
+    "muebles",
+    "muebles-exteriores",
+    "oficina",
+    "others",
+    "outdoor-e-giardino",
+    "outdoor",
+    "pets",
+    "pflege-kosmetik",
+    "sala-da-pranzo-e-cucina",
+    "salle-de-bain",
+    "sante-et-beaute",
+    "salud-y-belleza",
+    "salute-e-bellezza",
+    "spielzeuge-hobbys",
+    "sports",
+    "toys-hobbies",
+    "sport-e-tempo-libero",
+    "sport-freizeit",
+    "sports-et-plein-air",
+    "terraza-y-jardin",
+}
 
 
 class MagentoCrawler(BaseCrawler):
@@ -60,11 +124,12 @@ class MagentoCrawler(BaseCrawler):
     def __init__(self, site):
         super().__init__(site)
         hints = next((c for c in get_sites() if c["site"] == site.site), {})
+        crawler_config = site.crawler_config if isinstance(site.crawler_config, dict) else {}
         self.base = site.url.rstrip("/")
-        self.sitemap_hint = hints.get("sitemap")
-        self.product_match = hints.get("product_match", "")
+        self.sitemap_hint = crawler_config.get("sitemap") or hints.get("sitemap")
+        self.product_match = crawler_config.get("product_match") or hints.get("product_match", "")
         self.limit = self._resolve_limit(DEFAULT_LIMIT, honor_persisted=False)
-        self.scan_cap = int(hints.get("scan_cap", DEFAULT_SCAN_CAP))
+        self.scan_cap = int(crawler_config.get("scan_cap") or hints.get("scan_cap", DEFAULT_SCAN_CAP))
         self._sitemap_meta: dict[str, dict] = {}
 
     def _headers(self) -> dict:
@@ -167,24 +232,32 @@ class MagentoCrawler(BaseCrawler):
         if self._prefer_sitemap_only():
             rows = []
             seen_skus: set[tuple[str, str]] = set()
-            for row in (self._row_from_sitemap(u) for u in cands[: self.limit]):
+            total_product_rows = 0
+            for row in (self._row_from_sitemap(u) for u in cands):
                 if not row:
                     continue
                 key = (str(row.get("site") or ""), str(row.get("sku") or ""))
                 if key in seen_skus:
                     continue
                 seen_skus.add(key)
-                rows.append(row)
+                total_product_rows += 1
+                if len(rows) < self.limit:
+                    rows.append(row)
             result.products.extend(rows)
-            result.total_product_count = total
-            coverage_pct = (len(rows) / total * 100) if total else 100.0
-            if len(rows) < total and coverage_pct < 99.9:
+            result.total_product_count = total_product_rows
+            if scan_truncated or len(rows) < total_product_rows:
                 result.coverage_complete = False
                 result.coverage_code = "incomplete_detail_parse"
                 result.coverage_stage = "sitemap"
+                reasons = []
+                if scan_truncated:
+                    reasons.append(f"候选页被 MAGENTO_SCAN_CAP 截断 {len(cands)}/{total}")
+                if len(rows) < total_product_rows:
+                    reasons.append(
+                        f"发现 {total_product_rows} 个商品，实际入库 {len(rows)} 个")
                 result.coverage_reason = (
-                    f"Magento sitemap-only 本次被 limit/scan_cap 截断："
-                    f"{len(rows)}/{total}"
+                    "；".join(reasons)
+                    or "Magento sitemap-only 本次未能证明商品全量覆盖"
                 )
                 result.coverage_retryable = True
                 result.coverage_suggested_action = (
@@ -253,6 +326,9 @@ class MagentoCrawler(BaseCrawler):
             return None
         html = res.text or ""
         data = GenericCrawler._from_jsonld(html) or {}
+        final_url = (res.final_url or url).split("#", 1)[0]
+        if final_url.rstrip("/") != url.split("#", 1)[0].rstrip("/") and not data.get("sku"):
+            return None
         tree = HTMLParser(html)
 
         title = data.get("name") or self._meta(tree, "og:title")
@@ -269,12 +345,21 @@ class MagentoCrawler(BaseCrawler):
         imgs = data.get("images") or (
             [self._meta(tree, "og:image")] if self._meta(tree, "og:image") else [])
         slug = url.rstrip("/").split("/")[-1].split("?")[0][:80]
-        category_path = (
-            data.get("category")
-            or _jsonld_breadcrumb(tree)
-            or _dom_breadcrumb(tree)
-            or _category_from_title_fallback(title)
+        category_path = _first_valid_category(
+            data.get("category"),
+            _jsonld_breadcrumb(tree),
+            _dom_breadcrumb(tree),
+            _category_from_title_fallback(title),
         )
+        review_count = data.get("review_count")
+        rating = data.get("rating")
+        dom_review_count, dom_rating = _dom_review_details(tree, html)
+        if review_count is None:
+            review_count = dom_review_count
+        if review_count is None:
+            review_count = 0
+        if rating is None:
+            rating = dom_rating
         return {
             "sku": data.get("sku") or slug,
             "spu": data.get("sku") or slug,
@@ -287,8 +372,8 @@ class MagentoCrawler(BaseCrawler):
             "original_price": original,
             "currency": data.get("currency")
             or _CURRENCY.get(self.site.country, "USD"),
-            "ratings": data.get("rating"),
-            "review_count": data.get("review_count") or 0,
+            "ratings": rating,
+            "review_count": review_count,
             "status": data.get("status", "on_sale"),
             "has_video": "<video" in html,
             "mpn": data.get("mpn"),
@@ -452,7 +537,7 @@ class MagentoCrawler(BaseCrawler):
             "image_urls": meta.get("images") or [],
             "category_path": _category_from_url(url),
             "currency": _CURRENCY.get(self.site.country, "USD"),
-            "status": "on_sale",
+            "status": "discovered",
             "brand": self.site.brand,
             "product_url": url,
             "site": self.site.site,
@@ -465,6 +550,8 @@ def _candidate_priority(url: str) -> tuple[int, int, str]:
     path = re.sub(r"https?://[^/]+", "", url).lower()
     basename = path.rstrip("/").rsplit("/", 1)[-1]
     depth = path.count("/")
+    if _looks_like_non_product_url(url):
+        return (9, -depth, url)
     if basename.startswith("costway-") and basename.endswith(".html"):
         return (0, -depth, url)
     if basename.endswith(".html") and depth >= 3:
@@ -504,6 +591,62 @@ def _looks_like_category_url(url: str) -> bool:
     return path.startswith("/c/") or "/category/" in path or "/catalog/category/" in path
 
 
+def _looks_like_non_product_url(url: str) -> bool:
+    path = re.sub(r"https?://[^/]+", "", url).strip("/").lower()
+    if not path:
+        return True
+    if _SKIP_RE.search("/" + path):
+        return True
+    basename = path.rsplit("/", 1)[-1]
+    stem = basename[:-5] if basename.endswith(".html") else basename
+    if stem in _COSTWAY_CATEGORY_BASENAMES:
+        return True
+    if not basename.endswith(".html") and re.search(
+        r"(agb|impressum|kontakt|privacy|terms|conditions|withdrawal|"
+        r"shipping|shipments|track-your-order|site-map|reward|loyalty|"
+        r"aw[-_]?reward[-_]?points|myrewardszone|loyalty[-_]?cashback|"
+        r"cashback|dropshipping|black[-_]?friday|flash[-_]?(deal|sale)|"
+        r"bundle[-_]?sale|outlet|offer|offers|deals|promo|sale|"
+        r"back[-_]?to[-_]?school|bfdealstoroyalusers|freetrials|"
+        r"costway[-_]?aniversario|costway[-_]?day|costway[-_]?home|monthly[-_]?deal|"
+        r"mothers[-_]?day|singles[-_]?day|nuevaoferta|populares|"
+        r"recall|test|ceshi|affiliate|agrupados|bf-|carbono|christmas|"
+        r"climate[-_]?action|colorfulautumn|coupon|cyber|descuento|diadel|dia-del|"
+        r"diadesanvalentin|"
+        r"disfrutadelairelibre|dropship|ecodiseno|garden-list|get-time|"
+        r"happy[-_]?womens[-_]?day|holiday|juguetes-infantiles|kids-list|kitchen-list|labor-day|"
+        r"liquidacion|location-working-hours|lxy|m-|mas-vendidos|mega-semana|"
+        r"memory[-_]?of[-_]?love|milestone|month|monthly|new-arrival|newin|novedad|oferta|offer|"
+        r"outlet|pascua|payment|point|policy|primavera|programa-de-afiliados|"
+        r"rebajas|recomendado|regalo|return|rosa|shipping|shipments|"
+        r"singleday|site-map|subscribe|summer|test|prueba|top-|"
+        r"track-your-order|ventadeverano|vuelta|vuletaalcole|weekly|"
+        r"weee[-_]?policy|welcome[-_]?2022|whatsappvip|whattobuy|"
+        r"wholesale|why-costway|feliznavidad|"
+        r"fin-de-ano|nationalday|newyear|our-guarantee|lieferorte|zahlungsarten|garantie|"
+        r"widerrufsbelehrung|ueber-costway|warum-costway|partnerprogramm|"
+        r"payment[-_]?methods|return[-_]?policy|location[-_]?working[-_]?hours|"
+        r"affiliate[-_]?programme|why[-_]?costway|winkelgids|winkelwagen|"
+        r"room|bathroom|bedroom|dining[-_]?room|fitness[-_]?room|kids[-_]?room|"
+        r"living[-_]?room|office|patio|bestseller|frische[-_]?auswahl|"
+        r"geschenke[-_]?fuer|kategorie2023|nationalfeiertag|recommended[-_]?may[-_]?like|"
+        r"reduziert|sns|winter[-_]?sale|"
+        r"top[-_]?categorie|wintercollectie|schoolseizoen|wooninspiratie|"
+        r"nieuwe[-_]?aankomst|nieuwjaar|opruiming|carnaval|earthday|"
+        r"eco[-_]?design[-_]?inspiratie|flash[-_]?verkoop|herfst|"
+        r"kantoor[-_]?collectie|vaderdag|valentijnsdag|vrouwendag|"
+        r"wereldbeker|winter[-_]?sale|ip[-_]?security|load|deal|voetbal)",
+        basename,
+        re.I,
+    ):
+        return True
+    if "." not in basename and "-" in basename:
+        return basename.startswith(("subscribe-", "recall-"))
+    if basename.endswith(".html") and re.search(r"(^|[-_])(test|ceshi)\d*", basename, re.I):
+        return True
+    return False
+
+
 def _dom_breadcrumb(tree: HTMLParser) -> str | None:
     crumbs = [
         n.text(separator=" ", strip=True)
@@ -515,12 +658,14 @@ def _dom_breadcrumb(tree: HTMLParser) -> str | None:
     cleaned = []
     for crumb in crumbs:
         text = re.sub(r"\s+", " ", html.unescape(crumb or "")).strip()
-        if not text or text.lower() in {"home", "startseite", "accueil", "inicio"}:
+        if not text or _is_placeholder_category(text):
+            continue
+        if text in cleaned:
             continue
         cleaned.append(text)
     if len(cleaned) <= 1:
         return None
-    return "/".join(cleaned[:-1][:4])
+    return _valid_category_path("/".join(cleaned[:-1][:4]))
 
 
 def _jsonld_breadcrumb(tree: HTMLParser) -> str | None:
@@ -552,43 +697,427 @@ def _jsonld_breadcrumb(tree: HTMLParser) -> str | None:
                 name = nested.get("name") if isinstance(nested, dict) else None
                 name = name or elem.get("name")
                 text = re.sub(r"\s+", " ", str(name or "").strip())
-                if not text or text.lower() in {"home", "startseite", "accueil", "inicio"}:
+                if not text or _is_placeholder_category(text):
+                    continue
+                if text in names:
                     continue
                 names.append(text)
             if len(names) > 1:
-                return "/".join(names[:-1][:4])
+                return _valid_category_path("/".join(names[:-1][:4]))
     return None
 
 
+def _first_valid_category(*values: object) -> str | None:
+    for value in values:
+        category = _valid_category_path(value)
+        if category:
+            return category
+    return None
+
+
+def _valid_category_path(value: object) -> str | None:
+    if isinstance(value, (list, tuple)):
+        text = "/".join(str(item) for item in value if item)
+    else:
+        text = str(value or "")
+    text = re.sub(r"\s+", " ", html.unescape(text)).strip(" /")
+    if not text:
+        return None
+    parts = [part.strip() for part in text.split("/") if part.strip()]
+    parts = [part for part in parts if not _is_placeholder_category(part)]
+    if not parts:
+        return None
+    return "/".join(parts)
+
+
+def _is_placeholder_category(value: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    return normalized in {
+        "home",
+        "startseite",
+        "accueil",
+        "inicio",
+        "site pages",
+        "default category",
+    }
+
+
+def _dom_review_details(tree: HTMLParser, html: str) -> tuple[int | None, float | None]:
+    review_count = None
+    rating = None
+    for selector in (
+        "[data-rating-count]", "[data-review-count]", "[data-reviews-count]",
+        "[class*=review]", "[id*=review]", "[class*=rating]", "[id*=rating]",
+    ):
+        for node in tree.css(selector)[:60]:
+            for attr in (
+                "data-rating-count", "data-review-count", "data-reviews-count",
+                "data-count", "aria-label", "title",
+            ):
+                value = node.attributes.get(attr)
+                if value and review_count is None:
+                    review_count = _review_count_from_text(value)
+            text = node.text(separator=" ", strip=True)
+            if text and review_count is None:
+                review_count = _review_count_from_text(text)
+            if text and rating is None:
+                rating = _rating_from_text(text)
+            if review_count is not None and rating is not None:
+                return review_count, rating
+    if review_count is None:
+        review_count = _review_count_from_text(html[:200000])
+    if rating is None:
+        rating = _rating_from_text(html[:200000])
+    return review_count, rating
+
+
+def _review_count_from_text(value: str) -> int | None:
+    text = str(value or "")
+    for pattern in (
+        r"([\d,\s]+)\s*(?:reviews?|ratings?|avis|bewertungen|reseñas|recensioni)",
+        r"(?:reviews?|ratings?|avis|bewertungen|reseñas|recensioni)\D{0,20}([\d,\s]+)",
+    ):
+        match = re.search(pattern, text, re.I)
+        if not match:
+            continue
+        parsed = GenericCrawler._int(match.group(1))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _rating_from_text(value: str) -> float | None:
+    match = re.search(r"([0-5](?:[.,]\d+)?)\s*(?:/|out of)\s*5", str(value or ""), re.I)
+    if not match:
+        return None
+    return GenericCrawler._num(match.group(1).replace(",", "."))
+
+
 def _category_from_title_fallback(title: str | None) -> str | None:
-    text = (title or "").strip().lower()
+    text = html.unescape(title or "").strip().lower()
     if not text:
         return None
     rules = (
-        (r"kratzbaum|katzen|cat tree|arbre.*chat|rascador.*gato|albero.*gatti",
+        (r"schlauchaufroller|druckluftschlauch|schlauchtrommel",
+         "Tools & Home Improvement"),
+        (r"airbrush.*spray booth|paint spray booth",
+         "Tools & Home Improvement"),
+        (r"rc\b|r/c|ferngesteuert|monstertruck|spielzeugauto|toy car|coche.*control|"
+         r"voiture.*t[ée]l[ée]command[ée]|auto.*telecomand",
+         "Toys & Games/Remote Control Toys"),
+        (r"keyboard|klavier|digitalpiano|rollpiano|tasteninstrument|piano|"
+         r"teclado|clavier|tastiera|klokkenspel|xylofoon|slagwerkinstrument|"
+         r"musikinstrument",
+         "Toys & Games/Musical Instruments"),
+        (r"gitarre|guitar|drum|trommel|boxen\b|music|musique|musica|"
+         r"viol[ií]n|viool|ukelele|bajo el[eé]ctrico|basso elettrico|"
+         r"electric bass|pickup|bass guitar|xylophone|bell lyre|vibraphone|"
+         r"marching band|musical|trombone|tenor slide|brass|ukulele",
+         "Toys & Games/Musical Instruments"),
+        (r"kratzbaum|katzen|cat tree|cat tower|kitty tower|scratching|cat condo|"
+         r"cat bed|arbre.*chat|rascador.*gato|"
+         r"albero.*gatti|krabpaal|katten",
          "Pet Supplies/Cat Furniture"),
-        (r"bett|bed|lit |cama|letto|matras|mattress|colch[oó]n|colch[aã]o",
+        (r"fuzzy.*blanket|fur.*blanket|throw blanket",
          "Furniture/Bedroom"),
-        (r"stuhl|chair|silla|chaise|sedia|stoel|bank|bench",
+        (r"hund|dog|chien|perro|cane|kaninchen|rabbit|konijn|cat house|"
+         r"konijnenhok|pet|\btier\b|haustier|kleine dieren|puppyren|hondenhek|"
+         r"hondenkrat|hondenhok|huisdierhek|hondenren|hondenwagen|hondenbuggy|"
+         r"dierenhek|huisdierhuis|hondenkennel|hondendeken|hondenhelling|"
+         r"hondentrap|dierentrap|kippenhok|pluimvee|kippenvoerbak|"
+         r"hondenkooi|honden",
+         "Pet Supplies"),
+        (r"schaukelstuhl|schwingstuhl|wippsessel",
          "Furniture/Chairs & Seating"),
-        (r"tisch|table|mesa|bureau|scrivania|tafel",
-         "Furniture/Tables"),
-        (r"regal|shelf|shelving|[ée]tag[èe]re|estante|scaffale|kast",
-         "Furniture/Storage & Shelving"),
-        (r"lampe|lamp|l[aá]mpara|lampadaire|lampada",
-         "Lighting"),
-        (r"garten|garden|jardin|giardino|outdoor|terrasse|patio",
+        (r"gartenstuhl|gartenst[üu]hle|gartensessel|sonnenliege|pflanzenregal",
          "Garden & Outdoor"),
-        (r"küche|kitchen|cocina|cuisine|cucina",
-         "Kitchen & Dining"),
-        (r"spiel|speelgoed|trein|bouwblokken|schuimblokken|kids|kinder|children|enfant|niñ|bambin|beb[eé]",
+        (r"rollator|loopwagen|loophulp|mobiliteitshulpmiddel|reisrollator",
+         "Health & Beauty/Mobility Aids"),
+        (r"warmwaterboiler|elektrische boiler|\bboiler\b",
+         "Home Appliances"),
+        (r"spiel|speelgoed|trein|bouwblokken|schuimblokken|kids|kid |kinder|children|"
+         r"enfant|niñ|bambin|beb[eé]|baby|rutsche|schaukel|lauflern|laufrad|"
+         r"maze|science kit|swing set|hula|ride on|push car|toddler|"
+         r"climbing toys|"
+         r"construction blocks|magnetic construction|bouncy water castle|bounce house|"
+         r"toy set|wooden toy|doctor playset|dollhouse|dolls house|pretend|activity center|"
+         r"jumping castle|ice cream cart toy|balance beam|stepping stones|"
+         r"train tracks|dinosaurs|ball pit|waffle block|teepee|rocking horse|"
+         r"kindersofa|kindertisch|infantil|juguetes|andador|gatear|zje[żz]d[żz]al|"
+         r"kojec|niemowl|dzieci|babyfoon|flessenwarmer|babyvoeding|"
+         r"speelkleed|kruipmat|speelmat|borstkolf|candy grabber|grabber game|"
+         r"bouwstenen|poppenhuis|elektrische auto|klimkoepel|schommel|"
+         r"4 op een rij|vier op een rij|spelreeks|coin pusher|arcade|"
+         r"doktersspeelset|waterglijbaan|springgedeelte|joggingbuggy|"
+         r"speelkeuken|pogostick|springstok",
          "Kids & Baby"),
-        (r"pool|piscina|spa|trampolin|trampoline",
+        (r"canopy bed|bed frame|platform bed|bunk bed|loft bed|house bed",
+         "Furniture/Bedroom"),
+        (r"air conditioner|airconditioner|portable ac|dehumidifier|humidifier|"
+         r"refrigerator|mini beverage refrigerator|undercounter|ceiling fan|"
+         r"pedestal fan|wall mount fan|electric heater|space heater",
+         "Home Appliances"),
+        (r"garten|garden|jardin|giardino|outdoor|terrace|terrasse|patio|pavillon|"
+         r"sonnenschirm|hochbeet|pflanz|rankgitter|gew[aä]chshaus|rasen|balkon|"
+         r"gazebo|canopy|hammock|umbrella|planter|flower pot|topiary|plant stand|"
+         r"windmill|wind mill|wood chipper|tendone|laghetto|depuratore|stagni|"
+         r"lawn aerator|soil loosening|fire pit|fireplace log|firewood log|"
+         r"compost|tumbler|privacy fence|privacy screen|willow frame|"
+         r"firewood rack|log rack|fireplace companion|bird feeder|wild birds|"
+         r"green house|greenhouse|growth tent|hydroponic|awning|"
+         r"landscape.*rake|weed.*lake.*rake|grass sweeper|feeding trough|"
+         r"artificial.*(tree|plant|flower)|fake.*(tree|plant)|faux.*(tree|plant)|"
+         r"garden cart|outdoor.*bench|wicker|acacia wood (bench|table|chair|sofa|loveseat|ottoman|set)|tiki|sun shelter|"
+         r"tuin|grasmaaier|gazon|vijver|parasol|zonnescherm|partytent|"
+         r"plantenbak|bloempot|bloemenplank|plantenrek|kweektent|broeikas|"
+         r"foliekas|paviljoen|luifel|voordak|overkapping|terrasverwarmer|"
+         r"buitenverwarmer|pergola|buitenapparatuur|schuur|poortsteun|"
+         r"buitendouche|tuintent|buiten tent|windscherm|verticuteermachine|"
+         r"sneeuwschuiver|sneeuwschop|gras verticuteer|aangebouwde kas|"
+         r"tomatenkas|kas |mini kas|bloembak|bloemenwagen|vuurkorf|"
+         r"insectenverdelger|insectenvanger|plantenstandaard|grastrimmer|"
+         r"kantensnijder|thermisch verzinkt gaas|vogelvoeder|voederhouder|"
+         r"voederstation|vogelzaden",
+         "Garden & Outdoor"),
+        (r"tisch|\btable\b|mesa|bureau|scrivania|tafel|desk|workbench|workstation|"
+         r"computer desk|office desk|writing desk|executive desk|"
+         r"coffee table|console table|side table|dining table|"
+         r"couchtisch|beistelltisch|"
+         r"konsolentisch|laptoptisch|bistrotisch|bartisch|nachttisch|"
+         r"eettafel|bistrogroep",
+         "Furniture/Tables"),
+        (r"\bbett\b|bed|lit |cama|letto|matras|mattress|colch[oó]n|colch[aã]o|"
+         r"nightstand|bedside|bed bench|blanket|heated throw|seat cushion|"
+         r"leg elevation pillow|"
+         r"schlafsofa|sofa|couch|ledikant|slaapkamer|beenhefkussen|"
+         r"leeskussen|wigkussen|memory foam kussen|oprijplaat.*honden",
+         "Furniture/Bedroom"),
+        (r"stuhl|chair|silla|chaise|sedia|stoel|bank|bench|hocker|sessel|"
+         r"seat|stool|loveseat|ottoman|mannequin|stadium seat|swing seat|"
+         r"floor cushion|rocker|footrest|"
+         r"sgabello|poggiapiedi|"
+         r"barhocker|klappstuhl|liegestuhl|kruk|zitkubus|zitkist|zitset|"
+         r"fauteuil|relaxfauteuil|poef",
+         "Furniture/Chairs & Seating"),
+        (r"regal|shelf|shelving|[ée]tag[èe]re|estante|scaffale|kast|"
+         r"schrank|kommode|rollwagen|aufbewahrung|storage|cabinet|"
+         r"bookcase|cupboard|drawer|closet|organizer|garment|clothing rack|"
+         r"coat rack|wine rack|laundry hamper|push cart|dolly|drying rack|"
+         r"scarpiera|scatola|custodia|cassetti|porta.*oli|wall divider|"
+         r"tv stand|media console|sideboard|buffet|trash can|garbage can|"
+         r"trash bin|cargo carrier|roof bag|roof rack|record player stand|"
+         r"dry erase board|white board|blackboard|easel|utility cart|"
+         r"shopping cart|food prep cart|home bar|entertainment center|"
+         r"universal stand|flat screen console|"
+         r"pantry rack|trash bag holder|"
+         r"opberg|opslag|kledingrek|kapstok|wandplank|wandrek|boekenplank|"
+         r"boekenkast|kubusrek|tv meubel|tv plank|schoenenrek|wijnrek|"
+         r"flessenhouder|rek\b|plank\b|trolley|tv-standaard|nichewagen|"
+         r"posterstandaard|informatiehouder|wasmand|waslijn|afvalemmer|afvalbak|"
+         r"afvalcontainer|commode|laden|kaartenhouder|lessenaar|tv standaard|"
+         r"entertainment centrum|dakmand|winkelwagen",
+         "Furniture/Storage & Shelving"),
+        (r"lampe|lamp|l[aá]mpara|lampadaire|lampada|leuchte|ceiling light|led light",
+         "Lighting"),
+        (r"küche|kitchen|cocina|cuisine|cucina|kochtopf|kaffee|mikrowelle|"
+         r"fryer|griddle|food warmer|cooking|stainless steel.*warmer|"
+         r"rebanador|cortador de hoja|bacon|jam[oó]n|alimento|"
+         r"ice maker|ice cube maker|ice making machine|ice cube making|countertop ice|"
+         r"water dispenser|essiccatore|conservazione|coffee maker|espresso|"
+         r"snow cone|food dehydrator|dehydrator|"
+         r"eiscreme|mixer|grill|waffel|dampfkochtopf|freidora|exprimidor|"
+         r"batidora|asador|barbacoa|olla|espumador|aufschnittmaschine|"
+         r"snijmachine|capsuledispenser|koffiecapsules|servies|dinerset|"
+         r"sandwichtoaster|slow cooker|magnetron|spoelbak|afdruiprek|"
+         r"snelkookpan|steelpan|friteuse|hetelucht|koffiezetapparaat|"
+         r"espressomachine|sapcentrifuge|staafmixer|serveerwagen|"
+         r"keukentrolley|keukenwagen|keukenlade|barbecue|kookset|"
+         r"keukengerei|kookbestek|voedselverwarmer|warmhoud|worstenmaker|"
+         r"vleesvuller|vleesmolen|worstenvuller|soepwarmer|ijsblokjesmachine|"
+         r"ijsmachine|broodbakmachine|afvalverwijdering|voedselmolen|fondue|"
+         r"voedselwarmtemat|pizzaoven|hamburger|melkopschuimer|"
+         r"keukenmessenslijper|popcorn|ijsbreker|stoomkoker|suikerspin|"
+         r"suiker spin|vleesvermalser",
+         "Kitchen & Dining"),
+        (r"\bbad\b|bath|toilet|dusch|shower|ablauf|handtuch|badezimmer|"
+         r"towel warmer|ironing board|"
+         r"baño|bano|ducha|munddusche|irrigador|badkamer|doekwarmer|"
+         r"handdoekverwarmer|handdoekdroger|monddouche|doucheafvoer|afvoerputje",
+         "Bathroom"),
+        (r"dampfreiniger|steam cleaner|cleaner|reiniger|staubsauger|vacuum|"
+         r"fregona|limpia piso|dampfglätter|dampfglatter|mop|vloerwisser|"
+         r"stoomreiniger|dweil|stofzuiger|tapijtstofzuiger|behangverwijderaar|"
+         r"reinigingssysteem",
+         "Home Cleaning"),
+        (r"weihnacht|christmas|xmas|halloween|deko|decoration|decor|spiegel|mirror|teppich|"
+         r"navidad|espejo|alfombra|alfombrilla|fu[ßs]matte|bodenmatte|discokugel|beamer|projektor|"
+         r"wall art|room divider|world globe|antique globe|interactive globe|skeleton model|nutcracker|"
+         r"pantalla|proyecci[oó]n|proyeccion|projection screen|"
+         r"acoustic panel|sound absorbing|fireplace screen|fire panel|spinning wheel|"
+         r"prize wheel|wall privacy|privacy screen|room separator|"
+         r"paneles decorativos|fotograf[ií]a|fotobox|caja de luz|aroma|duft|"
+         r"kosmetik|maquillaje|cosm[eé]ticos|nagellack|kamin|chimenea|"
+         r"kerst|sneeuwpop|fotodoos|fotostudio|projectiescherm|lichtbord|"
+         r"nagellak|brievenbus|postbox|haard|haardhout|brandhout|"
+         r"ruimteverdeler|scheidingswand|inkijkbescherming|haardscherm|"
+         r"brandscherm|schoorsteen|kunstmatige|kunstplant|kunstboom|"
+         r"kunstbloem|nepplant|potplant|decoratie|plantenwand|kunstgras|"
+         r"wandpanelen|bloemenboom|geluidsisolerende panelen|prijzenwiel|"
+         r"cadeaus|gelukswiel|whiteboard|schoolbord|kamerscherm|binnenwand|"
+         r"disco|lichteffect|party|kunstbloesemboom|room divider|"
+         r"paraplubak|ijdelheid|rolgordijn|gordijn|verduister",
+         "Home Decor"),
+        (r"werkzeug|\btool\b|s[aä]ge|drill|bohr|garage|radstopper|vordach|"
+         r"paint tank|spray gun|socket set|caliper|engine|hub|button maker|"
+         r"amoladora|smerigliatrice|smontagomma|pneumatici|strumento|oscillante|"
+         r"macchina rotativa|multiuso|cricchetto|chiavi|"
+         r"puertas correderas|guias de puertas|gu[ií]as de puertas|steel kit|"
+         r"computing scale|platform scale|motorcycle lift|lift jack|snow pusher|"
+         r"roof rake|snow rake|air blower|air pump|work platform|pressure washer|"
+         r"spray nozzles|trailer ramp|loading ramp|stair railing|"
+         r"oil spill|parking mat|tile cutter|sneeze guard|reverse osmosis|"
+         r"filter replacement|platform truck|"
+         r"herramienta|taladro|perforaci[oó]n|escalera|leiter|klapptritt|"
+         r"spritzpistole|pistola de pulverizaci[oó]n|lackierpistole|"
+         r"lenkrad|abzieher|spurverbreiterung|spurplatten|pumpe|kompressor|"
+         r"schwei[ßs]|soldador|soldadura|seilwinde|seilzug|generator|"
+         r"bomba diesel|bomba de combustible|manguera|boquilla de combustible|"
+         r"generador|metalldetektor|laser|magnetleiste|werkstattwagen|"
+         r"rampe|rampas|kfz|coches|filterkartuschen|purificador|hepa filter|"
+         r"waterfilter|wasserfilter|packband|klebeband|stretchfolie|"
+         r"wickelfolie|palettenfolie|tresor|waffenkoffer|gewehrkoffer|"
+         r"gereedschap|slangklemtang|tangen|kolomboormachine|boormachine|"
+         r"stuurwiel|trekkerset|plakband|verpakkingstape|steigerbok|"
+         r"werkbok|veiligheidskluis|kluis|pomp|werkplaats|rolbord|"
+         r"tegenhoudsleutel|voertuig|batterijstarter|luchtcompressor|"
+         r"bandenopblazer|hark\b|ladder|trapladder|opstapje|lasmachine|"
+         r"lasapparaat|ijskrabber|trapleuning|leuning|paneelwagen|"
+         r"wielstopper|wielafstandhouder|spoorplaat|waterdichte doos|"
+         r"oprit|motorhelling|camerarail|zaagbok|zaagsteun|drempeloploop|"
+         r"metaaldetector|motorkrik|motorstandaard|krik|tegelsnijder|"
+         r"messenslijpmachine|cirkelzaag|invalzaag|zaagblad|stuurslot|wapenreiniging|cameratas|"
+         r"bewakingscamera|houtskoolaansteker|verwarmingsplaat|laminaatsnijder",
+         "Tools & Home Improvement"),
+        (r"camping|feldbett|strand|surf|boot|boat|pool|piscina|spa|"
+         r"trampolin|trampoline|skateboard|scooter|paddelbrett|sup-board|"
+         r"gymnastics mat|gymnastic mat|hula|beach|cooler|hard cooler|hunting blind|"
+         r"soccer goal|football net|football rebounder|body board|boogie board|"
+         r"snow tube|sleeping bag|bike cargo|punching bag|water punching bag|rowing machine|"
+         r"fishing rod|net system|floating water|camping cot|camping mattress|"
+         r"camping sink|sports tent|basketball hoop|basketball stand|badminton net|"
+         r"pickle.*net|hunting blind|wood burning stove|solar pool heater|"
+         r"golf|bicicleta|fahrrad|e-bike|elektrofahrrad|fútbol|futbol|"
+         r"bici elettrica|ruota posteriore|"
+         r"baloncesto|rubberboot|vissersboot|badminton|kickstep|fiets|"
+         r"kampeertent|koepeltent|drijvende|algen|slaapzak|hangmat|sup |"
+         r"sup board|paddle leash|tennis|basketbal|biljart|koelbox|koeler|"
+         r"kajak|kano|bodyboard|boogieboard|stand up paddle|ijsvissen|"
+         r"step\b|stepper|sneeuwschoen|sneeuwboei|sneeuwslee",
          "Sports & Outdoor Recreation"),
-        (r"fitness|exercise|training|sport",
+        (r"casino|poker|chess|throwing target|4 in a row|connect game|"
+         r"giant connect|dart board|shuffleboard|art set",
+         "Toys & Games"),
+        (r"spiel|speelgoed|trein|bouwblokken|schuimblokken|kids|kinder|children|"
+         r"enfant|niñ|bambin|beb[eé]|baby|rutsche|schaukel|lauflern|laufrad|"
+         r"maze|science kit|swing set|hula|ride on|push car|toddler|"
+         r"climbing toys|"
+         r"construction blocks|magnetic construction|bouncy water castle|bounce house|"
+         r"toy set|wooden toy|doctor playset|dollhouse|dolls house|pretend|activity center|"
+         r"jumping castle|ice cream cart toy|balance beam|stepping stones|"
+         r"train tracks|dinosaurs|ball pit|waffle block|teepee|rocking horse|"
+         r"kindersofa|kindertisch|infantil|juguetes|andador|gatear|zje[żz]d[żz]al|"
+         r"kojec|niemowl|dzieci|babyfoon|flessenwarmer|babyvoeding|"
+         r"speelkleed|kruipmat|speelmat|borstkolf|candy grabber|grabber game|"
+         r"bouwstenen|poppenhuis|elektrische auto|klimkoepel|schommel|"
+         r"4 op een rij|vier op een rij|spelreeks|coin pusher|arcade|"
+         r"doktersspeelset|waterglijbaan|springgedeelte|joggingbuggy|"
+         r"speelkeuken|pogostick|springstok",
+         "Kids & Baby"),
+        (r"fitness|exercise|training|sport|laufband|walking pad|gymnastik|"
+         r"yoga|massage|heimtrainer|ruder|musculaci[oó]n|pesas|hantel|"
+         r"klimmzug|tanzstange|gimnasio|entrenamiento|oefenmat|optrekstang|"
+         r"stepper|climber|workout|medicijnbal|gymnastiek|beschermmat|"
+         r"puzzelmat|fitnessmat|balletbarre|bokszak|loopband|vloermat|"
+         r"tapis roulant|allenamento cardio|attrezzo per allenamento|sandbag|"
+         r"abdominal cruncher|cruncher|treadmill|lat pulldown|cable machine|"
+         r"olympic|triceps bar|push[- ]?up|crash mat|"
+         r"zachte mat|halterset|rekstang|roeimachine|halterstang|barbell|"
+         r"halterschijven|body workout|stimulator|voetbalrebounder|reboundwand",
          "Sports & Fitness"),
+        (r"haushaltsgerate|home appliances|nevera|termoel[eé]ctrica|"
+         r"aire acondicionado|humidificador|calentamiento|lavadora|pralka|"
+         r"dehumidifier|fan speed|wall mount fan|heater|massaggiatore|"
+         r"refrigerator|undercounter|ceiling fan|pedestal fan|"
+         r"manta el[eé]ctrica|luchtbevochtiger|luchtzuiveringsfilter|"
+         r"hepa-filter|hepa filter|air purifier|verwarmde dekens|"
+         r"elektrisch verwarmd|vriezer|verwarmingsniveaus|elektrische deken|"
+         r"wasdroger|droger|ventilator|luchtkoeler|airconditioner|wasmachine|"
+         r"huishoudelijke apparaten|stijltang|wax heater|wax warmer",
+         "Home Appliances"),
+        (r"manicure|nagelbord|studiobord",
+         "Beauty & Personal Care"),
+        (r"koffer|trolleytasche|reisetasche|reisekoffer|suitcase|luggage|"
+         r"maleta|valise|valigia|bolsa de deporte",
+         "Luggage"),
+        (r"parag[uü]ero|soporte de paraguas|sombrilla|maceta|macetero|gallinero|"
+         r"jaula.*(ave|p[aá]jaro)|rankhilfe|regenfass|wassertank|"
+         r"chicken feeder|chicken coop|pen fence|flower pots?|topiary|"
+         r"rattan|vimini|bistro|porch|balcony|outdoor furniture|"
+         r"sedie.*esterno|tavolo.*sedie|trespolo|amaca sospesa|"
+         r"bollerwagen|handwagen|sichtschutz|paravent|raumteiler|"
+         r"feuerschale|heckenschere|vogelfutter|futterstation|"
+         r"carpa|tienda de campa|toldo|seto artificial|fender.*barcos|"
+         r"guardabarros.*barcos",
+         "Garden & Outdoor"),
+        (r"armario|gabinete|szafa|szafka|komoda|kredens|regał|regal|p[oó]łka|"
+         r"polka|archivador|cajon|caj[oó]n|zapatero|zapatos|ropero|"
+         r"wyspa kuchenna|w[oó]zek barowy|servierwagen|barwagen|weinwagen",
+         "Furniture/Storage & Shelving"),
+        (r"bettgestell|bettrahmen|polsterbett|metallbett|doppelbett|lattenrost|"
+         r"kopfteil|bed frame|bedstead|headboard|funda n[oó]rdica|almohada|"
+         r"nocny|sypial",
+         "Furniture/Bedroom"),
     )
     for pattern, category in rules:
+        if re.search(pattern, text, re.I):
+            return category
+    broad_rules = (
+        (r"caballete|cabestrante|bloqueo del volante|maniobra|cambiador|"
+         r"compresor|aerografo|aer[oó]grafo|trinquete|tornillo de banco|"
+         r"rampa|generador|inversor|detector de metales|panel publicitario|"
+         r"cartel|expositor|buz[oó]n|radiador|centrifugadora|laboratorio|"
+         r"pistola|pulverizaci[oó]n|spritzpistole|lackierpistole|"
+         r"bomba diesel|bomba de combustible|manguera|boquilla de combustible|"
+         r"seguridad reflectante|alta visibilidad|chaleco reflectivo|"
+         r"giacca di sicurezza|alta visibilit|safety jacket|reflective",
+         "Tools & Home Improvement"),
+        (r"carrito|cajonera|caj[oó]n|zapatero|perchero|ropero|cesto de ropa|"
+         r"cesta de ropa|bolsa de almacenamiento|almacenamiento|"
+         r"mesa|mesita|soporte elevador|plataforma regulable|estuche|malet[ií]n|"
+         r"bolsa de viaje|bolsa de deporte|parag[uü]ero",
+         "Furniture/Storage & Shelving"),
+        (r"freidora|microondas|picadora|exprimidor|deshidratador|barbacoa|"
+         r"parrilla|asador|cortador de verdura|coctelera|maquina de caramelo|"
+         r"algodon de azucar|algod[oó]n de az[uú]car|termoel[eé]ctrica",
+         "Kitchen & Dining"),
+        (r"medicinal|musculaci[oó]n|pesas|entrenamiento|gimnasio|remo|"
+         r"masajeador|irrigador|pelo|plancha de pelo|sup|kayak|canoa|bicicleta|"
+         r"paddle|trampol[ií]n",
+         "Sports & Fitness"),
+        (r"gato|mascota|p[aá]jaro|jaula|perro|animal",
+         "Pet Supplies"),
+        (r"persiana|estores|funda n[oó]rdica|manta|el[eé]ctrica|calefacci[oó]n|"
+         r"secadora|aire acondicionado|purificador de aire",
+         "Home Appliances"),
+        (r"bamb[uú]|ba[ñn]o|ducha|espejo|alfombrilla|trampa galvanizada|"
+         r"tendedero|reloj|decoraci[oó]n|video timbre|timbre",
+         "Home Decor"),
+        (r"bajo electrico|viol[ií]n|guitarra|teclado",
+         "Toys & Games/Musical Instruments"),
+        (r"etiquetas pistola|juego de etiquetas|juguete|arcade|ni[ñn]os",
+         "Toys & Games"),
+    )
+    for pattern, category in broad_rules:
         if re.search(pattern, text, re.I):
             return category
     return None

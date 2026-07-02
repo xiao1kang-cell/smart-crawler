@@ -75,6 +75,34 @@ def test_acceptance_gate_passes_ready_focus_site_with_promotions_and_templates()
     assert gate["blockers"] == []
 
 
+def test_acceptance_gate_default_scope_includes_all_non_deferred_sites():
+    mod = _module()
+    gate = mod.acceptance_gate(
+        {
+            "status": "ready",
+            "summary": {"fail": 0, "needs_refresh": 0, "needs_business_data": 0},
+            "templates": {
+                "product_field_fixes": {},
+                "sku_targets": {},
+                "promotion_signals": {},
+                "sales_signals": {},
+                "review_history": {},
+            },
+        },
+        {
+            "items": [{
+                "site": "homary_us",
+                "sku_count": 10,
+                "promotion_count": 2,
+                "issues": [],
+            }],
+        },
+    )
+
+    assert gate["ready"] is True
+    assert [item["site"] for item in gate["focus_items"]] == ["homary_us"]
+
+
 def test_main_scopes_action_plan_and_field_quality_to_tenant(monkeypatch, capsys):
     mod = _module()
     paths = []
@@ -112,5 +140,13 @@ def test_main_scopes_action_plan_and_field_quality_to_tenant(monkeypatch, capsys
 
     captured = capsys.readouterr()
     assert '"tenant": "1"' in captured.out
-    assert any("tenant=1" in path and "template_limit=20" in path for path in paths)
-    assert any(path.endswith("field-quality?tenant=1") for path in paths)
+    assert any(
+        "tenant=1" in path
+        and "template_limit=20" in path
+        and "include_deferred=1" in path
+        for path in paths
+    )
+    assert any(
+        path.endswith("field-quality?tenant=1&include_deferred=1")
+        for path in paths
+    )

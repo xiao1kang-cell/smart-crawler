@@ -17,6 +17,7 @@ SSH_TARGET="${NAS_USER}@${NAS_HOST}"
 SSH_OPTS="${SSH_OPTS:-}"
 APPLY="${APPLY:-0}"
 BUILD_ADMIN="${BUILD_ADMIN:-1}"
+BUILD_FRONTEND="${BUILD_FRONTEND:-1}"
 RUN_LOCAL_TESTS="${RUN_LOCAL_TESTS:-1}"
 VERIFY_STRICT="${VERIFY_STRICT:-0}"
 REMOTE_TEMPLATE_LIMIT="${REMOTE_TEMPLATE_LIMIT:-100}"
@@ -29,29 +30,55 @@ PAYLOAD_DIR="${PAYLOAD_DIR:-data/exports/aosen_deploy_${STAMP}}"
 PAYLOAD_TAR="${PAYLOAD_TAR:-${PAYLOAD_DIR}.tar.gz}"
 
 AOSEN_FILES=(
+  backend/sites.yaml
   backend/app/api/admin_spine.py
   backend/app/api/routes.py
+  backend/app/api/tracking.py
+  backend/app/crawlers/flexispot.py
+  backend/app/crawlers/generic.py
   backend/app/crawlers/homary.py
+  backend/app/crawlers/magento.py
+  backend/app/crawlers/shoper.py
+  backend/app/crawlers/shopify.py
   backend/app/crawlers/vidaxl.py
   backend/app/crawlers/vonhaus.py
+  backend/app/crawlers/westelm.py
+  backend/app/db.py
+  backend/app/export.py
   backend/app/models.py
+  backend/app/pipeline.py
+  backend/app/product_quality.py
   backend/app/runner.py
   backend/app/site_metrics.py
   backend/scripts/aosen_online_acceptance.py
   backend/scripts/aosen_online_remediate.py
+  backend/scripts/product_field_completeness.py
   backend/scripts/post_deploy_verify.py
   admin-app/src/api/admin.ts
   admin-app/src/pages/DataQualityPage.vue
+  frontend-app/src/api/coverage.ts
+  frontend-app/src/pages/CoveragePage.vue
+  frontend-app/src/pages/OverviewPage.vue
+  frontend-app/src/pages/SiteReportPage.vue
+  frontend-app/src/pages/TrackingPage.vue
+  frontend/report.html
 )
 AOSEN_ARTIFACT_FILES=(
   backend/tests/test_admin_sales_signals.py
   backend/tests/test_aosen_online_acceptance.py
   backend/tests/test_aosen_online_remediate.py
+  backend/tests/test_generic_discovery.py
+  backend/tests/test_onboard_flexispot.py
   backend/tests/test_post_deploy_verify.py
   backend/tests/test_pipeline_promo.py
   backend/tests/test_onboard_homary.py
+  backend/tests/test_onboard_magento.py
+  backend/tests/test_onboard_shopify.py
   backend/tests/test_onboard_vidaxl.py
   backend/tests/test_onboard_vonhaus.py
+  backend/tests/test_onboard_westelm.py
+  backend/tests/test_tracking_api.py
+  backend/tests/test_workspace_tenancy.py
   deliverables/aosen_production_completion_runbook_2026-06-28.md
 )
 if [ -n "$JUMP_HOST" ]; then
@@ -87,34 +114,71 @@ echo "-- Python syntax check"
 python3 -m py_compile \
   backend/app/api/admin_spine.py \
   backend/app/api/routes.py \
+  backend/app/api/tracking.py \
+  backend/app/crawlers/flexispot.py \
+  backend/app/crawlers/generic.py \
   backend/app/crawlers/homary.py \
+  backend/app/crawlers/magento.py \
+  backend/app/crawlers/shoper.py \
+  backend/app/crawlers/shopify.py \
   backend/app/crawlers/vidaxl.py \
   backend/app/crawlers/vonhaus.py \
+  backend/app/crawlers/westelm.py \
+  backend/app/db.py \
   backend/app/models.py \
+  backend/app/pipeline.py \
+  backend/app/product_quality.py \
   backend/app/runner.py \
   backend/app/site_metrics.py \
   backend/scripts/aosen_online_acceptance.py \
   backend/scripts/aosen_online_remediate.py \
+  backend/scripts/product_field_completeness.py \
   backend/scripts/post_deploy_verify.py
 
 if [ "$RUN_LOCAL_TESTS" = "1" ]; then
   echo "-- targeted backend tests"
-  (cd backend && .venv/bin/python -m pytest \
-    tests/test_admin_sales_signals.py \
-    tests/test_pipeline_promo.py \
-    tests/test_onboard_homary.py \
-    tests/test_onboard_vidaxl.py \
-    tests/test_onboard_vonhaus.py \
-    -q)
+  PYTHON_BIN="${PYTHON_BIN:-$ROOT/.venv/bin/python}"
+  PYTHONPATH=backend "$PYTHON_BIN" -m pytest \
+    backend/tests/test_admin_sales_signals.py \
+    backend/tests/test_aosen_online_acceptance.py \
+    backend/tests/test_aosen_online_remediate.py \
+    backend/tests/test_generic_discovery.py \
+    backend/tests/test_onboard_flexispot.py \
+    backend/tests/test_onboard_homary.py \
+    backend/tests/test_onboard_magento.py \
+    backend/tests/test_onboard_shopify.py \
+    backend/tests/test_onboard_vidaxl.py \
+    backend/tests/test_onboard_vonhaus.py \
+    backend/tests/test_onboard_westelm.py \
+    backend/tests/test_pipeline_promo.py \
+    backend/tests/test_post_deploy_verify.py \
+    backend/tests/test_tracking_api.py \
+    backend/tests/test_workspace_tenancy.py \
+    -q
 else
   echo "-- targeted backend tests skipped (RUN_LOCAL_TESTS=0)"
 fi
 
 if [ "$BUILD_ADMIN" = "1" ]; then
   echo "-- admin app build"
-  (cd admin-app && npm run build)
+  if [ -f admin-app/pnpm-lock.yaml ] && command -v pnpm >/dev/null 2>&1; then
+    (cd admin-app && pnpm install --frozen-lockfile && pnpm run build)
+  else
+    (cd admin-app && npm run build)
+  fi
 else
   echo "-- admin app build skipped (BUILD_ADMIN=0)"
+fi
+
+if [ "$BUILD_FRONTEND" = "1" ]; then
+  echo "-- frontend app build"
+  if [ -f frontend-app/pnpm-lock.yaml ] && command -v pnpm >/dev/null 2>&1; then
+    (cd frontend-app && pnpm install --frozen-lockfile && pnpm run build)
+  else
+    (cd frontend-app && npm run build)
+  fi
+else
+  echo "-- frontend app build skipped (BUILD_FRONTEND=0)"
 fi
 
 mkdir -p "$PAYLOAD_DIR"
@@ -127,11 +191,15 @@ mkdir -p "$PAYLOAD_DIR"
   echo
   echo "# generated admin build"
   echo "admin-app/dist"
+  echo
+  echo "# generated frontend build"
+  echo "frontend-app/dist"
 } > "$PAYLOAD_DIR/manifest.txt"
 tar -czf "$PAYLOAD_TAR" \
   "${AOSEN_FILES[@]}" \
   "${AOSEN_ARTIFACT_FILES[@]}" \
   admin-app/dist \
+  frontend-app/dist \
   "$PAYLOAD_DIR/manifest.txt"
 echo "-- payload: $PAYLOAD_TAR"
 
@@ -169,7 +237,7 @@ ssh ${SSH_OPTS} -o BatchMode=yes -o ConnectTimeout=10 "$SSH_TARGET" \
 echo "-- remote backup of selected files"
 ssh ${SSH_OPTS} "$SSH_TARGET" "cd '$NAS_PATH' && mkdir -p data/backups && \
   tar -czf 'data/backups/aosen_selected_${STAMP}.tar.gz' \
-  ${AOSEN_FILES[*]} admin-app/dist 2>/dev/null || true"
+  ${AOSEN_FILES[*]} admin-app/dist frontend-app/dist 2>/dev/null || true"
 
 echo "-- syncing backend/admin source files"
 rsync -avR "${RSYNC_SSH[@]}" \
@@ -180,6 +248,11 @@ echo "-- syncing built admin dist"
 rsync -av --delete "${RSYNC_SSH[@]}" \
   admin-app/dist/ \
   "${SSH_TARGET}:${NAS_PATH}/admin-app/dist/"
+
+echo "-- syncing built frontend dist"
+rsync -av --delete "${RSYNC_SSH[@]}" \
+  frontend-app/dist/ \
+  "${SSH_TARGET}:${NAS_PATH}/frontend-app/dist/"
 
 echo "-- restarting NAS web/worker services"
 ssh ${SSH_OPTS} "$SSH_TARGET" "cd '$NAS_PATH' && \

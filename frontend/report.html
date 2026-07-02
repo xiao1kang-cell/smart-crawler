@@ -37,10 +37,10 @@ a{color:#7c6ce0;text-decoration:none}
 .tab-row button.active{color:#7c6ce0;border-bottom-color:#7c6ce0}
 
 /* stats grid */
-.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:20px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:20px}
 .stat{background:#fff;border:1px solid #e5e7eb;border-radius:11px;padding:14px 16px}
 .stat .lbl{font-size:11.5px;color:#6b7280;margin-bottom:4px}
-.stat .val{font-size:22px;font-weight:800;color:#1f2329;letter-spacing:-0.3px;line-height:1.15}
+.stat .val{font-size:22px;font-weight:800;color:#1f2329;letter-spacing:0;line-height:1.15;white-space:nowrap;font-variant-numeric:tabular-nums}
 .stat .sub{font-size:11px;color:#9ca3af;margin-top:3px}
 
 /* section card */
@@ -62,9 +62,10 @@ a{color:#7c6ce0;text-decoration:none}
 .sub-tabs{display:flex;gap:8px;margin-bottom:14px}
 .sub-tabs button{padding:6px 14px;border-radius:8px;border:1px solid #d1d5db;background:#fff;cursor:pointer;font-size:12.5px;font-weight:600;color:#6b7280;font-family:inherit}
 .sub-tabs button.active{background:#eef0ff;border-color:#7c6ce0;color:#7c6ce0}
-.sub-tabs .right{margin-left:auto;display:flex;gap:8px}
+.sub-tabs .right{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .search-box{padding:6px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:12.5px;font-family:inherit;width:200px;outline:none}
 .search-box:focus{border-color:#7c6ce0}
+.price-box{width:110px}
 
 /* product table */
 table{width:100%;border-collapse:collapse;font-size:13px}
@@ -93,6 +94,8 @@ tr:hover td{background:#fafbfc}
 
 @media(max-width:900px){
   .stats{grid-template-columns:repeat(3,1fr)}
+  .sub-tabs{flex-wrap:wrap}
+  .sub-tabs .right{width:100%;margin-left:0;justify-content:flex-start}
 }
 
 /* 自定义抽屉 */
@@ -248,6 +251,8 @@ const App = {
     const tab = ref('shop'); // shop / product / promo
     const subTab = ref('all'); // all / bestseller / new
     const search = ref('');
+    const minPrice = ref('');
+    const maxPrice = ref('');
     const page = ref(1);
     const pageSize = ref(10);
 
@@ -316,6 +321,8 @@ const App = {
           site: site.value, page: page.value, page_size: pageSize.value,
         });
         if (search.value) params.set('search', search.value);
+        if (minPrice.value !== '' && !Number.isNaN(Number(minPrice.value))) params.set('min_price', minPrice.value);
+        if (maxPrice.value !== '' && !Number.isNaN(Number(maxPrice.value))) params.set('max_price', maxPrice.value);
         // 子 tab → 后端唯一认的 tab 参数(all|bestseller|new)
         if (subTab.value === 'new' || subTab.value === 'bestseller')
           params.set('tab', subTab.value);
@@ -337,6 +344,11 @@ const App = {
     function exportProducts() {
       const params = new URLSearchParams({ token: token.value, site: site.value, format: 'xlsx' });
       if (currentWorkspaceId.value) params.set('workspace_id', currentWorkspaceId.value);
+      if (search.value) params.set('search', search.value);
+      if (minPrice.value !== '' && !Number.isNaN(Number(minPrice.value))) params.set('min_price', minPrice.value);
+      if (maxPrice.value !== '' && !Number.isNaN(Number(maxPrice.value))) params.set('max_price', maxPrice.value);
+      if (subTab.value === 'new' || subTab.value === 'bestseller') params.set('tab', subTab.value);
+      params.set('scope', 'products');
       window.open(`/api/export/products?${params}`, '_blank');
     }
 
@@ -345,7 +357,8 @@ const App = {
     }
 
     watch(site, () => { page.value = 1; loadAll(); });
-    watch([page, subTab, search], () => loadProducts());
+    watch([subTab, search, minPrice, maxPrice, pageSize], () => { page.value = 1; loadProducts(); });
+    watch(page, () => loadProducts());
 
     /* Helpers */
     const siteUrl = computed(() => {
@@ -360,12 +373,18 @@ const App = {
     const chartLines = computed(() => {
       if (!trends.value.length) return null;
       // map series
-      const dates = trends.value.map(t => t.date);
+      const source = trends.value.length > 1
+        ? trends.value
+        : [
+            { ...(trends.value[0] || {}), date: dateRange.value.from },
+            { ...(trends.value[0] || {}), date: dateRange.value.to },
+          ];
+      const dates = source.map(t => t.date);
       const series = {
-        sku: trends.value.map(t => t.sku_count || 0),
-        new: trends.value.map(t => t.new_product_count || 0),
-        sales: trends.value.map(t => t.estimated_sales || 0),
-        revenue: trends.value.map(t => Math.round(t.estimated_revenue || 0)),
+        sku: source.map(t => t.sku_count || 0),
+        new: source.map(t => t.new_product_count || 0),
+        sales: source.map(t => t.estimated_sales || 0),
+        revenue: source.map(t => Math.round(t.estimated_revenue || 0)),
       };
       const max = Math.max(
         Math.max(...series.sku, 1),
@@ -392,7 +411,7 @@ const App = {
     });
 
     return {
-      token, site, sites, tab, subTab, search, page, pageSize,
+      token, site, sites, tab, subTab, search, minPrice, maxPrice, page, pageSize,
       cards, trends, products, promos, loading, dateRange, lastUpdate,
       siteUrl, brand, totalPages,
       loadAll, loadProducts, exportProducts,
@@ -422,7 +441,7 @@ const App = {
           </div>
         </div>
         <div class="meta">
-          <span>总产品数: <b>{{ cards.sku_count || '--' }}</b></span>
+          <span>总产品数: <b>{{ cards.product_count || cards.sku_count || '--' }}</b></span>
           <span>总类别数: <b>{{ cards.category_count || '--' }}</b></span>
         </div>
       </div>
@@ -507,6 +526,8 @@ const App = {
             <button :class="{active: subTab==='new'}" @click="subTab='new';page=1">最新产品({{ cards.new_product_count || 0 }})</button>
             <div class="right">
               <input class="search-box" v-model="search" placeholder="🔍 搜索" @keyup.enter="loadProducts"/>
+              <input class="search-box price-box" v-model="minPrice" inputmode="decimal" placeholder="最低售价" @keyup.enter="loadProducts"/>
+              <input class="search-box price-box" v-model="maxPrice" inputmode="decimal" placeholder="最高售价" @keyup.enter="loadProducts"/>
             </div>
           </div>
 

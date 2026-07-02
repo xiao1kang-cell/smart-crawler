@@ -1,4 +1,17 @@
 <script setup lang="ts">
+import {
+  Download,
+  ExternalLink,
+  Filter,
+  ImageIcon,
+  Package,
+  RefreshCw,
+  Settings,
+  Store,
+  Tag,
+  TrendingUp,
+  X,
+} from 'lucide-vue-next'
 import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { asList, currencyForMarket, fmtDate, fmtDateOnly, fmtNumber, fmtPrice, qs } from '../api/client'
@@ -474,9 +487,8 @@ function ratingLabel(p: Record<string, any>) {
 
 function ratingStars(p: Record<string, any>) {
   const rating = Number(p.ratings ?? p.rating)
-  if (!Number.isFinite(rating) || rating <= 0) return '—'
-  const rounded = Math.max(0, Math.min(5, Math.round(rating)))
-  return `${'★'.repeat(rounded)}${'☆'.repeat(5 - rounded)}`
+  if (!Number.isFinite(rating) || rating <= 0) return '--'
+  return `${Math.max(0, Math.min(5, rating)).toFixed(1)}/5`
 }
 
 function productStatusLabel(value: unknown) {
@@ -857,8 +869,8 @@ onMounted(async () => {
           </div>
           <div class="date-picker">
             <USelect v-model="site" class="report-select site-select" :items="siteItems" value-key="value" />
-            <button v-if="canEdit" class="icon-btn" @click="cfgOpen = true">⚙ 自定义</button>
-            <button class="icon-btn" @click="loadReport">↻ 刷新</button>
+            <button v-if="canEdit" class="icon-btn" @click="cfgOpen = true"><Settings /> 自定义</button>
+            <button class="icon-btn" @click="loadReport"><RefreshCw /> 刷新</button>
           </div>
         </div>
         <div class="meta">
@@ -868,9 +880,9 @@ onMounted(async () => {
       </div>
 
       <div class="tab-row">
-        <button :class="{ active: tab === 'shop' }" @click="tab = 'shop'">🏬 店铺分析</button>
-        <button :class="{ active: tab === 'product' }" @click="tab = 'product'">📦 产品分析</button>
-        <button :class="{ active: tab === 'promo' }" @click="tab = 'promo'">🎁 销售促销</button>
+        <button :class="{ active: tab === 'shop' }" @click="tab = 'shop'"><Store /> 店铺分析</button>
+        <button :class="{ active: tab === 'product' }" @click="tab = 'product'"><Package /> 产品分析</button>
+        <button :class="{ active: tab === 'promo' }" @click="tab = 'promo'"><Tag /> 销售促销</button>
       </div>
 
       <UAlert v-if="error" color="error" variant="soft" :title="error" class="mb-4" />
@@ -890,11 +902,11 @@ onMounted(async () => {
 
         <div v-if="cfg.sections.trend" class="section">
           <div class="section-head">
-            <h3>📈 Sales Trends <span class="desc">分析整体销售情况和品牌市场份额</span></h3>
+            <h3><TrendingUp /> Sales Trends <span class="desc">分析整体销售情况和品牌市场份额</span></h3>
             <div class="actions">
               <USelect v-model="granularity" class="report-select gran-select" :items="granularityItems" value-key="value" />
               <input v-model="dateRange.from" class="date-input" type="date" />
-              <span class="range-sep">→</span>
+              <span class="range-sep">to</span>
               <input v-model="dateRange.to" class="date-input" type="date" />
               <span class="range-note">{{ trendSummary.visible_points || 0 }} 点</span>
             </div>
@@ -923,11 +935,11 @@ onMounted(async () => {
       <template v-if="(tab === 'product' || tab === 'shop') && cfg.sections.products">
         <div class="section">
           <div class="section-head">
-            <h3>📦 产品分析 <span class="desc">查看产品的基本信息和详细属性</span></h3>
+            <h3><Package /> 产品分析 <span class="desc">查看产品的基本信息和详细属性</span></h3>
             <div class="actions">
-              <button class="icon-btn" @click="loadReport">↻ Refresh</button>
+              <button class="icon-btn" @click="loadReport"><RefreshCw /> Refresh</button>
               <USelect v-if="canEdit" v-model="productExportScope" class="report-select export-scope" :items="exportScopeItems" value-key="value" aria-label="Product export scope" />
-              <button v-if="canEdit" class="icon-btn" @click="exportProducts">↓ Export</button>
+              <button v-if="canEdit" class="icon-btn" @click="exportProducts"><Download /> Export</button>
             </div>
           </div>
           <div class="sub-tabs">
@@ -935,8 +947,8 @@ onMounted(async () => {
             <button :class="{ active: subTab === 'bestseller' }" @click="subTab = 'bestseller'; page = 1">BestSelling Products({{ bestsellerProductCount || 0 }})</button>
             <button :class="{ active: subTab === 'new' }" @click="subTab = 'new'; page = 1">Newest Products({{ latestProductCount || 0 }})</button>
             <div class="right">
-              <button class="icon-btn" :class="{ 'filter-on': activeFilterCount > 0 }" @click="filtersOpen = !filtersOpen">☷ Filter<span v-if="activeFilterCount">({{ activeFilterCount }})</span></button>
-              <input class="search-box" v-model="search" placeholder="🔍 Title / SKU / URL / Attributes" @keyup.enter="loadReport" />
+              <button class="icon-btn" :class="{ 'filter-on': activeFilterCount > 0 }" @click="filtersOpen = !filtersOpen"><Filter /> Filter<span v-if="activeFilterCount">({{ activeFilterCount }})</span></button>
+              <input class="search-box" v-model="search" placeholder="Title / SKU / URL / Attributes" @keyup.enter="loadReport" />
             </div>
           </div>
           <DataLoadingPanel class="report-table-wrap" :loading="loading" :has-data="products.length > 0" label="正在更新产品列表">
@@ -946,7 +958,7 @@ onMounted(async () => {
               <template #title-cell="{ row }">
                 <div class="title-cell" @click="openDetail(row.original.id)">
                   <img v-if="row.original.image" :src="row.original.image" class="thumb thumb-img" alt="" />
-                  <div v-else class="thumb">📦</div>
+                  <div v-else class="thumb"><ImageIcon /></div>
                   <div class="info">
                     <span class="title-text" :title="productTitle(row.original)">{{ productTitle(row.original) }}</span>
                     <div v-if="productLabels(row.original).length" class="mini-tags">

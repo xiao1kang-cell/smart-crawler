@@ -40,6 +40,15 @@ def _crawler_for(site_code: str, country: str, monkeypatch):
     return GenericCrawler(site)
 
 
+def test_generic_category_fallback_covers_oliveyoung_sun_care(monkeypatch):
+    crawler = _crawler_for("oliveyoung_global", "KR", monkeypatch)
+
+    assert crawler._category_from_title(
+        "CAREZONE Daily & Family Sun Care Cream SPF50+",
+        "https://global.oliveyoung.com/product/detail?prdtNo=GA210000002",
+    ) == "Beauty/Sun Care"
+
+
 def test_generic_discovers_sitemap_from_robots(monkeypatch):
     crawler = _crawler(monkeypatch)
     sess = _FakeSession({

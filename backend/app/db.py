@@ -227,6 +227,12 @@ def _migrate_with_connection(conn) -> None:
             "CREATE INDEX IF NOT EXISTS ix_crawl_jobs_status_created_at "
             "ON crawl_jobs (status, created_at)"))
         conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_crawl_jobs_site_id "
+            "ON crawl_jobs (site, id DESC)"))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_crawl_jobs_site_status_id "
+            "ON crawl_jobs (site, status, id DESC)"))
+        conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_crawl_jobs_assigned_node_status "
             "ON crawl_jobs (assigned_node, status, id)"))
         conn.execute(text("""

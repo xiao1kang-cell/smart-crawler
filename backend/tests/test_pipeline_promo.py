@@ -469,6 +469,34 @@ def test_upsert_missing_review_count_does_not_overwrite_existing_signal():
     assert row.sale_price == 21.99
 
 
+def test_upsert_discovered_status_does_not_overwrite_existing_status_or_price():
+    db = _session()
+    upsert_products(db, "x", [{
+        "site": "x",
+        "sku": "SKU-1",
+        "title": "Reviewed Product",
+        "product_url": "https://example.com/products/sku-1",
+        "sale_price": "19.99",
+        "status": "on_sale",
+        "review_count": 12,
+    }])
+    db.commit()
+
+    upsert_products(db, "x", [{
+        "site": "x",
+        "sku": "SKU-1",
+        "title": "Reviewed Product",
+        "product_url": "https://example.com/products/sku-1",
+        "status": "discovered",
+    }])
+    db.commit()
+
+    row = db.query(Product).filter(Product.site == "x", Product.sku == "SKU-1").one()
+    assert row.status == "on_sale"
+    assert row.sale_price == 19.99
+    assert row.review_count == 12
+
+
 def test_upsert_explicit_zero_review_count_can_overwrite_existing_signal():
     db = _session()
     upsert_products(db, "x", [{

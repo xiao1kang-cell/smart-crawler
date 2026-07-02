@@ -480,7 +480,7 @@ class WestElmCrawler(BaseCrawler):
             return []
         title = _html.unescape(title)
 
-        category_path = self._breadcrumb(pd)
+        category_path = self._breadcrumb(pd) or self._category_fallback(title, url)
         description = self._description(pd)
 
         # subsets[].definitions.skus —— 真实 SKU 字典
@@ -590,6 +590,35 @@ class WestElmCrawler(BaseCrawler):
             if label and label.lower() not in ("home", ""):
                 labels.append(label)
         return "/".join(labels[:4]) or None
+
+    @staticmethod
+    def _category_fallback(title: str | None, url: str | None = None) -> str | None:
+        text = " ".join(part for part in (title, url) if part).lower()
+        if not text:
+            return None
+        rules = (
+            (r"desk|modesty panel|privacy panel|wire management|wire manager|"
+             r"power kit|backpack hook|cargo net|office|workstation",
+             "Furniture/Office Furniture"),
+            (r"table top|communal table|dining table|coffee table|side table|console table",
+             "Furniture/Tables"),
+            (r"shelf|shelves|locker|wardrobe|storage|bookcase|cabinet",
+             "Furniture/Storage & Shelving"),
+            (r"chair|lounge|seat cushion|cushion|stool|bench",
+             "Furniture/Chairs & Seating"),
+            (r"rug|swatch|flatweave|washable rug",
+             "Rugs"),
+            (r"bed|crib|dresser|nightstand|rocker|kids",
+             "Furniture/Bedroom"),
+            (r"lamp|lighting|sconce|pendant|chandelier",
+             "Lighting"),
+            (r"curtain|drape|shade|pillow|throw|mirror|wall art|decor",
+             "Home Decor"),
+        )
+        for pattern, category in rules:
+            if re.search(pattern, text, re.I):
+                return category
+        return None
 
     @staticmethod
     def _description(pd: dict) -> str | None:

@@ -149,7 +149,8 @@ def normalize(raw: dict) -> dict:
         p["sale_price"] = p["original_price"]
     p["currency"] = normalize_currency_for_site(p.get("currency"), p.get("site"))
     p["published_at"] = parse_dt(p.get("published_at"))
-    p["review_count"] = _review_count_or_zero(p.get("review_count"))
+    parsed_review_count = _review_count(p.get("review_count"))
+    p["review_count"] = 0 if parsed_review_count is None else parsed_review_count
     p["_review_count_missing"] = review_missing
     return p
 
@@ -162,9 +163,9 @@ def _first_price(raw: dict, keys: tuple[str, ...]) -> float | None:
     return None
 
 
-def _review_count_or_zero(value) -> int:
+def _review_count(value) -> int | None:
     if value in (None, ""):
-        return 0
+        return None
     if isinstance(value, bool):
         return int(value)
     if isinstance(value, (int, float)):
@@ -172,12 +173,12 @@ def _review_count_or_zero(value) -> int:
     text = str(value)
     m = _INT_RE.search(text)
     if not m:
-        return 0
+        return None
     digits = re.sub(r"[\s\u00a0,]", "", m.group())
     try:
         return max(0, int(digits))
     except ValueError:
-        return 0
+        return None
 
 
 def is_valid(p: dict) -> bool:
@@ -248,6 +249,10 @@ def upsert_products(session: Session, site: str, items: list[dict]) -> dict:
                 if (k == "review_count" and p.get("_review_count_missing")
                         and getattr(row, k, None) is not None):
                     continue
+                if k == "status" and _is_discovery_status(v):
+                    current = getattr(row, k, None)
+                    if not _is_empty(current):
+                        continue
                 if k == "title":
                     v = _best_title(getattr(row, k, None), v, sku)
                 if k in _PRESERVE_ON_EMPTY and _is_empty(v):
@@ -273,6 +278,10 @@ def _product_kwargs(p: dict) -> dict:
 
 def _is_empty(value) -> bool:
     return value is None or value == "" or value == [] or value == {}
+
+
+def _is_discovery_status(value) -> bool:
+    return str(value or "").strip().lower() == "discovered"
 
 
 def _best_title(current, incoming, sku: str | None):
@@ -335,6 +344,10 @@ def _has_changed(row: Product, p: dict) -> bool:
         if (field == "review_count" and p.get("_review_count_missing")
                 and getattr(row, field) is not None):
             continue
+        if field == "status" and _is_discovery_status(p.get(field)):
+            current = getattr(row, field, None)
+            if not _is_empty(current):
+                continue
         if p.get(field) is not None and getattr(row, field) != p.get(field):
             return True
     return False

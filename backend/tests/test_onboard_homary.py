@@ -355,6 +355,14 @@ def test_homary_product_uses_jsonld_category_and_review_count(monkeypatch):
     assert product["review_count"] == 123
 
 
+def test_homary_category_fallback_covers_light_bulbs():
+    from app.crawlers.homary import HomaryCrawler
+
+    assert HomaryCrawler._category_from_title(
+        "6W LED E26 Milky White Globe Single Light Bulb in Warm White G125"
+    ) == "Lighting"
+
+
 def test_homary_product_reads_review_count_from_js_variable():
     site = _site()
     crawler = _make_crawler(site, limit=1)

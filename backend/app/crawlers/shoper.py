@@ -553,6 +553,11 @@ class ShoperCrawler(BaseCrawler):
         if not data or not data.get("name"):
             return None
         tree = HTMLParser(html)
+        category_path = (
+            data.get("category")
+            or self._dom_breadcrumb(tree)
+            or self._category_from_product_url(url)
+        )
         return {
             "sku": data.get("sku") or url.rstrip("/").split("/")[-1][:80],
             "spu": data.get("sku"),
@@ -560,7 +565,7 @@ class ShoperCrawler(BaseCrawler):
             "description": data.get("description")
             or self._meta(tree, "og:description"),
             "image_urls": data.get("images") or [],
-            "category_path": data.get("category"),
+            "category_path": category_path,
             "sale_price": data.get("price"),
             "original_price": data.get("original_price") or data.get("price"),
             "currency": data.get("currency") or "PLN",
@@ -687,6 +692,43 @@ class ShoperCrawler(BaseCrawler):
         node = (tree.css_first(f'meta[property="{prop}"]')
                 or tree.css_first(f'meta[name="{prop}"]'))
         return node.attributes.get("content") if node else None
+
+    @staticmethod
+    def _dom_breadcrumb(tree: HTMLParser) -> str | None:
+        crumbs: list[str] = []
+        for node in tree.css(
+                ".breadcrumbs a, .breadcrumb a, [class*=breadcrumb] a, "
+                "nav[aria-label*=breadcrumb] a, [itemtype*=BreadcrumbList] [itemprop=name]"):
+            text = re.sub(r"\s+", " ", node.text(separator=" ", strip=True)).strip()
+            if not text or text.lower() in {"home", "strona główna", "sklep"}:
+                continue
+            if text in crumbs:
+                continue
+            crumbs.append(text)
+        if len(crumbs) > 1:
+            return "/".join(crumbs[:-1][:4])
+        if crumbs:
+            return crumbs[0]
+        return None
+
+    def _category_from_product_url(self, url: str) -> str | None:
+        slug = urlsplit(url).path.strip("/").split("/", 1)[0]
+        if not slug:
+            return None
+        for token, category in (
+            ("ogrod", "Ogród"),
+            ("mebl", "Meble"),
+            ("dom", "Dom"),
+            ("dziec", "Dzieci"),
+            ("zabaw", "Zabawki"),
+            ("sport", "Sport"),
+            ("fitness", "Fitness"),
+            ("biur", "Biuro"),
+            ("kuch", "Kuchnia"),
+        ):
+            if token in slug.lower():
+                return category
+        return slug.replace("-", " ").title()
 
     @staticmethod
     def _num(v):

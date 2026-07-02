@@ -13,12 +13,20 @@ from typing import Any
 
 
 BASE_URL = os.environ.get("SMARTCRAWLER_BASE_URL", "http://127.0.0.1:8077").rstrip("/")
+DEFAULT_USER_AGENT = os.environ.get(
+    "SMARTCRAWLER_USER_AGENT",
+    (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
+    ),
+)
 API_KEY = os.environ.get("SMARTCRAWLER_API_KEY") or os.environ.get("API_KEY") or ""
 ADMIN_USERNAME = os.environ.get("SMARTCRAWLER_ADMIN_USERNAME") or os.environ.get("ADMIN_USERNAME") or ""
 ADMIN_PASSWORD = os.environ.get("SMARTCRAWLER_ADMIN_PASSWORD") or os.environ.get("ADMIN_PASSWORD") or ""
 STRICT_AOSEN_ACCEPTANCE = os.environ.get("STRICT_AOSEN_ACCEPTANCE", "").lower() in {
     "1", "true", "yes", "on",
 }
+AOSEN_VERIFY_TIMEOUT = int(os.environ.get("SMARTCRAWLER_AOSEN_VERIFY_TIMEOUT", "180"))
 SKIP_API_KEY_VERIFY = os.environ.get("SKIP_API_KEY_VERIFY", "").lower() in {
     "1", "true", "yes", "on",
 }
@@ -29,7 +37,13 @@ AOSEN_REQUIRED_TEMPLATES = {
     "sales_signals",
     "review_history",
 }
-AOSEN_DEFERRED_SITES = {"vidaxl_us", "vidaxl_ca"}
+AOSEN_DEFERRED_SITES = {
+    "vidaxl_us",
+    "vidaxl_ca",
+    "sephora_fr_maquillage",
+    "costway_ca",
+    "costway_us",
+}
 
 
 def parse_response_body(raw: str) -> Any:
@@ -57,7 +71,7 @@ def request(method: str, path: str, *, token: str = "", api_key: str = "",
             extra_headers: dict[str, str] | None = None,
             timeout: int = 12) -> tuple[int, Any, dict[str, str]]:
     data = None
-    headers: dict[str, str] = {}
+    headers: dict[str, str] = {"User-Agent": DEFAULT_USER_AGENT}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     if api_key:
@@ -150,15 +164,22 @@ def verify_aosen_surface(token: str) -> list[Result]:
         "GET",
         "/api/admin/spine/acceptance/aosen/field-quality",
         token=token,
-        timeout=60,
+        timeout=AOSEN_VERIFY_TIMEOUT,
     )
     acceptance_summary = acceptance.get("summary") if isinstance(acceptance, dict) else None
     acceptance_items = acceptance.get("items") if isinstance(acceptance, dict) else None
+    deferred_sites = set(AOSEN_DEFERRED_SITES)
+    if isinstance(acceptance_summary, dict) and isinstance(
+            acceptance_summary.get("deferred_sites"), list):
+        deferred_sites = {
+            str(site) for site in acceptance_summary.get("deferred_sites") or []
+            if str(site)
+        }
     deferred_in_items = sorted(
         {
             str(item.get("site"))
             for item in acceptance_items or []
-            if isinstance(item, dict) and str(item.get("site")) in AOSEN_DEFERRED_SITES
+            if isinstance(item, dict) and str(item.get("site")) in deferred_sites
         }
     )
     results.append(Result(
@@ -178,7 +199,7 @@ def verify_aosen_surface(token: str) -> list[Result]:
         "GET",
         "/api/admin/spine/acceptance/aosen/action-plan?template_limit=3",
         token=token,
-        timeout=60,
+        timeout=AOSEN_VERIFY_TIMEOUT,
     )
     summary = action_plan.get("summary") if isinstance(action_plan, dict) else None
     templates = action_plan.get("templates") if isinstance(action_plan, dict) else None
@@ -264,6 +285,7 @@ def verify_mcp_tools() -> Result:
         BASE_URL + "/mcp/",
         data=data,
         headers={
+            "User-Agent": DEFAULT_USER_AGENT,
             "Authorization": f"Bearer {API_KEY}",
             "X-API-Key": API_KEY,
             "Mcp-Session-Id": session_id,

@@ -32,6 +32,7 @@ from ..models import (ApiKey, Category, CrawlFailure, CrawlJob, CrawlUrl,
                       User, UserSession, InviteCode, Workspace,
                       WorkspaceMember, WorkspaceSite, ReportConfig,
                       WebhookConfig, WebhookDelivery)
+from ..product_quality import product_quality_filter, salable_product_filter
 from ..proxy import pool_status
 from ..webhooks import generate_secret, validate_webhook_url
 try:
@@ -52,6 +53,11 @@ except Exception:
 # 不要用 Product.is_new 列——它在 pipeline 首次插入时置 True 后从不复位，
 # 各站近期全量首采会让 96%+ 商品被误标为新品（2026-06 线上实测）。
 NEW_PRODUCT_DAYS = 30
+
+
+def _product_available_time_expr():
+    return func.coalesce(Product.updated_time, Product.created_time,
+                         Product.published_at)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -1115,11 +1121,7 @@ def _filtered_products_query(
     if tab == "bestseller":
         q = q.filter(Product.is_bestseller.is_(True))
     elif tab == "new":
-        new_cutoff = datetime.utcnow() - timedelta(days=NEW_PRODUCT_DAYS)
-        q = q.filter(or_(
-            Product.published_at >= new_cutoff,
-            func.upper(func.trim(func.coalesce(Product.label, ""))) == "NEW",
-        ))
+        q = q.filter(_product_available_time_expr().isnot(None))
     if search:
         like = f"%{search}%"
         q = q.filter(or_(Product.title.ilike(like), Product.sku.ilike(like),
@@ -1324,8 +1326,7 @@ def _product_status_values(status: str | None) -> list[str]:
 def _product_order_cols(tab: str):
     if tab == "new":
         return (
-            func.coalesce(Product.published_at, Product.created_time,
-                          Product.updated_time).desc().nullslast(),
+            _product_available_time_expr().desc().nullslast(),
             Product.id.desc(),
         )
     return (
@@ -1464,11 +1465,17 @@ def site_overview(site: str, user: str = Depends(require_user),
     category_count = (db.query(func.coalesce(func.count(Category.id), 0))
                       .filter(Category.site == site).scalar() or 0)
     if IS_SQLITE:
-        _new_cutoff = datetime.utcnow() - timedelta(days=NEW_PRODUCT_DAYS)
+        _product_time = _product_available_time_expr()
+        latest_product_time = db.query(func.max(_product_time)).filter(
+            Product.site == site,
+            _product_time.isnot(None),
+        ).scalar()
+        _new_cutoff = (
+            latest_product_time or datetime.utcnow()
+        ) - timedelta(days=NEW_PRODUCT_DAYS)
         new_count = db.query(Product).filter(
             Product.site == site,
-            or_(Product.created_time >= _new_cutoff,
-                Product.published_at >= _new_cutoff),
+            _product_time >= _new_cutoff,
         ).count()
         latest_product_count = db.query(Product).filter(
             Product.site == site,
@@ -4099,21 +4106,6 @@ def _load_hidden_sites() -> set[str]:
         return set()
 
 
-def _missing_category(value: object) -> bool:
-    text = str(value or "").strip()
-    return not text or text.lower() in {"none", "null", "uncategorized", "unknown"}
-
-
-def _missing_image(value: object) -> bool:
-    if value is None:
-        return True
-    if isinstance(value, str):
-        return not value.strip()
-    if isinstance(value, (list, tuple, set)):
-        return not any(str(item or "").strip() for item in value)
-    return False
-
-
 def _field_presence_counts(db: Session, site_codes: list[str]) -> dict[str, dict[str, int]]:
     counts = {
         site: {"category_missing_count": 0, "image_missing_count": 0}
@@ -4121,18 +4113,42 @@ def _field_presence_counts(db: Session, site_codes: list[str]) -> dict[str, dict
     }
     if not site_codes:
         return counts
-    for site, category_path, image_urls in (
-            db.query(Product.site, Product.category_path, Product.image_urls)
+    category_text = func.lower(func.trim(func.coalesce(Product.category_path, "")))
+    category_missing = or_(
+        category_text == "",
+        category_text.in_(("none", "null", "uncategorized", "unknown")),
+    )
+    image_text = func.lower(func.trim(func.coalesce(cast(Product.image_urls, String), "")))
+    image_missing = or_(
+        Product.image_urls.is_(None),
+        image_text.in_(("", "null", "none", "[]", "{}", '""')),
+    )
+    salable_status = func.lower(func.trim(func.coalesce(Product.status, ""))).in_((
+        "",
+        "active",
+        "available",
+        "in_stock",
+        "instock",
+        "on_sale",
+    ))
+    # Keep this request-path aggregate cheap on production PostgreSQL. The
+    # stricter product_quality_filter includes many URL/token predicates and
+    # can turn Aosen acceptance into multi-minute scans on large Costway tables.
+    for site, category_missing_count, image_missing_count in (
+            db.query(
+                Product.site,
+                func.coalesce(func.sum(case((category_missing, 1), else_=0)), 0),
+                func.coalesce(func.sum(case((and_(salable_status, image_missing), 1), else_=0)), 0),
+            )
             .filter(Product.site.in_(site_codes))
+            .group_by(Product.site)
             .all()):
         bucket = counts.setdefault(site, {
             "category_missing_count": 0,
             "image_missing_count": 0,
         })
-        if _missing_category(category_path):
-            bucket["category_missing_count"] += 1
-        if _missing_image(image_urls):
-            bucket["image_missing_count"] += 1
+        bucket["category_missing_count"] = int(category_missing_count or 0)
+        bucket["image_missing_count"] = int(image_missing_count or 0)
     return counts
 
 
@@ -4140,22 +4156,64 @@ def _latest_successful_job_counts(db: Session, sites: list[str]) -> dict[str, in
     site_codes = sorted({site for site in sites if site})
     if not site_codes:
         return {}
-    rows = (
-        db.query(
-            CrawlJob.site,
-            CrawlJob.products_count,
-            CrawlJob.total_product_count,
-        )
+    latest_success_ids = (
+        db.query(CrawlJob.site, func.max(CrawlJob.id).label("job_id"))
         .filter(CrawlJob.site.in_(site_codes), CrawlJob.status == "success")
-        .order_by(CrawlJob.site.asc(), CrawlJob.id.desc())
+        .group_by(CrawlJob.site)
+        .subquery()
+    )
+    rows = (
+        db.query(CrawlJob.site, CrawlJob.products_count, CrawlJob.total_product_count)
+        .join(latest_success_ids, and_(
+            CrawlJob.site == latest_success_ids.c.site,
+            CrawlJob.id == latest_success_ids.c.job_id,
+        ))
         .all()
     )
     out: dict[str, int] = {}
     for site, products_count, total_product_count in rows:
-        if site in out:
-            continue
         out[site] = max(int(products_count or 0), int(total_product_count or 0))
     return out
+
+
+def _latest_jobs_by_site(db: Session, site_codes: list[str]) -> dict[str, CrawlJob]:
+    if not site_codes:
+        return {}
+    latest_job_ids = (
+        db.query(CrawlJob.site, func.max(CrawlJob.id).label("job_id"))
+        .filter(CrawlJob.site.in_(site_codes))
+        .group_by(CrawlJob.site)
+        .subquery()
+    )
+    rows = (
+        db.query(CrawlJob)
+        .join(latest_job_ids, and_(
+            CrawlJob.site == latest_job_ids.c.site,
+            CrawlJob.id == latest_job_ids.c.job_id,
+        ))
+        .all()
+    )
+    return {job.site: job for job in rows}
+
+
+def _latest_failures_by_site(db: Session, site_codes: list[str]) -> dict[str, CrawlFailure]:
+    if not site_codes:
+        return {}
+    latest_failure_ids = (
+        db.query(CrawlFailure.site, func.max(CrawlFailure.id).label("failure_id"))
+        .filter(CrawlFailure.site.in_(site_codes))
+        .group_by(CrawlFailure.site)
+        .subquery()
+    )
+    rows = (
+        db.query(CrawlFailure)
+        .join(latest_failure_ids, and_(
+            CrawlFailure.site == latest_failure_ids.c.site,
+            CrawlFailure.id == latest_failure_ids.c.failure_id,
+        ))
+        .all()
+    )
+    return {failure.site: failure for failure in rows}
 
 
 def _detail_signal_count(metric: dict) -> int:
@@ -4397,7 +4455,7 @@ def _empty_data_quality_payload() -> dict:
         "rerun_preconditions": [],
         "no_products": 0, "never_crawled": 0,
         "weak_titles": 0, "high_deviation": 0,
-        "missing_prices": 0, "missing_sales": 0,
+        "missing_prices": 0, "missing_reviews": 0, "missing_sales": 0,
         "missing_traffic": 0, "missing_conversion": 0,
         "missing_promotions": 0, "coverage_risk": 0,
         "partial_crawls": 0, "pdp_price_required": 0,
@@ -4427,7 +4485,6 @@ _RERUN_PRECONDITION_ISSUES = {
     "proxy_unavailable",
     "proxy_auth_failed",
     "anti_bot_blocked",
-    "sales_history_insufficient",
 }
 _RERUN_CANDIDATE_ISSUES = {
     "no_products",
@@ -4437,6 +4494,7 @@ _RERUN_CANDIDATE_ISSUES = {
     "category_missing",
     "image_missing",
     "price_missing",
+    "review_count_missing",
     "pdp_price_required",
     "currency_missing",
     "currency_mismatch",
@@ -4565,6 +4623,8 @@ def _data_quality_suggestion(*, status: str, issues: list[str],
         return "检查站点币种映射和历史商品 currency 字段；先做币种回填/修正后再导出报表"
     if "price_missing" in issues:
         return "检查价格解析/PDP enrich；必要时配置可用住宅代理后重跑"
+    if "review_count_missing" in issues:
+        return "检查评论数解析/PDP enrich；修复 selector、接口字段或代理后重跑"
     if "sales_history_insufficient" in issues:
         return "已有评论信号但历史快照不足；保持定时抓取，至少形成两次评论快照后重算销量/收入"
     if "traffic_missing" in issues or "conversion_missing" in issues:
@@ -4598,18 +4658,8 @@ def _build_data_quality_payload(
     expected_currency_by_site = {
         site: _currency_for_site(site) for site in site_codes
     }
-    latest_jobs: dict[str, CrawlJob] = {}
-    for job in (db.query(CrawlJob)
-                .filter(CrawlJob.site.in_(site_codes))
-                .order_by(CrawlJob.site, CrawlJob.id.desc())
-                .all()):
-        latest_jobs.setdefault(job.site, job)
-    latest_failures: dict[str, CrawlFailure] = {}
-    for failure in (db.query(CrawlFailure)
-                    .filter(CrawlFailure.site.in_(site_codes))
-                    .order_by(CrawlFailure.site, CrawlFailure.id.desc())
-                    .all()):
-        latest_failures.setdefault(failure.site, failure)
+    latest_jobs = _latest_jobs_by_site(db, site_codes)
+    latest_failures = _latest_failures_by_site(db, site_codes)
     failure_counts = {
         row[0]: int(row[1] or 0)
         for row in db.query(CrawlFailure.site, func.count(CrawlFailure.id))
@@ -4686,6 +4736,16 @@ def _build_data_quality_payload(
         bucket["oldest_active_at"] = oldest_active_at
         bucket["latest_active_at"] = latest_active_at
 
+    salable_counts = {
+        site: int(count or 0)
+        for site, count in (
+            db.query(Product.site, func.count(Product.id))
+            .filter(Product.site.in_(site_codes), salable_product_filter())
+            .group_by(Product.site)
+            .all()
+        )
+    }
+
     items = []
     for s in sites:
         product = metric_rows.get(s.site, {})
@@ -4707,6 +4767,7 @@ def _build_data_quality_payload(
         )
         sku_deviation_abs = (sku_count - target_sku_count) if target_sku_count else None
         price_signal_count = int(product.get("price_signal_count") or 0)
+        salable_product_count = int(salable_counts.get(s.site) or 0)
         sales_signal_count = int(product.get("sales_signal_count") or 0)
         revenue_signal_count = int(product.get("revenue_signal_count") or 0)
         review_signal_count = int(product.get("review_signal_count") or 0)
@@ -4733,13 +4794,15 @@ def _build_data_quality_payload(
             issues.append("coverage_low")
         if sku_deviation_pct is not None and abs(sku_deviation_pct) > 50:
             issues.append("sku_deviation_high")
-        if sku_count > 0 and price_signal_count == 0:
+        if salable_product_count > 0 and price_signal_count == 0:
             issues.append("price_missing")
             if (
                 (s.platform or "").lower() in _PDP_PRICE_REQUIRED_PLATFORMS
                 and not price_source["configured"]
             ):
                 issues.append("pdp_price_required")
+        if sku_count > 0 and review_signal_count == 0:
+            issues.append("review_count_missing")
         if sku_count > 0 and sales_signal_count == 0:
             issues.append("sales_missing")
             if review_signal_count > 0 and review_history_signal_count == 0:
@@ -4855,7 +4918,8 @@ def _build_data_quality_payload(
             "title_quality_pct": round((sku_count - weak_title_count) / sku_count * 100, 2) if sku_count else 0,
             "category_signal_pct": round((sku_count - category_missing_count) / sku_count * 100, 2) if sku_count else 0,
             "image_signal_pct": round((sku_count - image_missing_count) / sku_count * 100, 2) if sku_count else 0,
-            "price_signal_pct": round(price_signal_count / sku_count * 100, 2) if sku_count else 0,
+            "price_signal_pct": round(price_signal_count / salable_product_count * 100, 2) if salable_product_count else 0,
+            "review_signal_pct": round(review_signal_count / sku_count * 100, 2) if sku_count else 0,
             "sales_signal_pct": round(sales_signal_count / sku_count * 100, 2) if sku_count else 0,
             "revenue_signal_pct": round(revenue_signal_count / sku_count * 100, 2) if sku_count else 0,
             "failure_count": failure_counts.get(s.site, 0),
@@ -4938,6 +5002,7 @@ def _build_data_quality_payload(
         )),
         "high_deviation": sum(1 for r in items if "sku_deviation_high" in r["issues"]),
         "missing_prices": sum(1 for r in items if "price_missing" in r["issues"]),
+        "missing_reviews": sum(1 for r in items if "review_count_missing" in r["issues"]),
         "missing_sales": sum(1 for r in items if "sales_missing" in r["issues"]),
         "insufficient_sales_history": sum(
             1 for r in items if "sales_history_insufficient" in r["issues"]),
@@ -4990,6 +5055,11 @@ def data_quality(
 ):
     """站点数据质量明细：把验收关注的 SKU/促销/销量收入/任务失败集中展示。"""
     ws = _current_workspace(user, db, x_workspace_id)
+    cache_key = f"data-quality:{ws.id}:{include_hidden}"
+    if not IS_SQLITE:
+        cached = _coverage_cache_get(cache_key)
+        if cached is not None:
+            return cached
     allowed_sites = _workspace_site_names(db, ws.id, include_hidden=include_hidden)
     target_sku_counts = _workspace_site_targets(db, ws.id, include_hidden=include_hidden)
     hidden = _load_hidden_sites() if not include_hidden else set()
@@ -4997,7 +5067,10 @@ def data_quality(
         s for s in db.query(Site).filter(Site.site.in_(allowed_sites)).all()
         if s.site not in hidden
     ]
-    return _build_data_quality_payload(db, sites, target_sku_counts)
+    result = _build_data_quality_payload(db, sites, target_sku_counts)
+    if not IS_SQLITE:
+        _coverage_cache_set(cache_key, result)
+    return result
 
 
 # ---------- 按 record 计费 · 用量查询 ----------

@@ -324,6 +324,54 @@ def test_tracking_filters_metrics_latest_job_and_export_scope():
     assert rows[1][10] == "http_403"
 
 
+def test_tracking_two_letter_search_matches_market_only():
+    init_db(); client = TestClient(app)
+    us_code = _make_user_site(
+        client, host="filter-us-search.example.com",
+        brand="FilterSearchUS", country="US")
+    uk_code = _make_user_site(
+        client, host="filter-uk-search.example.com",
+        brand="FilterSearchUK", country="UK")
+
+    body = client.get("/api/tracking?search=us&page_size=200",
+                      headers=_admin_headers()).json()
+    listed = {item["site"] for item in body["items"]}
+    assert us_code in listed
+    assert uk_code not in listed
+    assert all((item["country"] or "").upper() == "US" for item in body["items"])
+
+
+def test_tracking_error_filter_excludes_paused_sites():
+    init_db(); client = TestClient(app)
+    from datetime import datetime
+    from app.db import SessionLocal
+    from app.models import CrawlJob
+
+    active_code = _make_user_site(
+        client, host="active-error.example.com",
+        brand="ActiveError", country="US")
+    paused_code = _make_user_site(
+        client, host="paused-error.example.com",
+        brand="PausedError", country="US")
+    client.post(f"/api/tracking/{paused_code}/pause", headers=_admin_headers())
+
+    s = SessionLocal()
+    try:
+        s.add(CrawlJob(site=active_code, status="failed", failure_code="http_403",
+                       created_at=datetime(2026, 6, 16, 1)))
+        s.add(CrawlJob(site=paused_code, status="failed", failure_code="http_403",
+                       created_at=datetime(2026, 6, 16, 1)))
+        s.commit()
+    finally:
+        s.close()
+
+    body = client.get("/api/tracking?status=error&page_size=200",
+                      headers=_admin_headers()).json()
+    listed = {item["site"] for item in body["items"]}
+    assert active_code in listed
+    assert paused_code not in listed
+
+
 def test_tracking_revenue_does_not_depend_on_sales_signal():
     init_db(); client = TestClient(app)
     from datetime import datetime

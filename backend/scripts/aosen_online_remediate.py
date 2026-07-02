@@ -23,13 +23,27 @@ from typing import Any
 
 
 BASE_URL = os.environ.get("SMARTCRAWLER_BASE_URL", "http://127.0.0.1:8077").rstrip("/")
-DEFERRED_SITES = {"vidaxl_us", "vidaxl_ca"}
+DEFAULT_USER_AGENT = os.environ.get(
+    "SMARTCRAWLER_USER_AGENT",
+    (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
+    ),
+)
+DEFERRED_SITES = {
+    "vidaxl_us",
+    "vidaxl_ca",
+    "sephora_fr_maquillage",
+    "costway_ca",
+    "costway_us",
+}
 FOCUS_PREFIXES = ("homary", "vidaxl", "vonhaus")
 FIELD_ISSUES = {
     "title_weak",
     "category_missing",
     "image_missing",
     "price_missing",
+    "review_count_missing",
     "currency_missing",
     "currency_mismatch",
     "sku_deviation_high",
@@ -45,6 +59,13 @@ BUSINESS_ISSUES = {
     "conversion_missing",
 }
 SITE_ONLY_FIELD_ISSUES = {"sku_deviation_high", "no_products", "coverage_low"}
+FIELD_RERUN_ISSUES = {
+    "no_products",
+    "coverage_low",
+    "title_weak",
+    "price_missing",
+    "review_count_missing",
+}
 WEAK_TITLE_VALUES = {
     "",
     "none",
@@ -75,7 +96,7 @@ def request(method: str, path: str, *, token: str = "",
             body: dict[str, Any] | None = None,
             timeout: int = 120) -> tuple[int, Any]:
     data = None
-    headers: dict[str, str] = {}
+    headers: dict[str, str] = {"User-Agent": DEFAULT_USER_AGENT}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     if body is not None:
@@ -186,9 +207,10 @@ def site_matches_scope(
     *,
     prefixes: tuple[str, ...],
     exact_sites: set[str],
+    exclude_deferred: bool = False,
 ) -> bool:
     text = str(site or "").strip()
-    if not text or text in DEFERRED_SITES:
+    if not text or (exclude_deferred and text in DEFERRED_SITES):
         return False
     if not prefixes and not exact_sites:
         return True
@@ -210,6 +232,7 @@ def filter_csv_by_scope(
     *,
     prefixes: tuple[str, ...],
     exact_sites: set[str],
+    exclude_deferred: bool = False,
 ) -> str:
     if not csv_text.strip() or (not prefixes and not exact_sites):
         return csv_text
@@ -219,7 +242,12 @@ def filter_csv_by_scope(
         return csv_text
     rows = [
         row for row in reader
-        if site_matches_scope(row.get("site"), prefixes=prefixes, exact_sites=exact_sites)
+        if site_matches_scope(
+            row.get("site"),
+            prefixes=prefixes,
+            exact_sites=exact_sites,
+            exclude_deferred=exclude_deferred,
+        )
     ]
     return csv_payload(rows, list(reader.fieldnames))
 
@@ -229,8 +257,9 @@ def filter_plan_scope(
     *,
     prefixes: tuple[str, ...],
     exact_sites: set[str],
+    exclude_deferred: bool = True,
 ) -> dict[str, Any]:
-    if not prefixes and not exact_sites:
+    if not prefixes and not exact_sites and not exclude_deferred:
         return plan
     scoped = copy.deepcopy(plan)
     scoped["scope"] = {
@@ -247,6 +276,7 @@ def filter_plan_scope(
                 item.get("site"),
                 prefixes=prefixes,
                 exact_sites=exact_sites,
+                exclude_deferred=exclude_deferred,
             )
         ]
         group["items"] = items
@@ -264,6 +294,7 @@ def filter_plan_scope(
             csv_text,
             prefixes=prefixes,
             exact_sites=exact_sites,
+            exclude_deferred=exclude_deferred,
         )
         template["csv"] = filtered
         template["count"] = max(0, len(filtered.splitlines()) - 1) if filtered.strip() else 0
@@ -312,6 +343,9 @@ def product_field_issues(row: dict[str, Any]) -> list[str]:
     original = product_number(row.get("original_price"))
     if (sale is None or sale <= 0) and (original is None or original <= 0):
         issues.append("price_missing")
+    reviews = product_number(row.get("review_count"))
+    if reviews is None:
+        issues.append("review_count_missing")
     return issues
 
 
@@ -378,6 +412,7 @@ def data_quality_fallback_plan(
     product_pages_per_site: int,
     tenant: str = "",
     skip_product_samples: bool = False,
+    exclude_deferred: bool = False,
 ) -> dict[str, Any]:
     quality_path = "/api/data-quality"
     if str(tenant).strip():
@@ -387,7 +422,13 @@ def data_quality_fallback_plan(
         raise RuntimeError("fallback /api/data-quality unavailable")
     items = [
         row for row in quality.get("items") or []
-        if isinstance(row, dict) and str(row.get("site") or "") not in DEFERRED_SITES
+        if (
+            isinstance(row, dict)
+            and not (
+                exclude_deferred
+                and str(row.get("site") or "") in DEFERRED_SITES
+            )
+        )
     ]
 
     def row_issues(row: dict[str, Any]) -> set[str]:
@@ -472,6 +513,10 @@ def data_quality_fallback_plan(
                 "image_urls": product_images(product),
                 "sale_price": product.get("sale_price") or "",
                 "original_price": product.get("original_price") or "",
+                "review_count": (
+                    "" if product.get("review_count") is None
+                    else product.get("review_count")
+                ),
                 "spu": product.get("spu") or "",
                 "note": "/".join(issues),
             })
@@ -485,6 +530,7 @@ def data_quality_fallback_plan(
                 "image_urls": "",
                 "sale_price": "",
                 "original_price": "",
+                "review_count": "",
                 "spu": "",
                 "note": "/".join(sorted(site_issues)) or "fill field fixes for this site",
             })
@@ -680,7 +726,8 @@ def data_quality_fallback_plan(
                 "source": "/api/products fallback",
                 "csv": csv_payload(field_rows, [
                     "site", "sku", "title", "currency", "category_path",
-                    "image_urls", "sale_price", "original_price", "spu", "note",
+                    "image_urls", "sale_price", "original_price",
+                    "review_count", "spu", "note",
                 ]),
             },
             "sku_targets": {
@@ -735,8 +782,17 @@ def data_quality_fallback_plan(
     }
 
 
-def action_plan(token: str, template_limit: int, *, tenant: str = "") -> dict[str, Any]:
-    query_params = {"template_limit": str(template_limit)}
+def action_plan(
+    token: str,
+    template_limit: int,
+    *,
+    tenant: str = "",
+    include_deferred: bool = True,
+) -> dict[str, Any]:
+    query_params = {
+        "template_limit": str(template_limit),
+        "include_deferred": "1" if include_deferred else "0",
+    }
     if str(tenant).strip():
         query_params["tenant"] = str(tenant).strip()
     query = urllib.parse.urlencode(query_params)
@@ -751,11 +807,32 @@ def action_plan(token: str, template_limit: int, *, tenant: str = "") -> dict[st
     return body
 
 
+def get_json(token: str, path: str, *, timeout: int = 120) -> dict[str, Any]:
+    status, body = request("GET", path, token=token, timeout=timeout)
+    if status != 200 or not isinstance(body, dict):
+        raise RuntimeError(f"{path} failed: {status} {body}")
+    return body
+
+
 def post_json(token: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
     status, body = request("POST", path, token=token, body=payload, timeout=300)
     if status != 200 or not isinstance(body, dict):
         raise RuntimeError(f"{path} failed: {status} {body}")
     return body
+
+
+def field_rerun_sites(plan: dict[str, Any]) -> list[str]:
+    rows = (((plan.get("groups") or {}).get("field_fixes") or {}).get("items") or [])
+    sites: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        issues = {str(issue) for issue in row.get("issues") or []}
+        if issues & FIELD_RERUN_ISSUES:
+            site = str(row.get("site") or "").strip()
+            if site and site not in DEFERRED_SITES:
+                sites.add(site)
+    return sorted(sites, key=site_rank)
 
 
 def csv_import_specs(args: argparse.Namespace) -> dict[str, tuple[str, str, Path]]:
@@ -828,13 +905,17 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Aosen online remediation workflow")
     parser.add_argument("--base-url", default="")
     parser.add_argument("--tenant", default="",
-                        help="workspace/tenant id to scope the online remediation workflow")
+                        help="numeric workspace/tenant id to scope the online remediation workflow")
     parser.add_argument("--site", action="append", default=[],
                         help="exact site key to include in the remediation scope")
     parser.add_argument("--site-prefix", action="append", default=[],
                         help="site key prefix to include in the remediation scope")
     parser.add_argument("--apply", action="store_true",
                         help="trigger online promotion rebuild and analytics recompute")
+    parser.add_argument("--exclude-deferred", action="store_true",
+                        help="exclude deferred sites from the remediation scope")
+    parser.add_argument("--no-enqueue-field-reruns", action="store_true",
+                        help="with --apply, do not enqueue crawl reruns for title/price/review gaps")
     parser.add_argument("--template-limit", type=int, default=500,
                         help="number of CSV preview rows to request")
     parser.add_argument("--fallback-products-per-site", type=int, default=10,
@@ -865,7 +946,12 @@ def main(argv: list[str]) -> int:
     site_prefixes = tuple(str(prefix).strip() for prefix in args.site_prefix if str(prefix).strip())
     source = "action_plan"
     try:
-        before = action_plan(token, max(1, min(args.template_limit, 5000)), tenant=tenant)
+        before = action_plan(
+            token,
+            max(1, min(args.template_limit, 5000)),
+            tenant=tenant,
+            include_deferred=not bool(args.exclude_deferred),
+        )
     except RuntimeError as exc:
         source = "fallback_data_quality"
         before = data_quality_fallback_plan(
@@ -875,12 +961,14 @@ def main(argv: list[str]) -> int:
             product_pages_per_site=max(1, min(args.fallback_product_pages_per_site, 20)),
             tenant=tenant,
             skip_product_samples=bool(args.skip_product_samples),
+            exclude_deferred=bool(args.exclude_deferred),
         )
         before["action_plan_error"] = str(exc)
     before = filter_plan_scope(
         before,
         prefixes=site_prefixes,
         exact_sites=exact_sites,
+        exclude_deferred=bool(args.exclude_deferred),
     )
     if source == "action_plan" and (site_prefixes or exact_sites):
         try:
@@ -892,9 +980,11 @@ def main(argv: list[str]) -> int:
                     product_pages_per_site=max(1, min(args.fallback_product_pages_per_site, 20)),
                     tenant=tenant,
                     skip_product_samples=bool(args.skip_product_samples),
+                    exclude_deferred=bool(args.exclude_deferred),
                 ),
                 prefixes=site_prefixes,
                 exact_sites=exact_sites,
+                exclude_deferred=bool(args.exclude_deferred),
             )
             before["groups"] = scoped_templates.get("groups") or before.get("groups")
             before["templates"] = scoped_templates.get("templates") or before.get("templates")
@@ -904,6 +994,7 @@ def main(argv: list[str]) -> int:
             before["scoped_template_error"] = str(exc)
     promo_sites = site_list(before, "promotion_refresh")
     business_sites = site_list(before, "business_data")
+    field_sites = field_rerun_sites(before)
     stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     out_dir = Path(args.out_dir or f"data/exports/aosen_acceptance_{stamp}")
     templates = export_templates(before, out_dir)
@@ -912,8 +1003,14 @@ def main(argv: list[str]) -> int:
         "apply": bool(args.apply),
         "promotion_refresh_sites": promo_sites,
         "business_data_sites": business_sites,
+        "field_rerun_sites": field_sites,
         "templates": templates,
     }
+    try:
+        operations["queue_before"] = get_json(
+            token, "/api/admin/spine/jobs/stats", timeout=60)
+    except RuntimeError as exc:
+        operations["queue_before_error"] = str(exc)
     import_specs = csv_import_specs(args)
     if args.apply and source == "fallback_data_quality":
         operations["apply_skipped"] = (
@@ -921,6 +1018,12 @@ def main(argv: list[str]) -> int:
             "deploy first, then rerun with --apply"
         )
     elif args.apply:
+        if field_sites and not args.no_enqueue_field_reruns:
+            operations["field_rerun_enqueue"] = post_json(
+                token,
+                "/api/admin/spine/crawl/enqueue",
+                {"sites": field_sites},
+            )
         if promo_sites:
             operations["promotion_rebuild"] = post_json(
                 token,
@@ -938,10 +1041,17 @@ def main(argv: list[str]) -> int:
                 token,
                 max(1, min(args.template_limit, 5000)),
                 tenant=tenant,
+                include_deferred=not bool(args.exclude_deferred),
             ),
             prefixes=site_prefixes,
             exact_sites=exact_sites,
+            exclude_deferred=bool(args.exclude_deferred),
         )
+        try:
+            operations["queue_after"] = get_json(
+                token, "/api/admin/spine/jobs/stats", timeout=60)
+        except RuntimeError as exc:
+            operations["queue_after_error"] = str(exc)
     if import_specs and source == "fallback_data_quality":
         operations["csv_imports_skipped"] = (
             "production lacks the dedicated Aosen remediation endpoints; "
@@ -958,11 +1068,13 @@ def main(argv: list[str]) -> int:
                 token,
                 max(1, min(args.template_limit, 5000)),
                 tenant=tenant,
+                include_deferred=not bool(args.exclude_deferred),
             )
             operations["after_imports"] = filter_plan_scope(
                 operations["after_imports"],
                 prefixes=site_prefixes,
                 exact_sites=exact_sites,
+                exclude_deferred=bool(args.exclude_deferred),
             )
 
     status_label = (
@@ -977,6 +1089,7 @@ def main(argv: list[str]) -> int:
         "scope": {
             "sites": sorted(exact_sites),
             "site_prefixes": list(site_prefixes),
+            "exclude_deferred": bool(args.exclude_deferred),
         },
         "source": source,
         "summary": before.get("summary") or {},

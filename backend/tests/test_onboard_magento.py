@@ -256,6 +256,7 @@ def test_magento_falls_back_to_positive_dom_price_when_meta_price_is_zero():
     assert row is not None
     assert row["sale_price"] == 160.99
     assert row["original_price"] == 160.99
+    assert row["review_count"] == 0
 
 
 def test_magento_sitemap_only_rows_skip_empty_price_history():
@@ -280,6 +281,8 @@ def test_magento_sitemap_only_rows_skip_empty_price_history():
     assert row["sku"] == "widget-pro"
     assert row["_skip_price_history_if_no_price"] is True
     assert "sale_price" not in row
+    assert "review_count" not in row
+    assert row["status"] == "discovered"
 
 
 def test_magento_expands_all_sitemap_index_children(monkeypatch):
@@ -378,6 +381,7 @@ def test_magento_prioritizes_costway_product_urls():
 
     urls = [
         "https://www.costway.de/garten.html",
+        "https://www.costway.de/subscribe-newsletter",
         "https://www.costway.de/garten/gartenmobel.html",
         "https://www.costway.de/costway-kunstpflanze-22-x-88-cm-grun.html",
     ]
@@ -385,6 +389,222 @@ def test_magento_prioritizes_costway_product_urls():
     ordered = sorted(urls, key=_candidate_priority)
 
     assert ordered[0].endswith("costway-kunstpflanze-22-x-88-cm-grun.html")
+    assert ordered[-1].endswith("subscribe-newsletter")
+
+
+def test_magento_costway_title_category_fallbacks_cover_common_gaps():
+    from app.crawlers.magento import _category_from_title_fallback
+
+    cases = {
+        "1:10 Elektro 4-Kanal RC ferngesteuertes Auto Truck Monstertruck": (
+            "Toys & Games/Remote Control Toys"
+        ),
+        "Elektrisches Roll-Up Keyboard mit 61 Tasten": (
+            "Toys & Games/Musical Instruments"
+        ),
+        "2000 W Dampfreiniger Flächenreiniger Boden Dampf Reiniger": "Home Cleaning",
+        "2er Set Satztisch Holz Couchtisch Beistelltisch": (
+            "Furniture/Tables"
+        ),
+        "Outdoor Hochbeet mit Beinen Holz Pflanzkasten": (
+            "Garden & Outdoor"
+        ),
+        "2-drzwiowa szafa z regulowanymi półkami": (
+            "Furniture/Storage & Shelving"
+        ),
+        "13 L Soportes de Sombrilla Exterior Base para Sombrilla": (
+            "Garden & Outdoor"
+        ),
+        "1000W Generador Eléctrico Gasolina de Estación": (
+            "Tools & Home Improvement"
+        ),
+        "4/4 Violín de Madera con Estuche para Principiantes": (
+            "Toys & Games/Musical Instruments"
+        ),
+        "26L Nevera Termoeléctrica Portátil": "Home Appliances",
+        "266-delige universele gereedschapsset aluminium gereedschapskofferset": (
+            "Tools & Home Improvement"
+        ),
+        "190 x 50 x 260 cm krabpaal klimboom speelboom bruin": (
+            "Pet Supplies/Cat Furniture"
+        ),
+        "23L 800W Roestvrijstalen Magnetron Magnetron Oven": (
+            "Kitchen & Dining"
+        ),
+        "strandparasol lichtgewicht strandtent met draagtas": (
+            "Garden & Outdoor"
+        ),
+        "6 in 1 optrekstang deurframe optrekstang zwart": (
+            "Sports & Fitness"
+        ),
+        "102 x 99 cm Voordak voor de Voordeur Overkapping": (
+            "Garden & Outdoor"
+        ),
+        "3 Laags Stalen Schoenenrek Schoenen Opslag Organisator": (
+            "Furniture/Storage & Shelving"
+        ),
+        "120 cm Kunstmatige Buxus Kunstplant Set van 2": (
+            "Home Decor"
+        ),
+        "2 in 1 Opvouwbare Elektrische Loopband Dual LED Display": (
+            "Sports & Fitness"
+        ),
+        "Lasmachine Ampere-lasmachine MIG 130 Elektrode-lasmachine": (
+            "Tools & Home Improvement"
+        ),
+        "Opvouwbaar Puppyren met 8 Panelen Afsluitbare Deur": "Pet Supplies",
+        "Basketbalstandaard in Hoogte Verstelbaar Binnen Buiten": (
+            "Sports & Outdoor Recreation"
+        ),
+        "Elektrische Deken 150 x 200 cm 4 Temperatuurstanden": (
+            "Home Appliances"
+        ),
+        "snijmachine 150 W elektrische snijmachine roestvrij staal zilver": (
+            "Kitchen & Dining"
+        ),
+        "Vervangingsfilter HEPA-filter Anti-formaldehyde luchtzuiveringsfilter": (
+            "Home Appliances"
+        ),
+        "3-delig servies bistro group-nature": "Kitchen & Dining",
+        "Capsuledispenser voor 36 Dolce Gusto Nespresso-koffiecapsules": (
+            "Kitchen & Dining"
+        ),
+        "Cirkelzaag 705 W 3500 omw/min Invalzaag Micro minizaag": (
+            "Tools & Home Improvement"
+        ),
+        "versleepbaar manicurebord nagelbord studiobord met tas-wit": (
+            "Beauty & Personal Care"
+        ),
+        "3 Pieces Kids Table and Chair Set with Chalkboard for Home": "Kids & Baby",
+        "12000 BTU Portable Air Conditioner Cools Up to 46.5㎡ 5-in-1 Quiet AC Unit": (
+            "Home Appliances"
+        ),
+        "15KG/ 24H Portable Electric Countertop Ice Cube Maker with Auto Clean Function": (
+            "Kitchen & Dining"
+        ),
+        "101 x 101 cm Football Rebounder with 7 Adjustable Angles and 4 Ground Stakes": (
+            "Sports & Outdoor Recreation"
+        ),
+        "Cute Hamburger Cat Bed with Padded Top and Removable Washable Cushion": (
+            "Pet Supplies/Cat Furniture"
+        ),
+        "Industrial Floor Lamp with Adjustable Height and Lamp Head for Home Office": (
+            "Lighting"
+        ),
+        "18KG Countertop Portable Ice Cube Making Machine for Home Office": (
+            "Kitchen & Dining"
+        ),
+        "Mahogany Ukulele with Gig Bag and Adjustable Shoulder Strap": (
+            "Toys & Games/Musical Instruments"
+        ),
+        "Double Size Metal Canopy Bed Frame": "Furniture/Bedroom",
+        "Fuzzy Plush Rabbit Fur Bubble Blanket for Bed Armchair Sofa": (
+            "Furniture/Bedroom"
+        ),
+        "2 Tiers Wood Nightstand with 1 Drawer and 1 Baskets for Home": (
+            "Furniture/Bedroom"
+        ),
+        "Modern Accent Chair Linen Fabric Armchair with Solid Acacia Wood Frame": (
+            "Furniture/Chairs & Seating"
+        ),
+        "Misting Pedestal Fan with 90° Auto Oscillation and 8 Speeds": (
+            "Home Appliances"
+        ),
+        "15 m Automatische Schlauchaufroller Drucklufttrommel": (
+            "Tools & Home Improvement"
+        ),
+        "Portable Badminton Net with Poles and Carrying Bag for Lawn": (
+            "Sports & Outdoor Recreation"
+        ),
+        "Portable Toilet with 20 L Waste Tank and Flush Pump": "Bathroom",
+        "Campingbett mit Vorzelt & Luftmatratze & Schlafsack & 2 Kissen für 2 Personen Feldbett": (
+            "Sports & Outdoor Recreation"
+        ),
+        "Klavierhocker Sitzhocker Sitzbank mit Stauraum Schwarz 76 x 35 x 48 cm Holz": (
+            "Toys & Games/Musical Instruments"
+        ),
+        "Vouwbare Rollator Voor Senioren met een Lichtgewicht Aluminium Frame": (
+            "Health & Beauty/Mobility Aids"
+        ),
+        "Warmwaterboiler van 25 L met Dubbele Tank Elektrische Boiler": (
+            "Home Appliances"
+        ),
+    }
+
+    for title, category in cases.items():
+        assert _category_from_title_fallback(title) == category
+
+
+def test_magento_rejects_placeholder_categories():
+    from app.crawlers.magento import _first_valid_category
+
+    assert _first_valid_category("Site Pages", "Home", "Default Category") is None
+    assert _first_valid_category(
+        "Site Pages",
+        "Home/Furniture/Office",
+    ) == "Furniture/Office"
+
+
+def test_magento_costway_non_product_urls_are_filtered():
+    from app.crawlers.magento import _looks_like_non_product_url
+
+    assert _looks_like_non_product_url("https://www.costway.de/black-friday")
+    assert _looks_like_non_product_url("https://www.costway.es/nuevaoferta")
+    assert _looks_like_non_product_url("https://www.costway.de/track-your-order")
+    assert _looks_like_non_product_url("https://www.costway.de/garten.html")
+    assert _looks_like_non_product_url("https://www.costway.de/pflege-kosmetik.html")
+    assert _looks_like_non_product_url("https://www.costway.fr/sante-et-beaute.html")
+    assert _looks_like_non_product_url("https://www.costway.it/outdoor-e-giardino.html")
+    assert _looks_like_non_product_url("https://www.costway.es/cocina.html")
+    assert _looks_like_non_product_url("https://www.costway.es/juguetes-y-aficiones.html")
+    assert _looks_like_non_product_url("https://www.costway.es/muebles-exteriores")
+    assert _looks_like_non_product_url("https://www.costway.co.uk/sports.html")
+    assert _looks_like_non_product_url("https://www.costway.es/costway-home")
+    assert _looks_like_non_product_url("https://www.costway.es/vuelta-al-cole")
+    assert _looks_like_non_product_url("https://www.costway.es/costway-aniversario-2020")
+    assert _looks_like_non_product_url("https://www.costway.es/promo-de-verano")
+    assert _looks_like_non_product_url("https://www.costway.co.uk/weee-policy")
+    assert _looks_like_non_product_url("https://www.costway.co.uk/happy-womens-day")
+    assert _looks_like_non_product_url("https://www.costway.co.uk/whattobuy")
+    assert _looks_like_non_product_url("https://www.costway.de/room/bathroom")
+    assert _looks_like_non_product_url("https://www.costway.de/geschenke-fuer-eltern")
+    assert _looks_like_non_product_url("https://www.costway.de/recommended-may-like")
+    assert _looks_like_non_product_url("https://www.costway.de/winter-sale")
+    assert _looks_like_non_product_url("https://www.costway.es/")
+    assert not _looks_like_non_product_url(
+        "https://www.costway.de/costway-klappstuhl-rot.html"
+    )
+
+
+def test_magento_skips_product_url_redirected_to_category():
+    from app.crawlers.magento import MagentoCrawler
+    from app.crawlers.base import BaseCrawler
+
+    site = _site()
+    site.site = "costway_de"
+    site.url = "https://www.costway.de"
+    site.country = "DE"
+    site.brand = "Costway"
+    crawler = MagentoCrawler.__new__(MagentoCrawler)
+    BaseCrawler.__init__(crawler, site)
+    crawler.base = site.url.rstrip("/")
+
+    class _Fetcher:
+        def get(self, url, **kw):
+            return FetchResult(
+                ok=True,
+                url=url,
+                status=200,
+                text='<meta property="og:title" content="Category">'
+                     '<meta property="product:price:amount" content="10.00">',
+                content=b"",
+                final_url="https://www.costway.de/garten/gartenmobel.html",
+                fetcher="test",
+            )
+
+    crawler._fetcher = _Fetcher()
+
+    assert crawler._fetch_one("https://www.costway.de/old-product.html") is None
 
 
 def test_magento_costway_sitemap_only_rows(monkeypatch):
@@ -455,9 +675,10 @@ def test_magento_costway_sitemap_only_rows(monkeypatch):
     assert row["title"] == "Klappstuhl Rot"
     assert row["image_urls"] == ["https://www.costway.de/media/chair.jpg"]
     assert row["currency"] == "EUR"
-    assert result.total_product_count == 3
+    assert result.total_product_count == 2
     assert result.coverage_complete is False
     assert result.coverage_code == "incomplete_detail_parse"
+    assert "发现 2 个商品，实际入库 1 个" in (result.coverage_reason or "")
 
 
 def test_magento_sitemap_only_skips_slug_title_category_rows():

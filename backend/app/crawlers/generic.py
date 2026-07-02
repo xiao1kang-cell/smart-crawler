@@ -416,6 +416,19 @@ class GenericCrawler(BaseCrawler):
             data.get("attributes") or {},
             self._dom_promotion_attributes(tree),
         )
+        review_count = data.get("review_count")
+        rating = data.get("rating")
+        dom_review_count, dom_rating = self._dom_review_details(tree, html)
+        if review_count is None:
+            review_count = dom_review_count
+        if rating is None:
+            rating = dom_rating
+        category = (
+            data.get("category")
+            or self._dom_breadcrumb(tree)
+            or self._category_from_url(url)
+            or self._category_from_title(title, url)
+        )
 
         return {
             "sku": data.get("sku") or self._slug(url),
@@ -425,14 +438,14 @@ class GenericCrawler(BaseCrawler):
             or self._meta(tree, "og:description"),
             "image_urls": data.get("images")
             or ([self._meta(tree, "og:image")] if self._meta(tree, "og:image") else []),
-            "category_path": data.get("category"),
+            "category_path": category,
             "sale_price": sale,
             "original_price": original,
             "currency": data.get("currency")
             or currency_for_site(self.site.site)
             or SITE_CURRENCY_BY_COUNTRY.get((self.site.country or "").upper(), "USD"),
-            "ratings": data.get("rating"),
-            "review_count": data.get("review_count"),
+            "ratings": rating,
+            "review_count": review_count,
             "status": data.get("status", "on_sale"),
             "has_video": "<video" in html,
             "mpn": data.get("mpn"),
@@ -1097,6 +1110,99 @@ class GenericCrawler(BaseCrawler):
                     if price is not None and 0 < price < 1_000_000:
                         return price
         return None
+
+    @staticmethod
+    def _dom_breadcrumb(tree: HTMLParser) -> str | None:
+        crumbs: list[str] = []
+        for node in tree.css(
+                ".breadcrumbs a, .breadcrumb a, [class*=breadcrumb] a, "
+                "nav[aria-label*=breadcrumb] a, [itemtype*=BreadcrumbList] [itemprop=name]"):
+            text = re.sub(r"\s+", " ", node.text(separator=" ", strip=True)).strip()
+            if not text or text.lower() in {"home", "shop", "products", "startseite"}:
+                continue
+            text = html_lib.unescape(text)
+            if text not in crumbs:
+                crumbs.append(text)
+        if len(crumbs) > 1:
+            return "/".join(crumbs[:-1][:4])
+        if crumbs:
+            return crumbs[0]
+        return None
+
+    def _category_from_url(self, url: str) -> str | None:
+        parts = [
+            p for p in urlparse(url).path.strip("/").split("/")
+            if p and not re.search(r"\d", p)
+        ]
+        if len(parts) > 1:
+            return "/".join(p.replace("-", " ").title() for p in parts[:-1][:4])
+        return None
+
+    def _category_from_title(self, title: str | None, url: str | None = None) -> str | None:
+        text = " ".join(part for part in (self.site.site, title, url) if part).lower()
+        rules = (
+            (r"sun care|sunscreen|spf\\s*\\d+|sun cream|sun protection", "Beauty/Sun Care"),
+            (r"serum|moisturizer|cleanser|toner|cream|skin care|skincare", "Beauty/Skin Care"),
+            (r"makeup|lipstick|mascara|foundation|eyeliner", "Beauty/Makeup"),
+            (r"shampoo|conditioner|hair care", "Beauty/Hair Care"),
+            (r"chair|sofa|stool|bench", "Furniture/Chairs & Seating"),
+            (r"table|desk", "Furniture/Tables"),
+            (r"lamp|lighting|bulb", "Lighting"),
+        )
+        for pattern, category in rules:
+            if re.search(pattern, text, re.I):
+                return category
+        return None
+
+    @staticmethod
+    def _dom_review_details(tree: HTMLParser, html: str) -> tuple[int | None, float | None]:
+        review_count = None
+        rating = None
+        selectors = (
+            "[data-rating-count]", "[data-review-count]", "[data-reviews-count]",
+            "[class*=review]", "[id*=review]", "[class*=rating]", "[id*=rating]",
+        )
+        for selector in selectors:
+            for node in tree.css(selector)[:50]:
+                for attr in (
+                    "data-rating-count", "data-review-count", "data-reviews-count",
+                    "data-count", "aria-label", "title",
+                ):
+                    value = node.attributes.get(attr)
+                    if value and review_count is None:
+                        review_count = GenericCrawler._review_count_from_text(value)
+                text = node.text(separator=" ", strip=True)
+                if text and review_count is None:
+                    review_count = GenericCrawler._review_count_from_text(text)
+                if text and rating is None:
+                    rating = GenericCrawler._rating_from_text(text)
+                if review_count is not None and rating is not None:
+                    return review_count, rating
+        if review_count is None:
+            review_count = GenericCrawler._review_count_from_text(html[:200000])
+        if rating is None:
+            rating = GenericCrawler._rating_from_text(html[:200000])
+        return review_count, rating
+
+    @staticmethod
+    def _review_count_from_text(value: str) -> int | None:
+        text = str(value or "")
+        patterns = (
+            r"([\d,\s]+)\s*(?:reviews?|ratings?|avis|bewertungen|reseñas|recensioni)",
+            r"(?:reviews?|ratings?|avis|bewertungen|reseñas|recensioni)\D{0,20}([\d,\s]+)",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text, re.I)
+            if match:
+                return GenericCrawler._int(match.group(1))
+        return None
+
+    @staticmethod
+    def _rating_from_text(value: str) -> float | None:
+        match = re.search(r"([0-5](?:[.,]\d+)?)\s*(?:/|out of)\s*5", str(value or ""), re.I)
+        if not match:
+            return None
+        return GenericCrawler._num(match.group(1).replace(",", "."))
 
     @staticmethod
     def _dom_promotion_attributes(tree: HTMLParser) -> dict:

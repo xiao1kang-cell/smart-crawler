@@ -224,6 +224,30 @@ def test_westelm_product_parse_not_degraded():
     assert "Furniture" in (p["category_path"] or "")
 
 
+def test_westelm_category_fallback_when_breadcrumb_missing():
+    from app.crawlers.westelm import WestElmCrawler
+
+    state = json.loads(json.dumps(_INITIAL_STATE))
+    details = state["product"]["productDetails"]
+    details["title"] = "Branch Desk Panels"
+    details["breadcrumbs"] = []
+    html = (
+        "<html><body>"
+        f"<script>window.__INITIAL_STATE__ = {json.dumps(state)};</script>"
+        + " " * 205000
+        + "</body></html>"
+    )
+
+    crawler = WestElmCrawler(_site())
+    rows = crawler._parse_product(
+        html,
+        "https://www.westelm.com/products/branch-desk-panels-h11641/",
+    )
+
+    assert rows
+    assert rows[0]["category_path"] == "Furniture/Office Furniture"
+
+
 # ---------------------------------------------------------------------------
 # Test: stealth path — _fetch_via_stealth goes through count_browser_fetch
 # ---------------------------------------------------------------------------

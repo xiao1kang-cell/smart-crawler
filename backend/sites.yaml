@@ -37,12 +37,12 @@ sites:
   # 美/加站 = Vue3 SPA + /api JSON；欧洲站 = Magento（/api 返回 404，走 sitemap）
   - {site: costway_us, brand: Costway, country: US, url: "https://www.costway.com/", platform: vue_spa, proxy_tier: datacenter, crawler_config: {max_products: 999999, job_timeout_sec: 86400, rate_interval_sec: 0.6, listing_concurrency: 4, detail_concurrency: 4, proxy_lease_ttl_sec: 300, failed_product_retry_limit: 500}}
   - {site: costway_ca, brand: Costway, country: CA, url: "https://www.costway.ca/", platform: vue_spa, proxy_tier: datacenter, crawler_config: {max_products: 999999, job_timeout_sec: 86400, rate_interval_sec: 0.6, listing_concurrency: 4, detail_concurrency: 4, proxy_lease_ttl_sec: 300, failed_product_retry_limit: 500}}
-  - {site: costway_uk, brand: Costway, country: UK, url: "https://www.costway.co.uk/", platform: magento, proxy_tier: none}
-  - {site: costway_de, brand: Costway, country: DE, url: "https://www.costway.de/", platform: magento, proxy_tier: none}
-  - {site: costway_it, brand: Costway, country: IT, url: "https://www.costway.it/", platform: magento, proxy_tier: none}
-  - {site: costway_es, brand: Costway, country: ES, url: "https://www.costway.es/", platform: magento, proxy_tier: none}
-  - {site: costway_fr, brand: Costway, country: FR, url: "https://www.costway.fr/", platform: magento, proxy_tier: none}
-  - {site: costway_nl, brand: Costway, country: NL, url: "https://nl.costway.com/", platform: magento, proxy_tier: none}
+  - {site: costway_uk, brand: Costway, country: UK, url: "https://www.costway.co.uk/", platform: magento, proxy_tier: none, sitemap: "https://www.costway.co.uk/media/sitemap/sitemap.xml"}
+  - {site: costway_de, brand: Costway, country: DE, url: "https://www.costway.de/", platform: magento, proxy_tier: none, sitemap: "https://www.costway.de/media/sitemap/sitemap.xml"}
+  - {site: costway_it, brand: Costway, country: IT, url: "https://www.costway.it/", platform: magento, proxy_tier: none, sitemap: "https://www.costway.it/media/sitemap/sitemap.xml"}
+  - {site: costway_es, brand: Costway, country: ES, url: "https://www.costway.es/", platform: magento, proxy_tier: none, sitemap: "https://www.costway.es/media/sitemap/sitemap.xml"}
+  - {site: costway_fr, brand: Costway, country: FR, url: "https://www.costway.fr/", platform: magento, proxy_tier: none, sitemap: "https://www.costway.fr/media/sitemap/sitemap.xml"}
+  - {site: costway_nl, brand: Costway, country: NL, url: "https://nl.costway.com/", platform: magento, proxy_tier: none, sitemap: "https://nl.costway.com/media/sitemap/sitemap.xml"}
   - {site: costway_pl, brand: Costway, country: PL, url: "https://costway.pl/", platform: shoper, proxy_tier: none}
 
   # ========== Homary（爆米科技, P0）— Nuxt SSR ==========

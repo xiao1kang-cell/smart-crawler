@@ -26,10 +26,21 @@ from sqlalchemy.orm import Session
 
 from .. import spine_queue
 from ..audit import record_audit
-from ..crawl_diagnostics import job_timeout_failure, record_failure
+from ..crawl_diagnostics import (
+    FailureInfo,
+    QUEUE_STALLED,
+    STAGE_JOB,
+    job_timeout_failure,
+    record_failure,
+)
 from ..currency import currency_for_site
 from ..db import IS_SQLITE, get_db
 from ..price_sources import enrich_products_from_site_config
+from ..product_quality import (
+    is_salable_product_status,
+    product_quality_filter,
+    salable_product_filter,
+)
 from ..site_metrics import load_site_metrics, refresh_site_metrics
 from ..models import (
     AdminAuditLog,
@@ -146,7 +157,13 @@ _QUALITY_SITE_ISSUES = {
     "promotions_missing",
     "never_crawled",
 }
-AOSEN_DEFERRED_SITES = {"vidaxl_us", "vidaxl_ca"}
+AOSEN_DEFERRED_SITES = {
+    "vidaxl_us",
+    "vidaxl_ca",
+    "sephora_fr_maquillage",
+    "costway_ca",
+    "costway_us",
+}
 
 
 def _table_count(db: Session, model) -> int:
@@ -211,15 +228,23 @@ def _product_quality_issues(product: Product) -> list[str]:
         "view product", "shop now",
     }
     issues: list[str] = []
+    if product.site and str(product.site).startswith("costway_"):
+        from ..product_quality import looks_like_costway_non_product
+        if looks_like_costway_non_product(product.product_url, product.sku):
+            return issues
     if (not title or len(title) < 4 or title.lower() in weak_titles or
             (sku and title.lower() == sku.lower())):
         issues.append("title_weak")
     if _missing_category(product.category_path):
         issues.append("category_missing")
-    if _missing_image(product.image_urls):
+    salable = is_salable_product_status(product.status)
+    if salable and _missing_image(product.image_urls):
         issues.append("image_missing")
-    if not ((product.sale_price or 0) > 0 or (product.original_price or 0) > 0):
+    if salable and not (
+            (product.sale_price or 0) > 0 or (product.original_price or 0) > 0):
         issues.append("price_missing")
+    if product.review_count is None:
+        issues.append("review_count_missing")
     expected_currency = currency_for_site(product.site)
     currency = (product.currency or "").strip().upper()
     if expected_currency and not currency:
@@ -340,7 +365,7 @@ def _field_fix_rows_from_payload(payload: dict) -> list[dict]:
         rows = list(reader)
     keys = {
         "site", "sku", "title", "currency", "category_path", "image_urls",
-        "sale_price", "original_price", "spu",
+        "sale_price", "original_price", "review_count", "spu",
     }
     if rows is None and any(k in payload for k in keys):
         rows = [payload]
@@ -529,9 +554,13 @@ def _sku_target_template_payload(
     tenant: int | None = None,
     include_hidden: bool = False,
     exclude_deferred: bool = True,
+    site_filter: list[str] | None = None,
     limit: int = 5000,
     include_total_count: bool = True,
 ) -> dict:
+    scoped_sites = sorted({site for site in (site_filter or []) if site})
+    if site_filter is not None and not scoped_sites:
+        scoped_sites = ["__no_matching_aosen_sites__"]
     q = (db.query(WorkspaceSite.site, WorkspaceSite.workspace_id, Workspace.name,
                   WorkspaceSite.target_sku_count)
          .join(Workspace, Workspace.id == WorkspaceSite.workspace_id)
@@ -542,6 +571,8 @@ def _sku_target_template_payload(
         q = q.filter(WorkspaceSite.hidden.is_(False))
     if exclude_deferred:
         q = q.filter(~WorkspaceSite.site.in_(tuple(AOSEN_DEFERRED_SITES)))
+    if site_filter is not None:
+        q = q.filter(WorkspaceSite.site.in_(scoped_sites))
     workspace_rows = q.order_by(WorkspaceSite.site, WorkspaceSite.workspace_id).all()
     site_codes: list[str] = []
     target_sku_by_site: dict[str, int] = {}
@@ -659,6 +690,17 @@ def _validate_field_fix_rows(db: Session, rows: list[dict]) -> dict:
                         updates[field] = round(float(parsed), 2)
                 except HTTPException as exc:
                     row_errors.append(str(exc.detail))
+        review_value = _first_present(
+            raw, "review_count", "reviews", "review_total", "new_review_count")
+        if review_value not in (None, ""):
+            try:
+                parsed_review = _sales_number(review_value)
+                if parsed_review is not None and parsed_review < 0:
+                    row_errors.append("review_count_must_be_non_negative")
+                elif parsed_review is not None:
+                    updates["review_count"] = int(round(parsed_review))
+            except HTTPException as exc:
+                row_errors.append(str(exc.detail))
         images = _field_fix_images(_first_present(raw, "image_urls", "images", "new_image_urls"))
         if images is not None:
             updates["image_urls"] = images[:20]
@@ -701,9 +743,13 @@ def _field_fix_template_payload(
     tenant: int | None = None,
     include_hidden: bool = False,
     exclude_deferred: bool = True,
+    site_filter: list[str] | None = None,
     limit: int = 5000,
     include_total_count: bool = True,
 ) -> dict:
+    scoped_sites = sorted({site for site in (site_filter or []) if site})
+    if site_filter is not None and not scoped_sites:
+        scoped_sites = ["__no_matching_aosen_sites__"]
     weak_title = _weak_product_title_filter()
     image_text = func.trim(func.coalesce(cast(Product.image_urls, String), ""))
     currency_text = func.upper(func.trim(func.coalesce(Product.currency, "")))
@@ -722,12 +768,15 @@ def _field_fix_template_payload(
         image_text.in_(("", "[]", "null")),
         ~((func.coalesce(Product.sale_price, 0) > 0) |
           (func.coalesce(Product.original_price, 0) > 0)),
+        Product.review_count.is_(None),
         currency_text == "",
         *(mismatch_parts or []),
     )
     q = db.query(Product).filter(issue_expr)
     if exclude_deferred:
         q = q.filter(~Product.site.in_(tuple(AOSEN_DEFERRED_SITES)))
+    if site_filter is not None:
+        q = q.filter(Product.site.in_(scoped_sites))
     if tenant is not None or not include_hidden:
         q = q.join(WorkspaceSite, WorkspaceSite.site == Product.site)
         q = q.join(Workspace, Workspace.id == WorkspaceSite.workspace_id)
@@ -767,13 +816,16 @@ def _field_fix_template_payload(
             "image_urls": image_value,
             "sale_price": product.sale_price or "",
             "original_price": product.original_price or "",
+            "review_count": (
+                "" if product.review_count is None else product.review_count
+            ),
             "spu": product.spu or "",
             "note": "/".join(issues) or "field_fix",
         })
     output = io.StringIO()
     fieldnames = [
         "site", "sku", "title", "currency", "category_path", "image_urls",
-        "sale_price", "original_price", "spu", "note",
+        "sale_price", "original_price", "review_count", "spu", "note",
     ]
     writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
@@ -966,9 +1018,13 @@ def _promotion_template_payload(
     tenant: int | None = None,
     include_hidden: bool = False,
     exclude_deferred: bool = True,
+    site_filter: list[str] | None = None,
     limit: int = 5000,
     include_total_count: bool = True,
 ) -> dict:
+    scoped_sites = sorted({site for site in (site_filter or []) if site})
+    if site_filter is not None and not scoped_sites:
+        scoped_sites = ["__no_matching_aosen_sites__"]
     existing_promos = (db.query(Promotion.site, Promotion.sku)
                        .filter(Promotion.sku.isnot(None))
                        .subquery())
@@ -982,6 +1038,8 @@ def _promotion_template_payload(
          .filter(existing_promos.c.sku.is_(None)))
     if exclude_deferred:
         q = q.filter(~Product.site.in_(tuple(AOSEN_DEFERRED_SITES)))
+    if site_filter is not None:
+        q = q.filter(Product.site.in_(scoped_sites))
     if tenant is not None or not include_hidden:
         q = q.join(WorkspaceSite, WorkspaceSite.site == Product.site)
         q = q.join(Workspace, Workspace.id == WorkspaceSite.workspace_id)
@@ -1049,6 +1107,7 @@ _AOSEN_FIELD_ISSUE_KEYS = {
     "currency_missing",
     "currency_mismatch",
     "price_missing",
+    "review_count_missing",
     "category_missing",
     "image_missing",
     "sku_deviation_high",
@@ -1065,6 +1124,7 @@ _AOSEN_HARD_FAIL_ISSUES = {
     "currency_mismatch",
     "sku_deviation_high",
     "title_weak",
+    "review_count_missing",
     "category_missing",
     "image_missing",
 }
@@ -1095,7 +1155,36 @@ def _aosen_field_quality_items(
     site_codes = [site.site for site in sites if site.site]
     if not site_codes:
         return []
-    metrics = load_site_metrics(db, site_codes, collect_missing=IS_SQLITE)
+    collect_missing_metrics = IS_SQLITE
+    try:
+        collect_missing_metrics = (
+            collect_missing_metrics
+            or getattr(db.get_bind().dialect, "name", "") == "sqlite"
+        )
+    except Exception:
+        pass
+    salable_status = func.lower(func.trim(func.coalesce(Product.status, ""))).in_((
+        "",
+        "active",
+        "available",
+        "in_stock",
+        "instock",
+        "on_sale",
+    ))
+    metrics = load_site_metrics(db, site_codes, collect_missing=collect_missing_metrics)
+    # This request-path count intentionally avoids the full product_quality_filter().
+    # Site metrics already carry product-quality-filtered totals, while this count
+    # only answers whether salable rows exist for price completeness gating.
+    salable_counts = {
+        site: int(count or 0)
+        for site, count in (
+            db.query(Product.site, func.count(Product.id))
+            .filter(Product.site.in_(site_codes), salable_status)
+            .group_by(Product.site)
+            .all()
+        )
+    }
+    image_text = func.lower(func.trim(func.coalesce(cast(Product.image_urls, String), "")))
     field_counts = {
         site: {
             "category_missing_count": int(category_missing or 0),
@@ -1108,9 +1197,11 @@ def _aosen_field_quality_items(
                     func.length(func.trim(func.coalesce(Product.category_path, ""))) == 0
                 ),
                 func.count(Product.id).filter(
-                    func.trim(func.coalesce(cast(Product.image_urls, String), "")).in_(
-                        ("", "[]", "null")
-                    )
+                    salable_status,
+                    or_(
+                        Product.image_urls.is_(None),
+                        image_text.in_(("", "[]", "{}", "null", "none", '""')),
+                    ),
                 ),
             )
             .filter(Product.site.in_(site_codes))
@@ -1134,6 +1225,7 @@ def _aosen_field_quality_items(
         currency_missing_count = int(metric.get("currency_missing_count") or 0)
         currency_mismatch_count = int(metric.get("currency_mismatch_count") or 0)
         price_signal_count = int(metric.get("price_signal_count") or 0)
+        salable_product_count = int(salable_counts.get(site) or 0)
         sales_signal_count = int(metric.get("sales_signal_count") or 0)
         revenue_signal_count = int(metric.get("revenue_signal_count") or 0)
         review_signal_count = int(metric.get("review_signal_count") or 0)
@@ -1156,19 +1248,22 @@ def _aosen_field_quality_items(
             issues.append("currency_missing")
         if currency_mismatch_count > 0:
             issues.append("currency_mismatch")
-        if sku_count > 0 and price_signal_count == 0:
+        if salable_product_count > 0 and price_signal_count == 0:
             issues.append("price_missing")
+        if sku_count > 0 and review_signal_count == 0:
+            issues.append("review_count_missing")
         if category_missing_count > 0:
             issues.append("category_missing")
         if image_missing_count > 0:
             issues.append("image_missing")
         if promotion_count == 0:
             issues.append("promotions_missing")
-        if sku_count > 0 and sales_signal_count == 0:
+        has_business_history = review_history_signal_count > 0
+        if sku_count > 0 and sales_signal_count == 0 and not has_business_history:
             issues.append("sales_missing")
-        if sku_count > 0 and revenue_signal_count == 0:
+        if sku_count > 0 and revenue_signal_count == 0 and not has_business_history:
             issues.append("revenue_missing")
-        if review_signal_count > 0 and review_history_signal_count < 2:
+        if review_signal_count > 0 and review_history_signal_count == 0:
             issues.append("sales_history_insufficient")
         issues = [issue for issue in issues if issue in _AOSEN_FIELD_ISSUE_KEYS]
         items.append({
@@ -1184,10 +1279,13 @@ def _aosen_field_quality_items(
             "title_quality_pct": _pct(sku_count - weak_title_count, sku_count),
             "category_signal_pct": _pct(sku_count - category_missing_count, sku_count),
             "image_signal_pct": _pct(sku_count - image_missing_count, sku_count),
-            "price_signal_pct": _pct(price_signal_count, sku_count),
+            "price_signal_pct": _pct(price_signal_count, salable_product_count),
+            "review_signal_pct": _pct(review_signal_count, sku_count),
             "sales_signal_pct": _pct(sales_signal_count, sku_count),
             "revenue_signal_pct": _pct(revenue_signal_count, sku_count),
             "promotion_count": promotion_count,
+            "price_signal_count": price_signal_count,
+            "review_signal_count": review_signal_count,
             "expected_currency": currency_for_site(site),
             "category_missing_count": category_missing_count,
             "image_missing_count": image_missing_count,
@@ -1300,9 +1398,13 @@ def _sales_template_payload(
     include_hidden: bool = False,
     day: date | None = None,
     exclude_deferred: bool = True,
+    site_filter: list[str] | None = None,
     limit: int = 5000,
     include_total_count: bool = True,
 ) -> dict:
+    scoped_sites = sorted({site for site in (site_filter or []) if site})
+    if site_filter is not None and not scoped_sites:
+        scoped_sites = ["__no_matching_aosen_sites__"]
     day = day or date.today()
     q = (db.query(Product)
          .join(Site, Site.site == Product.site)
@@ -1312,6 +1414,8 @@ def _sales_template_payload(
                      Product.thirty_day_revenue <= 0)))
     if exclude_deferred:
         q = q.filter(~Product.site.in_(tuple(AOSEN_DEFERRED_SITES)))
+    if site_filter is not None:
+        q = q.filter(Product.site.in_(scoped_sites))
     if tenant is not None or not include_hidden:
         q = q.join(WorkspaceSite, WorkspaceSite.site == Product.site)
         q = q.join(Workspace, Workspace.id == WorkspaceSite.workspace_id)
@@ -1489,9 +1593,13 @@ def _review_history_template_payload(
     tenant: int | None = None,
     include_hidden: bool = False,
     exclude_deferred: bool = True,
+    site_filter: list[str] | None = None,
     limit: int = 5000,
     include_total_count: bool = True,
 ) -> dict:
+    scoped_sites = sorted({site for site in (site_filter or []) if site})
+    if site_filter is not None and not scoped_sites:
+        scoped_sites = ["__no_matching_aosen_sites__"]
     sufficient_review_history_skus = (
         db.query(PriceHistory.site.label("site"),
                  PriceHistory.sku.label("sku"))
@@ -1512,6 +1620,8 @@ def _review_history_template_payload(
          .filter(sufficient_review_history_skus.c.sku.is_(None)))
     if exclude_deferred:
         q = q.filter(~Product.site.in_(tuple(AOSEN_DEFERRED_SITES)))
+    if site_filter is not None:
+        q = q.filter(Product.site.in_(scoped_sites))
     if tenant is not None or not include_hidden:
         q = q.join(WorkspaceSite, WorkspaceSite.site == Product.site)
         q = q.join(Workspace, Workspace.id == WorkspaceSite.workspace_id)
@@ -1536,7 +1646,9 @@ def _review_history_template_payload(
             "sku": row.sku,
             "date": "",
             "review_count": "",
-            "current_review_count": row.review_count or "",
+            "current_review_count": (
+                "" if row.review_count is None else row.review_count
+            ),
             "sale_price": row.sale_price or "",
             "original_price": row.original_price or "",
             "title": row.title or "",
@@ -2428,6 +2540,31 @@ def _queue_maintenance(db: Session, *, apply: bool = False,
                 info=job_timeout_failure(job.site, _CRAWL_STUCK_SEC, detail),
             )
 
+        for job in crawl_stale_pending:
+            detail = (
+                "admin-canceled: pending job was not claimed by a worker "
+                f"within {_CRAWL_PENDING_STALE_SEC}s"
+            )
+            job.status = "failed"
+            job.finished_at = now
+            job.duration_sec = (
+                (job.finished_at - job.created_at).total_seconds()
+                if job.created_at else None
+            )
+            job.error = detail
+            record_failure(
+                db,
+                site=job.site,
+                job_id=job.id,
+                info=FailureInfo(
+                    QUEUE_STALLED,
+                    STAGE_JOB,
+                    detail,
+                    True,
+                    "队列入队后未被 worker 消费；检查 worker 存活、触发类型白名单和队列积压后重跑",
+                ),
+            )
+
         for job in ondemand_stuck:
             job.status = "queued"
             job.finished_at = None
@@ -2437,6 +2574,7 @@ def _queue_maintenance(db: Session, *, apply: bool = False,
     counts = {
         "spine_requeued": len(spine_stuck),
         "crawl_failed_timeout": len(crawl_stuck),
+        "crawl_failed_stale_pending": len(crawl_stale_pending),
         "ondemand_requeued": len(ondemand_stuck),
         "crawl_stale_pending_observed": len(crawl_stale_pending),
     }
@@ -2454,6 +2592,7 @@ def _queue_maintenance(db: Session, *, apply: bool = False,
         "total_actionable": (
             counts["spine_requeued"]
             + counts["crawl_failed_timeout"]
+            + counts["crawl_failed_stale_pending"]
             + counts["ondemand_requeued"]
         ),
         "samples": samples,
@@ -2598,6 +2737,8 @@ def admin_aosen_field_quality_acceptance(
             or "currency_mismatch" in item["issues"]
         )),
         "price_missing": sum(1 for item in items if "price_missing" in item["issues"]),
+        "review_count_missing": sum(
+            1 for item in items if "review_count_missing" in item["issues"]),
         "category_missing": sum(
             1 for item in items if "category_missing" in item["issues"]),
         "image_missing": sum(
@@ -2738,11 +2879,28 @@ def admin_aosen_acceptance_action_plan(
     include_hidden = _query_bool(include_hidden, default=False)
     include_deferred = _query_bool(include_deferred, default=False)
     template_limit = _query_int(template_limit, 100)
+    acceptance_items = [
+        item for item in (acceptance.get("items") or [])
+        if isinstance(item, dict)
+    ]
+    field_sites = [
+        item["site"] for item in acceptance_items
+        if item.get("site") and item.get("status") == "fail"
+    ]
+    promotion_sites = [
+        item["site"] for item in acceptance_items
+        if item.get("site") and item.get("status") == "needs_refresh"
+    ]
+    business_sites = [
+        item["site"] for item in acceptance_items
+        if item.get("site") and item.get("status") == "needs_business_data"
+    ]
     field_template = _field_fix_template_payload(
         db,
         tenant=tenant,
         include_hidden=include_hidden,
         exclude_deferred=not include_deferred,
+        site_filter=field_sites,
         limit=template_limit,
         include_total_count=False,
     )
@@ -2751,6 +2909,7 @@ def admin_aosen_acceptance_action_plan(
         tenant=tenant,
         include_hidden=include_hidden,
         exclude_deferred=not include_deferred,
+        site_filter=field_sites,
         limit=template_limit,
         include_total_count=False,
     )
@@ -2759,6 +2918,7 @@ def admin_aosen_acceptance_action_plan(
         tenant=tenant,
         include_hidden=include_hidden,
         exclude_deferred=not include_deferred,
+        site_filter=promotion_sites,
         limit=template_limit,
         include_total_count=False,
     )
@@ -2767,6 +2927,7 @@ def admin_aosen_acceptance_action_plan(
         tenant=tenant,
         include_hidden=include_hidden,
         exclude_deferred=not include_deferred,
+        site_filter=business_sites,
         limit=template_limit,
         include_total_count=False,
     )
@@ -2775,6 +2936,7 @@ def admin_aosen_acceptance_action_plan(
         tenant=tenant,
         include_hidden=include_hidden,
         exclude_deferred=not include_deferred,
+        site_filter=business_sites,
         limit=template_limit,
         include_total_count=False,
     )
@@ -2829,6 +2991,7 @@ def admin_data_quality_products(
             (func.coalesce(Product.sale_price, 0) > 0) |
             (func.coalesce(Product.original_price, 0) > 0)
         ),
+        "review_count_missing": Product.review_count.is_(None),
         "sales_missing": func.coalesce(Product.thirty_day_sales, 0) <= 0,
         "revenue_missing": func.coalesce(Product.thirty_day_revenue, 0) <= 0,
         "sales_history_insufficient": and_(
@@ -2846,13 +3009,13 @@ def admin_data_quality_products(
         int(product_id)
         for product_id, image_urls in (
             db.query(Product.id, Product.image_urls)
-            .filter(Product.site == site)
+            .filter(Product.site == site, salable_product_filter())
             .all()
         )
         if _missing_image(image_urls)
     ]
     product_count = int(db.query(func.count(Product.id))
-                        .filter(Product.site == site).scalar() or 0)
+                        .filter(Product.site == site, product_quality_filter()).scalar() or 0)
     trend_count = int(db.query(func.count(Trend.id))
                       .filter(Trend.site == site).scalar() or 0)
     trend_issue_counts = {
@@ -2893,7 +3056,13 @@ def admin_data_quality_products(
     }
     issue_counts = {
         key: int(db.query(func.count(Product.id))
-                 .filter(Product.site == site, expr)
+                 .filter(
+                     Product.site == site,
+                     salable_product_filter()
+                     if key in {"price_missing", "image_missing"}
+                     else product_quality_filter(),
+                     expr,
+                 )
                  .scalar() or 0)
         for key, expr in issue_filters.items()
     }
@@ -2902,7 +3071,11 @@ def admin_data_quality_products(
         int(product_id)
         for (product_id,) in (
             db.query(Product.id)
-            .filter(Product.site == site, or_(*issue_filters.values()))
+            .filter(Product.site == site, product_quality_filter(), or_(*[
+                and_(salable_product_filter(), expr)
+                if key in {"price_missing", "image_missing"} else expr
+                for key, expr in issue_filters.items()
+            ]))
             .all()
         )
     }
@@ -3054,7 +3227,7 @@ def admin_data_quality_products(
             raise HTTPException(
                 422,
                 "issue 必须是 title_weak/category_missing/image_missing/"
-                "price_missing/currency_missing/"
+                "price_missing/review_count_missing/currency_missing/"
                 "currency_mismatch/sales_missing/revenue_missing/"
                 "sales_history_insufficient/traffic_missing/conversion_missing/"
                 "latest_job_failed/partial_crawl/"
@@ -3398,6 +3571,7 @@ def admin_product_field_fixes_import(
     if imported == 0:
         raise HTTPException(422, {"error": "no_product_field_fixes_to_import"})
     db.flush()
+    db.flush()
     refresh_site_metrics(db, sorted(touched_sites))
     record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
                  action="product_field_fixes.import", target_type="site",
@@ -3517,6 +3691,7 @@ def admin_promotion_signals_import(
             .filter(Promotion.site == site)
             .scalar() or 0
         )
+    db.flush()
     refresh_site_metrics(db, sorted(touched_sites))
     record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
                  action="promotion_signals.import", target_type="site",
@@ -3600,6 +3775,8 @@ def admin_analytics_recompute(
         totals["estimated_revenue"] += float(result.get("estimated_revenue") or 0)
 
     totals["estimated_revenue"] = round(totals["estimated_revenue"], 2)
+    db.flush()
+    refresh_site_metrics(db, sites)
     record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
                  action="analytics.recompute", target_type="site",
                  target_id=",".join(sites),
@@ -3688,6 +3865,7 @@ def admin_sales_signals_import(
             trend.review_total = seed["review_total"]
     for site in touched_sites:
         by_site[site]["revenue"] = round(float(by_site[site]["revenue"]), 2)
+    db.flush()
     refresh_site_metrics(db, sorted(touched_sites))
     record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
                  action="sales_signals.import", target_type="site",
@@ -3830,6 +4008,7 @@ def admin_review_history_import(
             float(result.get("estimated_revenue") or 0), 2)
         by_site[site]["insufficient_history_skus"] = int(
             result.get("insufficient_history_skus") or 0)
+    db.flush()
     refresh_site_metrics(db, sorted(touched_sites))
     record_audit(db, actor_user_id=actor.id, actor_name=actor.username,
                  action="review_history.import", target_type="site",

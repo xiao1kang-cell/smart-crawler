@@ -106,9 +106,9 @@ const canEdit = computed(() => {
   return u.global_role === 'super_admin' || ['admin', 'owner'].includes(u.workspace_role || '')
 })
 
-function flag(cc?: string) {
-  if (!cc || cc.length !== 2) return '🌐'
-  return String.fromCodePoint(...[...cc.toUpperCase()].map((c) => 127397 + c.charCodeAt(0)))
+function marketCode(cc?: string) {
+  const value = String(cc || '').trim().toUpperCase()
+  return value || 'N/A'
 }
 
 function statusMeta(s?: string) {
@@ -398,7 +398,7 @@ onMounted(async () => {
         loading-animation="carousel"
       >
         <template #country-cell="{ row }">
-          <div class="market-cell"><span class="flag">{{ flag(row.original.country) }}</span><span>{{ row.original.country || '—' }}</span></div>
+          <div class="market-cell"><span class="market-code">{{ marketCode(row.original.country) }}</span></div>
         </template>
         <template #brand-cell="{ row }">
           <span class="brand-cell">{{ row.original.brand || '—' }}</span>
@@ -640,17 +640,23 @@ onMounted(async () => {
 .action-btn.trigger-failed, .action-btn.trigger-blocked { color:var(--ui-red,#be123c)!important; background:rgba(248,113,113,.12)!important; border-color:rgba(248,113,113,.30)!important; }
 .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 
-.tracking-table-wrap { width:100%; overflow:auto; border:1px solid var(--ui-border); border-radius:8px; background:var(--ui-card); box-shadow:0 14px 32px rgba(37,29,61,.08); }
-.tracking-table :deep(table) { width:100%; min-width:1280px; border-collapse:separate; border-spacing:0; font-size:.84rem; }
+.tracking-table-wrap { width:100%; min-height:650px; overflow:auto; border:1px solid var(--ui-border); border-radius:8px; background:var(--ui-card); box-shadow:0 14px 32px rgba(37,29,61,.08); }
+.tracking-table :deep(table) { width:100%; min-width:1280px; table-layout:fixed; border-collapse:separate; border-spacing:0; font-size:.84rem; }
 .tracking-table :deep(thead) { position:sticky; top:0; z-index:1; }
 .tracking-table :deep(th) { text-align:left; padding:10px 12px; background:var(--ui-card-soft); color:var(--ui-muted); border-bottom:1px solid var(--ui-border); font-size:.72rem; font-weight:800; white-space:nowrap; }
-.tracking-table :deep(td) { padding:10px 12px; border-bottom:1px solid var(--ui-border); color:var(--ui-text); vertical-align:middle; }
+.tracking-table :deep(td) { height:64px; padding:10px 12px; border-bottom:1px solid var(--ui-border); color:var(--ui-text); vertical-align:middle; }
+.tracking-table :deep(th:first-child), .tracking-table :deep(td:first-child) { width:82px; min-width:82px; }
+.tracking-table :deep(th:nth-child(2)), .tracking-table :deep(td:nth-child(2)) { width:150px; }
+.tracking-table :deep(th:nth-child(3)), .tracking-table :deep(td:nth-child(3)) { width:300px; }
+.tracking-table :deep(th:nth-child(4)), .tracking-table :deep(td:nth-child(4)) { width:110px; }
+.tracking-table :deep(th:last-child), .tracking-table :deep(td:last-child) { width:190px; }
 .tracking-table :deep(tbody tr:hover td) { background:rgba(20,184,166,.06); }
 .tracking-table :deep(tbody tr:last-child td) { border-bottom:0; }
 .tracking-table :deep(.num) { text-align:right; font-variant-numeric:tabular-nums; }
 .tracking-table :deep(.muted) { color:var(--ui-muted); }
 
-.market-cell { display:flex; align-items:center; gap:7px; white-space:nowrap; }
+.market-cell { display:inline-flex; align-items:center; gap:7px; min-width:58px; white-space:nowrap; word-break:keep-all; }
+.market-cell span:last-child { display:inline-block; min-width:24px; white-space:nowrap; word-break:keep-all; }
 .flag { width:20px; display:inline-flex; justify-content:center; font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif; }
 .brand-cell { color:var(--ui-heading); font-weight:750; }
 .site-link { max-width:270px; display:inline-flex; align-items:center; gap:5px; color:var(--ui-purple-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:middle; }
@@ -682,8 +688,8 @@ onMounted(async () => {
 .tracking-pager .pager-info { color:var(--ui-heading); min-width:62px; text-align:center; }
 .tracking-pager .pager-select { width:108px; flex:0 0 auto; }
 
-.tracking-modal-backdrop { position:fixed; inset:0; z-index:1200; display:flex; align-items:center; justify-content:center; padding:16px; background:rgba(16,18,27,.34); backdrop-filter:blur(4px); }
-.tracking-dialog { position:relative; z-index:1201; width:430px; max-width:calc(100vw - 32px); max-height:calc(100vh - 28px); display:flex; flex-direction:column; background:var(--ui-card); color:var(--ui-text); border:1px solid var(--ui-border); border-radius:8px; box-shadow:0 26px 70px rgba(0,0,0,.36); overflow:hidden; isolation:isolate; }
+.tracking-modal-backdrop { position:fixed; inset:0; z-index:9000; display:flex; align-items:center; justify-content:center; padding:16px; background:rgba(16,18,27,.34); backdrop-filter:blur(4px); }
+.tracking-dialog { position:relative; z-index:9001; width:430px; max-width:calc(100vw - 32px); max-height:calc(100vh - 28px); display:flex; flex-direction:column; background:var(--ui-card); color:var(--ui-text); border:1px solid var(--ui-border); border-radius:8px; box-shadow:0 26px 70px rgba(0,0,0,.36); overflow:hidden; isolation:isolate; }
 .dialog-head { position:relative; min-height:54px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 14px 14px 16px; border-bottom:1px solid var(--ui-border); background:linear-gradient(180deg,var(--ui-card-soft),var(--ui-card)); }
 .dialog-title { margin:0; color:var(--ui-heading); font-size:1rem; font-weight:900; }
 .dialog-close { width:36px!important; min-width:36px!important; height:36px!important; padding:0!important; display:inline-flex!important; align-items:center!important; justify-content:center!important; border:1px solid transparent!important; border-radius:9px!important; color:var(--ui-muted)!important; background:transparent!important; cursor:pointer; transition:background .15s,color .15s,border-color .15s; }

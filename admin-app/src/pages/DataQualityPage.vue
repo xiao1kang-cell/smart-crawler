@@ -1816,7 +1816,7 @@ onMounted(bootstrap)
         </template>
 
         <template #signals-cell="{ row }">
-          标题 {{ row.original.title_quality_pct }}% · 类目 {{ row.original.category_signal_pct }}% · 图片 {{ row.original.image_signal_pct }}% · 价格 {{ row.original.price_signal_pct }}% · 销量 {{ row.original.sales_signal_pct }}% · 收入 {{ row.original.revenue_signal_pct }}%
+          标题 {{ row.original.title_quality_pct }}% · 类目 {{ row.original.category_signal_pct }}% · 图片 {{ row.original.image_signal_pct }}% · 价格 {{ row.original.price_signal_pct }}% · 评论 {{ row.original.review_signal_pct }}% · 销量 {{ row.original.sales_signal_pct }}% · 收入 {{ row.original.revenue_signal_pct }}%
           <small v-if="row.original.weak_title_count">弱标题 {{ fmtNumber(row.original.weak_title_count) }}</small>
           <small v-if="row.original.category_missing_count || row.original.image_missing_count">
             类目缺 {{ fmtNumber(row.original.category_missing_count) }} · 图片缺 {{ fmtNumber(row.original.image_missing_count) }}

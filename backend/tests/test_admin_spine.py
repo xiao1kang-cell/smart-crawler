@@ -708,8 +708,9 @@ def test_jobs_maintenance_dry_run_and_apply(monkeypatch):
         dry = admin_spine.jobs_maintenance(
             {"apply": False}, user="admin", db=s, ip="127.0.0.1")
         assert dry["dry_run"] is True
-        assert dry["total_actionable"] == 3
+        assert dry["total_actionable"] == 4
         assert dry["counts"]["crawl_stale_pending_observed"] == 1
+        assert dry["counts"]["crawl_failed_stale_pending"] == 1
         assert s.get(SpineJob, ids["spine"]).status == "running"
         assert s.get(CrawlJob, ids["crawl"]).status == "running"
         assert s.get(OnDemandJob, ids["ondemand"]).status == "running"
@@ -720,6 +721,7 @@ def test_jobs_maintenance_dry_run_and_apply(monkeypatch):
         assert applied["applied"] is True
         assert applied["counts"]["spine_requeued"] == 1
         assert applied["counts"]["crawl_failed_timeout"] == 1
+        assert applied["counts"]["crawl_failed_stale_pending"] == 1
         assert applied["counts"]["ondemand_requeued"] == 1
         assert enqueued == [ids["ondemand"]]
         assert s.query(AdminAuditLog).count() == before_audit + 1
@@ -738,7 +740,8 @@ def test_jobs_maintenance_dry_run_and_apply(monkeypatch):
         assert crawl_row.failure_code == "job_timeout"
         assert failure is not None
         assert failure.code == "job_timeout"
-        assert pending_row.status == "pending"
+        assert pending_row.status == "failed"
+        assert pending_row.failure_code == "queue_stalled"
         assert ondemand_row.status == "queued"
     finally:
         s.close()

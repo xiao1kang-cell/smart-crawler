@@ -7,6 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.api.admin_spine import (
+    AOSEN_DEFERRED_SITES,
     _field_fix_template_payload,
     _product_quality_issues,
     _promotion_template_payload,
@@ -20,6 +21,7 @@ from app.api.admin_spine import (
     _validate_sku_target_rows,
     admin_aosen_acceptance_action_plan,
     admin_aosen_field_quality_acceptance,
+    admin_analytics_recompute,
     admin_data_quality_products,
     admin_product_field_fixes_import,
     admin_promotion_signals_import,
@@ -28,9 +30,21 @@ from app.api.admin_spine import (
 )
 from app.api.routes import _build_data_quality_payload
 from app.db import Base
-from app.models import PriceHistory, Product, Promotion, Site, Workspace, WorkspaceSite
+from app.models import (
+    PriceHistory,
+    Product,
+    Promotion,
+    Site,
+    SiteMetric,
+    Workspace,
+    WorkspaceSite,
+)
 
 pytestmark = pytest.mark.unit
+
+
+def _deferred_sites() -> list[str]:
+    return sorted(AOSEN_DEFERRED_SITES)
 
 
 def _session():
@@ -113,6 +127,37 @@ def test_review_history_import_recomputes_sales_from_review_delta():
     assert product.thirty_day_revenue == 4000.0
 
 
+def test_analytics_recompute_refreshes_site_metrics():
+    db = _session()
+    today = date.today()
+    prior = today - timedelta(days=7)
+    db.add(Site(site="homary_us", brand="Homary", country="US"))
+    db.add(Product(site="homary_us", sku="H-1", title="Chair",
+                   product_url="https://example.com/h-1", sale_price=50,
+                   review_count=12))
+    db.add_all([
+        PriceHistory(site="homary_us", sku="H-1", date=prior,
+                     sale_price=50, review_count=10),
+        PriceHistory(site="homary_us", sku="H-1", date=today,
+                     sale_price=50, review_count=12),
+    ])
+    db.commit()
+
+    out = admin_analytics_recompute(
+        {"sites": ["homary_us"]},
+        user="admin",
+        db=db,
+        ip="",
+    )
+
+    metric = db.query(SiteMetric).filter(SiteMetric.site == "homary_us").one()
+
+    assert out["status"] == "recomputed"
+    assert out["by_site"]["homary_us"]["estimated_skus"] == 1
+    assert metric.sales_signal_count == 1
+    assert metric.revenue_signal_count == 1
+
+
 def test_review_history_template_excludes_deferred_sites_by_default():
     db = _session()
     db.add(Workspace(id=1, name="Aosen", slug="aosen", status="active"))
@@ -136,7 +181,7 @@ def test_review_history_template_excludes_deferred_sites_by_default():
 
     out = _review_history_template_payload(db, limit=10)
 
-    assert out["deferred_sites"] == ["vidaxl_ca", "vidaxl_us"]
+    assert out["deferred_sites"] == _deferred_sites()
     assert [item["site"] for item in out["items"]] == ["homary_us"]
     assert out["items"][0]["current_review_count"] == 12
 
@@ -217,7 +262,7 @@ def test_sales_template_excludes_deferred_vidaxl_sites_by_default():
     assert sites == {"homary_us"}
     assert out["total_count"] == 1
     assert out["limit"] == 5000
-    assert out["deferred_sites"] == ["vidaxl_ca", "vidaxl_us"]
+    assert out["deferred_sites"] == _deferred_sites()
 
 
 def test_promotion_template_excludes_deferred_vidaxl_sites_by_default():
@@ -249,7 +294,7 @@ def test_promotion_template_excludes_deferred_vidaxl_sites_by_default():
     assert sites == {"homary_us"}
     assert out["total_count"] == 1
     assert out["limit"] == 1
-    assert out["deferred_sites"] == ["vidaxl_ca", "vidaxl_us"]
+    assert out["deferred_sites"] == _deferred_sites()
 
 
 def test_signal_templates_can_skip_expensive_total_count_for_previews():
@@ -302,7 +347,7 @@ def test_field_fix_template_excludes_deferred_sites_and_flags_bad_fields():
 
     out = _field_fix_template_payload(db, limit=10)
 
-    assert out["deferred_sites"] == ["vidaxl_ca", "vidaxl_us"]
+    assert out["deferred_sites"] == _deferred_sites()
     assert [item["site"] for item in out["items"]] == ["homary_us"]
     assert "title_weak" in out["items"][0]["note"]
     assert "category_missing" in out["items"][0]["note"]
@@ -317,7 +362,13 @@ def test_product_field_fixes_import_updates_product_and_acceptance():
     db.add(Product(site="homary_us", sku="H-1", title="H-1",
                    product_url="https://example.com/h-1", sale_price=0,
                    currency="", category_path="", image_urls=[],
-                   thirty_day_sales=1, thirty_day_revenue=50))
+                   review_count=12, thirty_day_sales=1, thirty_day_revenue=50))
+    db.add_all([
+        PriceHistory(site="homary_us", sku="H-1", date=date(2026, 6, 1),
+                     sale_price=50, review_count=10),
+        PriceHistory(site="homary_us", sku="H-1", date=date(2026, 6, 28),
+                     sale_price=50, review_count=12),
+    ])
     db.add(Promotion(site="homary_us", sku="H-1",
                      promotion_type="coupon", promotion_name="Coupon"))
     db.commit()
@@ -383,6 +434,29 @@ def test_field_quality_flags_missing_category_and_image():
     assert out["summary"]["missing_images"] == 1
     assert "category_missing" in _product_quality_issues(product)
     assert "image_missing" in _product_quality_issues(product)
+
+
+def test_field_quality_does_not_require_commerce_fields_for_inactive_products():
+    from app.api.admin_spine import _product_quality_issues
+
+    db = _session()
+    site = Site(site="homary_us", brand="Homary", country="US")
+    db.add(site)
+    product = Product(site="homary_us", sku="H-3", title="Retired Chair",
+                      product_url="https://example.com/h-3",
+                      sale_price=None, original_price=None, currency="USD",
+                      category_path="Outdoor", image_urls=[],
+                      status="out_of_stock", review_count=0)
+    db.add(product)
+    db.commit()
+
+    out = _build_data_quality_payload(db, [site])
+    row = out["items"][0]
+
+    assert "price_missing" not in row["issues"]
+    assert "image_missing" not in row["issues"]
+    assert "price_missing" not in _product_quality_issues(product)
+    assert "image_missing" not in _product_quality_issues(product)
 
 
 def test_data_quality_products_lists_skus_with_insufficient_review_history():
@@ -453,11 +527,17 @@ def test_aosen_acceptance_separates_promotion_refresh_from_business_data():
         Product(site="promo_gap_us", sku="P-1", title="Complete Promo Product",
                 product_url="https://example.com/p-1", sale_price=50,
                 currency="USD", category_path="Outdoor", image_urls=["p.jpg"],
-                thirty_day_sales=1, thirty_day_revenue=50),
+                review_count=12, thirty_day_sales=1, thirty_day_revenue=50),
         Product(site="sales_gap_us", sku="S-1", title="Complete Sales Product",
                 product_url="https://example.com/s-1", sale_price=50,
                 currency="USD", category_path="Outdoor", image_urls=["s.jpg"],
                 review_count=12),
+    ])
+    db.add_all([
+        PriceHistory(site="promo_gap_us", sku="P-1", date=date(2026, 6, 1),
+                     sale_price=50, review_count=10),
+        PriceHistory(site="promo_gap_us", sku="P-1", date=date(2026, 6, 28),
+                     sale_price=50, review_count=12),
     ])
     db.add(Promotion(site="sales_gap_us", sku="S-1",
                      promotion_type="coupon", promotion_name="Summer coupon"))
@@ -474,6 +554,36 @@ def test_aosen_acceptance_separates_promotion_refresh_from_business_data():
     assert out["summary"]["needs_business_data"] == 1
 
 
+def test_aosen_acceptance_treats_flat_review_history_as_zero_sales_signal():
+    db = _session()
+    db.add(Workspace(id=1, name="Aosen", slug="aosen", status="active"))
+    db.add(Site(site="flat_history_us", brand="FlatHistory", country="US"))
+    db.add(WorkspaceSite(workspace_id=1, site="flat_history_us",
+                         enabled=True, hidden=False))
+    db.add(Product(site="flat_history_us", sku="FH-1",
+                   title="Complete Flat History Product",
+                   product_url="https://example.com/fh-1", sale_price=50,
+                   currency="USD", category_path="Outdoor", image_urls=["fh.jpg"],
+                   review_count=12, thirty_day_sales=0, thirty_day_revenue=0))
+    db.add_all([
+        PriceHistory(site="flat_history_us", sku="FH-1", date=date(2026, 6, 1),
+                     sale_price=50, review_count=12),
+        PriceHistory(site="flat_history_us", sku="FH-1", date=date(2026, 6, 28),
+                     sale_price=50, review_count=12),
+    ])
+    db.add(Promotion(site="flat_history_us", sku="FH-1",
+                     promotion_type="coupon", promotion_name="Flat coupon"))
+    db.commit()
+
+    out = admin_aosen_field_quality_acceptance(user="admin", db=db)
+    item = out["items"][0]
+
+    assert item["status"] == "pass"
+    assert "sales_missing" not in item["issues"]
+    assert "revenue_missing" not in item["issues"]
+    assert out["summary"]["pass"] == 1
+
+
 def test_aosen_acceptance_uses_lightweight_metrics_path(monkeypatch):
     db = _session()
     db.add(Workspace(id=1, name="Aosen", slug="aosen", status="active"))
@@ -483,7 +593,13 @@ def test_aosen_acceptance_uses_lightweight_metrics_path(monkeypatch):
     db.add(Product(site="complete_us", sku="C-1", title="Complete Product",
                    product_url="https://example.com/c-1", sale_price=50,
                    currency="USD", category_path="Outdoor", image_urls=["c.jpg"],
-                   thirty_day_sales=1, thirty_day_revenue=50))
+                   review_count=12, thirty_day_sales=1, thirty_day_revenue=50))
+    db.add_all([
+        PriceHistory(site="complete_us", sku="C-1", date=date(2026, 6, 1),
+                     sale_price=50, review_count=10),
+        PriceHistory(site="complete_us", sku="C-1", date=date(2026, 6, 28),
+                     sale_price=50, review_count=12),
+    ])
     db.add(Promotion(site="complete_us", sku="C-1",
                      promotion_type="coupon", promotion_name="Complete coupon"))
     db.commit()
@@ -519,7 +635,7 @@ def test_aosen_acceptance_treats_empty_and_low_coverage_sites_as_field_failures(
                    title="Coverage Gap Product",
                    product_url="https://example.com/cg-1", sale_price=50,
                    currency="USD", category_path="Outdoor", image_urls=["cg.jpg"],
-                   thirty_day_sales=1, thirty_day_revenue=50))
+                   review_count=12, thirty_day_sales=1, thirty_day_revenue=50))
     db.add(Promotion(site="coverage_gap_us", sku="CG-1",
                      promotion_type="coupon", promotion_name="Coverage coupon"))
     db.commit()
@@ -567,7 +683,7 @@ def test_sku_target_template_excludes_deferred_and_import_updates_workspace_site
 
     template = _sku_target_template_payload(db, limit=10)
 
-    assert template["deferred_sites"] == ["vidaxl_ca", "vidaxl_us"]
+    assert template["deferred_sites"] == _deferred_sites()
     assert [item["site"] for item in template["items"]] == ["coverage_gap_us"]
     assert template["items"][0]["current_target_sku_count"] == 10
     assert template["items"][0]["observed_sku_count"] == 1
@@ -624,7 +740,7 @@ def test_aosen_action_plan_groups_gaps_and_excludes_deferred_sites():
         Product(site="promo_gap_us", sku="P-1", title="Complete Promo Product",
                 product_url="https://example.com/p-1", sale_price=50,
                 currency="USD", category_path="Outdoor", image_urls=["p.jpg"],
-                thirty_day_sales=1, thirty_day_revenue=50),
+                review_count=12, thirty_day_sales=1, thirty_day_revenue=50),
         Product(site="sales_gap_us", sku="S-1", title="Complete Sales Product",
                 product_url="https://example.com/s-1", sale_price=50,
                 currency="USD", category_path="Outdoor", image_urls=["s.jpg"],
@@ -632,6 +748,12 @@ def test_aosen_action_plan_groups_gaps_and_excludes_deferred_sites():
         Product(site="vidaxl_us", sku="V-1", title="Deferred Product",
                 product_url="https://example.com/v-1", sale_price=50,
                 currency="USD", category_path="Outdoor", image_urls=["v.jpg"]),
+    ])
+    db.add_all([
+        PriceHistory(site="promo_gap_us", sku="P-1", date=date(2026, 6, 1),
+                     sale_price=50, review_count=10),
+        PriceHistory(site="promo_gap_us", sku="P-1", date=date(2026, 6, 28),
+                     sale_price=50, review_count=12),
     ])
     db.add(Promotion(site="field_gap_us", sku="F-1",
                      promotion_type="coupon", promotion_name="Field coupon"))

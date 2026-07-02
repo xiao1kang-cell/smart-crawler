@@ -293,3 +293,87 @@ def test_shopify_new_handle_label(monkeypatch):
     # test-chair is in the new collection
     assert row["is_new"] is True
     assert row["label"] == "NEW"
+
+
+def test_shopify_category_fallback_covers_songmics_de_gaps():
+    from app.crawlers.shopify import _category_from_shopify_fallback
+
+    cases = {
+        "geschenkkarte": "Gift Cards",
+        "songmics-grillwagen-schwarz-gbq42": "Garden & Outdoor/Grills",
+        "songmics-foliengewaechshaus-gruen-gwp16": (
+            "Garden & Outdoor/Greenhouses"
+        ),
+        "songmics-wasserfeste-schutzhuelle-fuer-strandkoerbe-gfc135": (
+            "Garden & Outdoor/Covers"
+        ),
+        "waschbeckenunterschrank-toolless-technologie": "Bathroom",
+        "songmics-dimmbares-nachtlichttotoro-fsl02": "Lighting",
+        "songmics-spieluhr-mit-magischem-einhorn-pink-jmc008": (
+            "Home Decor/Music Boxes"
+        ),
+        "songmics-caja-de-musica-jmc22": "Home Decor/Music Boxes",
+        "songmics-voile-dombrage-hydrofuge-gsh23": (
+            "Garden & Outdoor/Shade Sails"
+        ),
+        "songmics-set-di-2-sgabelli-da-bar-b34ljb073": (
+            "Furniture/Chairs & Seating"
+        ),
+        "songmics-double-rubbish-bin-b34ukltb60": "Trash Cans",
+        "songmics-fabric-chest-of-drawers-b34uklts137": "Storage Furniture",
+        "gift-card": "Gift Cards",
+        "songmics-schaufensterpuppe-schwarz-mdf007": "Mannequins",
+        "songmics-walizka-podrozna-z-twarda-skorupa-i-zamkiem-tsa": "Luggage",
+        "vasagle-bettgestell-mit-schwebendem-effekt-und-led-beleuchtung": (
+            "Furniture/Bedroom"
+        ),
+        "songmics-hantelbank-schwarz-rot-swb803": "Sports & Fitness",
+        "yaheetech-folding-camping-bed": "Camping",
+        "yaheetech-av-component-stand": "Furniture/TV Stands",
+        "songmics-songmics-folding-storage-ottoman-bench-ulsf028": (
+            "Furniture/Storage & Seating"
+        ),
+    }
+
+    for handle, category in cases.items():
+        assert _category_from_shopify_fallback({"handle": handle}) == category
+
+
+def test_shopify_pdp_details_use_meta_image_fallback():
+    from selectolax.parser import HTMLParser
+
+    from app.crawlers.shopify import _extract_shopify_pdp_details
+
+    html = """
+    <html><head>
+      <meta property="og:image"
+            content="http://www.songmics.com/cdn/shop/files/product.webp?v=1">
+    </head><body><h1>Product</h1></body></html>
+    """
+
+    details = _extract_shopify_pdp_details(html, HTMLParser(html))
+
+    assert details["images"] == [
+        "http://www.songmics.com/cdn/shop/files/product.webp?v=1"
+    ]
+
+
+def test_shopify_pdp_details_ignore_meta_when_product_json_has_no_images():
+    from selectolax.parser import HTMLParser
+
+    from app.crawlers.shopify import _extract_shopify_pdp_details
+
+    html = """
+    <html><head>
+      <meta property="og:image"
+            content="http://www.songmics.com/cdn/shop/files/default.webp?v=1">
+    </head><body>
+      <script type="application/json">
+        {"images":[],"featured_image":null}
+      </script>
+    </body></html>
+    """
+
+    details = _extract_shopify_pdp_details(html, HTMLParser(html))
+
+    assert "images" not in details

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from .currency import currency_for_site
 from .models import CrawlUrl, PriceHistory, Product, Promotion, SiteMetric, Trend
+from .product_quality import product_quality_filter, salable_product_filter
 
 
 METRIC_KEYS = (
@@ -172,21 +173,24 @@ def _product_metrics(db: Session, sites: list[str]) -> dict[str, dict]:
         func.count(Product.id),
         func.count(func.distinct(func.coalesce(Product.spu, Product.sku))),
         func.count(Product.id).filter(
-            func.coalesce(Product.sale_price, Product.original_price, 0) > 0
+            salable_product_filter(),
+            func.coalesce(Product.sale_price, Product.original_price, 0) > 0,
         ),
+        func.count(Product.id).filter(salable_product_filter()),
         func.count(Product.id).filter(func.coalesce(Product.thirty_day_sales, 0) > 0),
         func.count(Product.id).filter(func.coalesce(Product.thirty_day_revenue, 0) > 0),
-        func.count(Product.id).filter(func.coalesce(Product.review_count, 0) > 0),
+        func.count(Product.id).filter(Product.review_count.isnot(None)),
         func.count(Product.id).filter(weak_title_expr),
         func.coalesce(func.sum(Product.thirty_day_sales), 0),
         func.coalesce(func.sum(Product.thirty_day_revenue), 0.0),
         func.max(Product.updated_time),
-    ).filter(Product.site.in_(sites)).group_by(Product.site).all())
+    ).filter(Product.site.in_(sites), product_quality_filter()).group_by(Product.site).all())
     return {
         site: {
             "sku_count": sku_count,
             "product_listing_count": product_listing_count,
             "price_signal_count": price_signal_count,
+            "salable_product_count": salable_product_count,
             "sales_signal_count": sales_signal_count,
             "revenue_signal_count": revenue_signal_count,
             "review_signal_count": review_signal_count,
@@ -196,6 +200,7 @@ def _product_metrics(db: Session, sites: list[str]) -> dict[str, dict]:
             "last_product_updated": last_product_updated,
         }
         for (site, sku_count, product_listing_count, price_signal_count,
+             salable_product_count,
              sales_signal_count, revenue_signal_count, review_signal_count,
              weak_title_count, thirty_day_sales, thirty_day_revenue,
              last_product_updated) in rows

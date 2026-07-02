@@ -19,7 +19,21 @@ from typing import Any
 
 
 BASE_URL = os.environ.get("SMARTCRAWLER_BASE_URL", "http://127.0.0.1:8077").rstrip("/")
-DEFERRED_SITES = {"vidaxl_us", "vidaxl_ca"}
+REQUEST_TIMEOUT = int(os.environ.get("SMARTCRAWLER_ACCEPTANCE_TIMEOUT", "180"))
+DEFAULT_USER_AGENT = os.environ.get(
+    "SMARTCRAWLER_USER_AGENT",
+    (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
+    ),
+)
+DEFERRED_SITES = {
+    "vidaxl_us",
+    "vidaxl_ca",
+    "sephora_fr_maquillage",
+    "costway_ca",
+    "costway_us",
+}
 FOCUS_PREFIXES = ("homary", "vidaxl", "vonhaus")
 REQUIRED_TEMPLATES = {
     "product_field_fixes",
@@ -46,9 +60,9 @@ def load_env() -> None:
 
 def request(method: str, path: str, *, token: str = "",
             body: dict[str, Any] | None = None,
-            timeout: int = 90) -> tuple[int, Any]:
+            timeout: int | None = None) -> tuple[int, Any]:
     data = None
-    headers: dict[str, str] = {}
+    headers: dict[str, str] = {"User-Agent": DEFAULT_USER_AGENT}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     if body is not None:
@@ -57,7 +71,7 @@ def request(method: str, path: str, *, token: str = "",
     url = BASE_URL + path
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout or REQUEST_TIMEOUT) as resp:
             raw = resp.read().decode()
             return resp.status, json.loads(raw) if raw else None
     except urllib.error.HTTPError as exc:
@@ -93,11 +107,16 @@ def login() -> str:
     return str(body["token"])
 
 
-def fallback_from_data_quality(payload: dict[str, Any]) -> dict[str, Any]:
+def fallback_from_data_quality(
+    payload: dict[str, Any],
+    *,
+    exclude_deferred: bool = False,
+) -> dict[str, Any]:
     items = payload.get("items") or []
     summary = payload.get("summary") or {}
     hard_issues = {
         "price_missing",
+        "review_count_missing",
         "currency_missing",
         "currency_mismatch",
         "sku_deviation_high",
@@ -123,7 +142,7 @@ def fallback_from_data_quality(payload: dict[str, Any]) -> dict[str, Any]:
     focus_items = []
     for row in items:
         site = str(row.get("site") or "")
-        if site in DEFERRED_SITES:
+        if exclude_deferred and site in DEFERRED_SITES:
             continue
         issues = set(row.get("issues") or [])
         for issue in issues:
@@ -167,12 +186,13 @@ def _site_matches_scope(
     *,
     prefixes: tuple[str, ...],
     exact_sites: set[str],
+    exclude_deferred: bool = False,
 ) -> bool:
-    if site in DEFERRED_SITES:
+    if exclude_deferred and site in DEFERRED_SITES:
         return False
     if exact_sites or prefixes:
         return site in exact_sites or site.startswith(prefixes)
-    return site.startswith(FOCUS_PREFIXES)
+    return True
 
 
 def _scoped_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -189,6 +209,7 @@ def _scoped_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         "coverage_low": "coverage_low",
         "title_weak": "title_weak",
         "price_missing": "price_missing",
+        "review_count_missing": "review_count_missing",
         "category_missing": "category_missing",
         "image_missing": "image_missing",
         "sku_deviation_high": "sku_deviation_high",
@@ -221,6 +242,7 @@ def _focus_items(
     *,
     prefixes: tuple[str, ...] = (),
     exact_sites: set[str] | None = None,
+    exclude_deferred: bool = False,
 ) -> list[dict[str, Any]]:
     exact_sites = exact_sites or set()
     return sorted(
@@ -232,6 +254,7 @@ def _focus_items(
                     str(item.get("site") or ""),
                     prefixes=prefixes,
                     exact_sites=exact_sites,
+                    exclude_deferred=exclude_deferred,
                 )
             )
         ],
@@ -245,6 +268,7 @@ def acceptance_gate(
     *,
     site_prefixes: tuple[str, ...] = (),
     exact_sites: set[str] | None = None,
+    exclude_deferred: bool = False,
 ) -> dict[str, Any]:
     exact_sites = exact_sites or set()
     summary = action_plan.get("summary") if isinstance(action_plan, dict) else {}
@@ -266,7 +290,12 @@ def acceptance_gate(
                     item for item in group.get("items") or []
                     if isinstance(item, dict)
                 ])
-    focus_items = _focus_items(items, prefixes=site_prefixes, exact_sites=exact_sites)
+    focus_items = _focus_items(
+        items,
+        prefixes=site_prefixes,
+        exact_sites=exact_sites,
+        exclude_deferred=exclude_deferred,
+    )
     if site_prefixes or exact_sites:
         summary = _scoped_summary(focus_items)
     focus_promotion_missing = [
@@ -312,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read-only Aosen production acceptance check")
     parser.add_argument("--base-url", default="")
     parser.add_argument("--tenant", default="",
-                        help="workspace/tenant id to scope the online acceptance check")
+                        help="numeric workspace/tenant id to scope the online acceptance check")
     parser.add_argument("--site", action="append", default=[],
                         help="exact site key to include in the scoped acceptance check")
     parser.add_argument("--site-prefix", action="append", default=[],
@@ -320,6 +349,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--template-limit", type=int, default=3)
     parser.add_argument("--strict", action="store_true",
                         help="fail unless production Aosen acceptance is ready")
+    parser.add_argument("--exclude-deferred", action="store_true",
+                        help="exclude deferred sites from the acceptance scope")
     args = parser.parse_args(argv)
     load_env()
     BASE_URL = str(args.base_url or os.environ.get("SMARTCRAWLER_BASE_URL") or BASE_URL).rstrip("/")
@@ -328,15 +359,17 @@ def main(argv: list[str] | None = None) -> int:
     site_prefixes = tuple(str(prefix).strip() for prefix in args.site_prefix if str(prefix).strip())
     query = {
         "template_limit": str(max(1, min(args.template_limit, 5000))),
+        "include_deferred": "0" if args.exclude_deferred else "1",
     }
     if str(args.tenant).strip():
         query["tenant"] = str(args.tenant).strip()
     path = "/api/admin/spine/acceptance/aosen/action-plan?" + urllib.parse.urlencode(query)
-    status, body = request("GET", path, token=token, timeout=90)
+    status, body = request("GET", path, token=token, timeout=REQUEST_TIMEOUT)
     if status == 200 and isinstance(body, dict):
         field_query = {}
         if str(args.tenant).strip():
             field_query["tenant"] = str(args.tenant).strip()
+        field_query["include_deferred"] = "0" if args.exclude_deferred else "1"
         field_path = "/api/admin/spine/acceptance/aosen/field-quality"
         if field_query:
             field_path += "?" + urllib.parse.urlencode(field_query)
@@ -344,13 +377,14 @@ def main(argv: list[str] | None = None) -> int:
             "GET",
             field_path,
             token=token,
-            timeout=90,
+            timeout=REQUEST_TIMEOUT,
         )
         gate = acceptance_gate(
             body,
             field_quality if field_status == 200 and isinstance(field_quality, dict) else None,
             site_prefixes=site_prefixes,
             exact_sites=exact_sites,
+            exclude_deferred=bool(args.exclude_deferred),
         )
         print(json.dumps({
             "status": "action_plan",
@@ -359,6 +393,7 @@ def main(argv: list[str] | None = None) -> int:
             "scope": {
                 "sites": sorted(exact_sites),
                 "site_prefixes": list(site_prefixes),
+                "exclude_deferred": bool(args.exclude_deferred),
             },
             "strict": bool(args.strict),
             "field_quality_status": field_status,
@@ -371,7 +406,14 @@ def main(argv: list[str] | None = None) -> int:
         quality_path += "?" + urllib.parse.urlencode({"tenant": str(args.tenant).strip()})
     quality_status, quality = request("GET", quality_path, token=token, timeout=120)
     if quality_status == 200 and isinstance(quality, dict):
-        print(json.dumps(fallback_from_data_quality(quality), ensure_ascii=False, indent=2))
+        print(json.dumps(
+            fallback_from_data_quality(
+                quality,
+                exclude_deferred=bool(args.exclude_deferred),
+            ),
+            ensure_ascii=False,
+            indent=2,
+        ))
         return 2
     print(json.dumps({
         "status": "failed",

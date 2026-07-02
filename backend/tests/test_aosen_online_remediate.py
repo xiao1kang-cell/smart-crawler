@@ -102,7 +102,7 @@ def test_action_plan_scopes_request_to_tenant(monkeypatch):
     assert mod.action_plan("tok", 80, tenant="1") == {"status": "ready"}
 
     assert paths == [
-        "/api/admin/spine/acceptance/aosen/action-plan?template_limit=80&tenant=1"
+        "/api/admin/spine/acceptance/aosen/action-plan?template_limit=80&include_deferred=1&tenant=1"
     ]
 
 
@@ -144,6 +144,57 @@ def test_filter_plan_scope_keeps_only_matching_sites():
     assert "homary_us" in csv_text
     assert "amazon_us_beauty" not in csv_text
     assert "vidaxl_us" not in csv_text
+
+
+def test_product_field_issues_flags_missing_review_count():
+    mod = _module()
+
+    issues = mod.product_field_issues({
+        "site": "homary_us",
+        "sku": "H-1",
+        "title": "Good Product",
+        "category_path": "Outdoor",
+        "image_urls": ["https://example.com/p.jpg"],
+        "sale_price": "12.99",
+        "review_count": "",
+    })
+
+    assert issues == ["review_count_missing"]
+
+
+def test_product_field_issues_accepts_zero_review_count_as_present():
+    mod = _module()
+
+    issues = mod.product_field_issues({
+        "site": "homary_us",
+        "sku": "H-1",
+        "title": "Good Product",
+        "category_path": "Outdoor",
+        "image_urls": ["https://example.com/p.jpg"],
+        "sale_price": "12.99",
+        "review_count": "0",
+    })
+
+    assert issues == []
+
+
+def test_field_rerun_sites_selects_required_field_gaps():
+    mod = _module()
+
+    sites = mod.field_rerun_sites({
+        "groups": {
+            "field_fixes": {
+                "items": [
+                    {"site": "homary_us", "issues": ["review_count_missing"]},
+                    {"site": "costway_es", "issues": ["price_missing"]},
+                    {"site": "currency_us", "issues": ["currency_missing"]},
+                    {"site": "image_us", "issues": ["image_missing"]},
+                ],
+            },
+        },
+    })
+
+    assert sites == ["homary_us", "costway_es"]
 
 
 def test_data_quality_fallback_can_skip_slow_product_samples(monkeypatch):

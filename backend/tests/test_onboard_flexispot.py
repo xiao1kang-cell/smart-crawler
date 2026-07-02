@@ -157,3 +157,100 @@ def test_flexispot_no_token_returns_early(monkeypatch):
     # token 为 None → success 判定为 False → browser_opens 不增
     assert crawler.counter.browser_opens == 0
     assert len(result.products) == 0
+
+
+def test_flexispot_category_fallback_covers_desktops_and_recliners():
+    from app.crawlers.flexispot import FlexispotCrawler
+
+    assert (
+        FlexispotCrawler._category_from_slug(
+            "home-office-100-60cmworktop",
+            "Home Office 100x60cm Worktop",
+        )
+        == "Desktops & Worktops"
+    )
+    assert (
+        FlexispotCrawler._category_from_slug("l-shaped-desktop", "L shaped desktop")
+        == "Desktops & Worktops"
+    )
+    assert (
+        FlexispotCrawler._category_from_slug(
+            "power-swivel-rocker-recliner-with-waffle-back",
+            "Power Swivel Rocker Recliner with Waffle Back",
+        )
+        == "Chairs"
+    )
+
+
+def test_flexispot_category_fallback_covers_polish_gaps():
+    from app.crawlers.flexispot import FlexispotCrawler
+
+    cases = {
+        ("blat-w-ksztalcie-litery-l", "Blat w Kształcie Litery L"): (
+            "Desktops & Worktops"
+        ),
+        ("biurko-z-regulacja-wysokosci-e7", "Biurko Stojące Premium"): "Desks",
+        ("fotel-relaksacyjny-xp1", "Relaksujący Fotel z Funkcją Rozkładania"): (
+            "Chairs"
+        ),
+        ("prane-dywany-z-miekkiego-polaru", "Prane dywany z miękkiego polaru"): (
+            "Rugs"
+        ),
+        ("zestaw-do-zarzadzania-okablowaniem", "Zestaw do zarzadzania okablowaniem"): (
+            "Standing Desks/Desk Bundles"
+        ),
+    }
+
+    for (slug, title), category in cases.items():
+        assert FlexispotCrawler._category_from_slug(slug, title) == category
+
+
+def test_flexispot_category_fallback_covers_nl_and_ca_gaps():
+    from app.crawlers.flexispot import FlexispotCrawler
+
+    cases = {
+        ("cable-management-tray-cmp051", "CMP051-Black"): "Cable Management",
+        ("standing-desk-anti-fatigue-mat-mt1", "MT1B"): "Floor Mats",
+        ("clamp-power-with-usb-ps015", "PS015B"): "Power Accessories",
+        ("slim-under-desk-storage-drawer-s07", "S07L-Black"): "Desk Storage",
+        ("kleurrijke-metalen-bijzettafel", "FH2BG-40"): "Tables/Side Tables",
+        ("alles-in-een-zit-sta-bureau-e7-flow", "Ultiem zit-sta bureau"): (
+            "Standing Desks/Desk Systems"
+        ),
+        ("verstelbare-massief-houten-bureaus", "Zit-sta bureau met bureaublad"): (
+            "Desktops & Worktops"
+        ),
+    }
+
+    for (slug, title), category in cases.items():
+        assert FlexispotCrawler._category_from_slug(slug, title) == category
+
+
+def test_flexispot_category_fallback_covers_multilingual_batch_gaps():
+    from app.crawlers.flexispot import FlexispotCrawler
+
+    cases = {
+        ("multifunktionale-belueftete-telefonbox-p1s", "Telefonbox P1S"): (
+            "Office Pods"
+        ),
+        ("cabina-insonorizada-m1", "Cabina Insonorizada M1"): "Office Pods",
+        ("cabine-acoustique-p1f", "Cabine acoustique pour 1 personne"): "Office Pods",
+        ("cabine-telefoniche-da-ufficio-p1s", "Cabine Telefoniche da Ufficio"): (
+            "Office Pods"
+        ),
+        ("set-completo-tutto-in-uno-per-home-office", "E7LB-Set1-EU"): (
+            "Standing Desks/Desk Systems"
+        ),
+        ("set-todo-en-uno-para-oficina-en-casa", "E7LB-Set1-EU"): (
+            "Standing Desks/Desk Systems"
+        ),
+        ("tabla-equilibrio-bb01", "BB01-EU"): "Balance Boards",
+        ("bandeja-para-teclado-ergonomico-kt1", "KT1B"): "Keyboard Trays",
+        ("ruote-per-sedia-da-ufficio", "W4B"): "Chairs",
+        ("l-shaped-standing-desk-with-storage", "L-Shaped Standing Desk with Storage"): (
+            "Desk Storage"
+        ),
+    }
+
+    for (slug, title), category in cases.items():
+        assert FlexispotCrawler._category_from_slug(slug, title) == category

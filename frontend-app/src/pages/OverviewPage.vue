@@ -17,7 +17,7 @@ const coverage = ref<Record<string, any>[]>([])
 const coverageSummary = ref<Record<string, any>>({})
 const jobs = ref<Record<string, any>[]>([])
 const proxy = ref<Record<string, any> | null>(null)
-const jobTrigger = useJobTrigger({ onDone: () => load() })
+const jobTrigger = useJobTrigger({ onDone: () => load(true) })
 
 const healthySites = computed(() => Number(coverageSummary.value.healthy_count ?? coverage.value.filter((x) => normalizedPct(x) >= 50).length))
 const warningSites = computed(() => Number(coverageSummary.value.warning_count ?? coverage.value.filter((x) => {
@@ -53,13 +53,13 @@ function currentCount(row: Record<string, any>) {
   return Number(row.current ?? row.sku_count ?? row.products ?? row.count ?? 0)
 }
 
-async function load() {
+async function load(force = false) {
   loading.value = true
   error.value = ''
   try {
     const [siteData, coverageData, jobData, proxyData] = await Promise.all([
       listSites(),
-      listCoverage(),
+      listCoverage({ force }),
       listJobs({ limit: 60 }),
       proxyStatus().catch(() => null)
     ])

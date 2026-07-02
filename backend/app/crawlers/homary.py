@@ -326,6 +326,8 @@ class HomaryCrawler(BaseCrawler):
         category_path = "/".join(path[:3]) or None
         if not category_path:
             category_path = self._jsonld_breadcrumb(tree) or self._jsonld_category(tree)
+        if not category_path:
+            category_path = self._category_from_title(title)
         if not sale and not category_path:
             return None
 
@@ -523,6 +525,22 @@ class HomaryCrawler(BaseCrawler):
                 name = value.get("name")
                 if isinstance(name, str) and name.strip():
                     return name.strip()
+        return None
+
+    @staticmethod
+    def _category_from_title(title: str | None) -> str | None:
+        text = (title or "").lower()
+        rules = (
+            (r"bulb|light bulb|lamp|lighting|chandelier|pendant|sconce", "Lighting"),
+            (r"sofa|chair|stool|bench|ottoman", "Furniture/Chairs & Seating"),
+            (r"bed|mattress|nightstand|dresser", "Bedroom"),
+            (r"desk|office", "Office Furniture"),
+            (r"table", "Furniture/Tables"),
+            (r"mirror|decor|wall art", "Home Decor"),
+        )
+        for pattern, category in rules:
+            if re.search(pattern, text, re.I):
+                return category
         return None
 
     @classmethod

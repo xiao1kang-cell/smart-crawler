@@ -12,7 +12,7 @@ const quality = ref<Record<string, any>[]>([])
 const qualitySummary = ref<Record<string, any>>({})
 const loading = ref(false)
 const error = ref('')
-const jobTrigger = useJobTrigger({ onDone: () => load() })
+const jobTrigger = useJobTrigger({ onDone: () => load(true) })
 const batchBusy = ref(false)
 const batchMessage = ref('')
 
@@ -52,11 +52,14 @@ const qualityBySite = computed(() => new Map(quality.value.map((row) => [String(
 const rerunCandidateRows = computed(() => sortedRows.value.filter((row) => isRerunCandidate(row)))
 const rerunCandidateSites = computed(() => Array.from(new Set(rerunCandidateRows.value.map(siteKey).filter(Boolean))))
 
-async function load() {
+async function load(force = false) {
   loading.value = true
   error.value = ''
   try {
-    const [data, qualityData] = await Promise.all([listCoverage(), dataQuality()])
+    const [data, qualityData] = await Promise.all([
+      listCoverage({ force }),
+      dataQuality({ force }),
+    ])
     rows.value = asList(data, ['sites', 'items', 'coverage'])
     summary.value = data?.summary || {}
     quality.value = asList(qualityData, ['items'])

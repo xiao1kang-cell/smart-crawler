@@ -177,8 +177,13 @@ class FlexispotCrawler(BaseCrawler):
         spu = str(ir.get("id") or ir.get("itemId") or slug)
         main_img = ir.get("mainImage")
         cats = data.get("frontCategoryList") or []
-        cat_path = "/".join(c.get("name") for c in cats
-                            if isinstance(c, dict) and c.get("name")) or None
+        cat_path = (
+            "/".join(c.get("name") for c in cats
+                     if isinstance(c, dict) and c.get("name"))
+            or self._category_from_slug(slug, item_name)
+        )
+        review_count = self._review_count(data, ir)
+        rating = self._rating(data, ir)
 
         rows = []
         for sku in data.get("shopSkuList") or []:
@@ -199,6 +204,8 @@ class FlexispotCrawler(BaseCrawler):
                 "sale_price": sale,
                 "original_price": orig,
                 "currency": self.currency,
+                "ratings": rating,
+                "review_count": review_count,
                 "status": "out_of_stock" if out else "on_sale",
                 "product_url": f"{self.base}/{slug}",
                 "product_type": ir.get("itemCode"),
@@ -206,3 +213,184 @@ class FlexispotCrawler(BaseCrawler):
                 "brand": self.site.brand,
             })
         return rows
+
+    @staticmethod
+    def _category_from_slug(slug: str, title: str | None = None) -> str | None:
+        text = " ".join(
+            part for part in (
+                (slug or "").replace("-", " "),
+                title or "",
+            )
+            if part
+        ).strip()
+        if not text:
+            return None
+        rules = (
+            ("walking", "Fitness/Walking Pads"),
+            ("treadmill", "Fitness/Walking Pads"),
+            ("sauna", "Saunas"),
+            ("phone booth", "Office Pods"),
+            ("telefonbox", "Office Pods"),
+            ("cabina insonorizada", "Office Pods"),
+            ("cabina acustica", "Office Pods"),
+            ("cabine acoustique", "Office Pods"),
+            ("cabine telefoniche", "Office Pods"),
+            ("pod", "Office Pods"),
+            ("all in one", "Standing Desks/Desk Systems"),
+            ("tutto in uno", "Standing Desks/Desk Systems"),
+            ("todo en uno", "Standing Desks/Desk Systems"),
+            ("wszystko w jednym", "Standing Desks/Desk Systems"),
+            ("alles in een", "Standing Desks/Desk Systems"),
+            ("alles-in-een", "Standing Desks/Desk Systems"),
+            ("geintegreerd", "Standing Desks/Desk Systems"),
+            ("geïntegreerd", "Standing Desks/Desk Systems"),
+            ("system", "Standing Desks/Desk Systems"),
+            ("zasilania", "Standing Desks/Desk Systems"),
+            ("kolomvoeding", "Standing Desks/Desk Systems"),
+            ("bundle", "Standing Desks/Desk Bundles"),
+            ("set", "Standing Desks/Desk Bundles"),
+            ("zestaw", "Standing Desks/Desk Bundles"),
+            ("desktop", "Desktops & Worktops"),
+            ("worktop", "Desktops & Worktops"),
+            ("bureaublad", "Desktops & Worktops"),
+            ("blat", "Desktops & Worktops"),
+            ("blaty", "Desktops & Worktops"),
+            ("side table", "Tables/Side Tables"),
+            ("coffee table", "Tables/Coffee Tables"),
+            ("mesa auxiliar", "Tables/Side Tables"),
+            ("mesa elevable", "Tables/Side Tables"),
+            ("bijzettafel", "Tables/Side Tables"),
+            ("tabla equilibrio", "Balance Boards"),
+            ("balance", "Balance Boards"),
+            ("dywan", "Rugs"),
+            ("mat", "Floor Mats"),
+            ("monitor", "Monitor Mounts"),
+            ("monitora", "Monitor Mounts"),
+            ("keyboard tray", "Keyboard Trays"),
+            ("bandeja para teclado", "Keyboard Trays"),
+            ("cable management", "Cable Management"),
+            ("cable tray", "Cable Management"),
+            ("okablowaniem", "Cable Management"),
+            ("zarzadzania", "Cable Management"),
+            ("zarządzania", "Cable Management"),
+            ("recliner", "Chairs"),
+            ("fotel", "Chairs"),
+            ("stolek", "Chairs"),
+            ("stołek", "Chairs"),
+            ("ruedas", "Chairs"),
+            ("ruote", "Chairs"),
+            ("sedia", "Chairs"),
+            ("chair", "Chairs"),
+            ("power", "Power Accessories"),
+            ("drawer", "Desk Storage"),
+            ("storage", "Desk Storage"),
+            ("desk", "Desks"),
+            ("bureau", "Desks"),
+            ("escritorio", "Desks"),
+            ("scrivania", "Desks"),
+            ("biurko", "Desks"),
+            ("biurka", "Desks"),
+            ("sofa", "Sofas"),
+            ("bed", "Beds"),
+            ("bike", "Exercise Bikes"),
+        )
+        lowered = text.lower()
+        for token, category in rules:
+            if token in lowered:
+                return category
+        return None
+
+    @staticmethod
+    def _review_count(*nodes: dict) -> int | None:
+        keys = ("reviewCount", "review_count", "reviewsCount")
+        for node in nodes:
+            value = FlexispotCrawler._first_value(
+                node,
+                keys,
+                parents=("review", "rating", "comment", "evaluate", "yotpo"),
+            )
+            parsed = FlexispotCrawler._int(value)
+            if parsed is not None:
+                return parsed
+        return None
+
+    @staticmethod
+    def _rating(*nodes: dict) -> float | None:
+        keys = ("ratingValue", "averageRating", "avgRating")
+        for node in nodes:
+            value = FlexispotCrawler._first_value(
+                node,
+                keys,
+                parents=("review", "rating", "comment", "evaluate", "yotpo"),
+            )
+            parsed = FlexispotCrawler._float(value)
+            if parsed is not None:
+                return parsed
+        return None
+
+    @staticmethod
+    def _first_value(
+        node,
+        keys: tuple[str, ...],
+        *,
+        parents: tuple[str, ...] = (),
+        path: tuple[str, ...] = (),
+    ):
+        if not isinstance(node, dict):
+            return None
+        lower = {str(k).lower(): v for k, v in node.items()}
+        for key in keys:
+            if (
+                FlexispotCrawler._path_has_context(path + (key,), parents)
+                and key in node
+                and node[key] not in (None, "", [], {})
+            ):
+                return node[key]
+            value = lower.get(key.lower())
+            if (
+                FlexispotCrawler._path_has_context(path + (key,), parents)
+                and value not in (None, "", [], {})
+            ):
+                return value
+        for child_key, child in node.items():
+            if isinstance(child, dict):
+                value = FlexispotCrawler._first_value(
+                    child,
+                    keys,
+                    parents=parents,
+                    path=path + (str(child_key),),
+                )
+                if value not in (None, "", [], {}):
+                    return value
+        return None
+
+    @staticmethod
+    def _path_has_context(path: tuple[str, ...], tokens: tuple[str, ...]) -> bool:
+        if not tokens:
+            return True
+        text = ".".join(path).lower()
+        return any(token in text for token in tokens)
+
+    @staticmethod
+    def _int(value) -> int | None:
+        if value in (None, ""):
+            return None
+        match = re.search(r"\d[\d,\s]*", str(value))
+        if not match:
+            return None
+        try:
+            return int(match.group().replace(",", "").replace(" ", ""))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _float(value) -> float | None:
+        if value in (None, ""):
+            return None
+        match = re.search(r"\d+(?:[.,]\d+)?", str(value))
+        if not match:
+            return None
+        try:
+            return float(match.group().replace(",", "."))
+        except ValueError:
+            return None

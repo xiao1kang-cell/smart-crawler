@@ -209,7 +209,9 @@ def _latest_error_site_codes(db: Session, allowed: list[str]) -> set[str]:
     )
     rows = (
         db.query(CrawlJob.site)
+        .join(Site, Site.site == CrawlJob.site)
         .join(latest_ids, CrawlJob.id == latest_ids.c.job_id)
+        .filter(or_(Site.track_status.is_(None), Site.track_status != "paused"))
         .filter(or_(
             CrawlJob.status.in_(("failed", "blocked")),
             CrawlJob.failure_code.isnot(None),
@@ -224,9 +226,13 @@ def _apply_tracking_filters(q, search: str | None, market: str | None,
                             *, db: Session | None = None,
                             allowed: list[str] | None = None):
     if search:
-        like = f"%{search.strip()}%"
-        q = q.filter(or_(Site.url.ilike(like), Site.brand.ilike(like),
-                         Site.site.ilike(like)))
+        term = search.strip()
+        if re.fullmatch(r"[A-Za-z]{2}", term):
+            q = q.filter(func.upper(Site.country) == term.upper())
+        else:
+            like = f"%{term}%"
+            q = q.filter(or_(Site.url.ilike(like), Site.brand.ilike(like),
+                             Site.site.ilike(like)))
     if market:
         q = q.filter(func.upper(Site.country) == market.strip().upper())
     if brand:

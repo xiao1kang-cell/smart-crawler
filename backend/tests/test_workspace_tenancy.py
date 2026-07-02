@@ -92,7 +92,9 @@ def _workspace_site(db, workspace: Workspace, site: str, *,
 def _product(db, site: str, sku: str) -> Product:
     row = Product(site=site, brand=site.split("_", 1)[0], sku=sku,
                   title=f"{sku} title", sale_price=10.0,
-                  category_path="Storage", status="on_sale")
+                  category_path="Storage", status="on_sale",
+                  image_urls=["https://example.com/product.jpg"],
+                  review_count=0)
     db.add(row)
     db.flush()
     return row
