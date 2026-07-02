@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>后台登录</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(180deg, #e6f3ff 0%, #f8fbff 50%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #1f2937;
+    }
+    .card {
+      width: 360px;
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 14px;
+      padding: 22px;
+      box-shadow: 0 12px 30px rgba(30, 41, 59, 0.08);
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 22px;
+    }
+    .desc {
+      margin: 0 0 16px;
+      color: #6b7280;
+      font-size: 14px;
+    }
+    label {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 6px;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      font-size: 14px;
+      outline: none;
+    }
+    input:focus {
+      border-color: #0ea5e9;
+      box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.1);
+    }
+    button {
+      width: 100%;
+      border: none;
+      border-radius: 10px;
+      background: #0f766e;
+      color: #fff;
+      padding: 11px 12px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #0b5d58;
+    }
+    #msg {
+      margin-top: 10px;
+      color: #b91c1c;
+      font-size: 13px;
+      min-height: 18px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>后台登录</h1>
+    <p class="desc">请输入管理员账号密码。</p>
+    <form id="loginForm">
+      <label for="username">用户名</label>
+      <input id="username" name="username" value="admin" autocomplete="username" required />
+      <label for="password">密码</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required />
+      <button id="submitBtn" type="submit">登录</button>
+    </form>
+    <div id="msg"></div>
+  </div>
+
+  <script>
+    const loginForm = document.getElementById('loginForm');
+    const msg = document.getElementById('msg');
+    const submitBtn = document.getElementById('submitBtn');
+    const nextUrl = new URLSearchParams(location.search).get('next') || '/account-import';
+
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      msg.textContent = '';
+      submitBtn.disabled = true;
+      submitBtn.textContent = '登录中...';
+
+      const fd = new FormData();
+      fd.append('username', document.getElementById('username').value.trim());
+      fd.append('password', document.getElementById('password').value);
+
+      try {
+        const resp = await fetch('/admin/login', { method: 'POST', body: fd, redirect: 'follow' });
+        if (resp.ok) {
+          location.href = nextUrl;
+          return;
+        }
+        const data = await resp.json().catch(() => ({}));
+        msg.textContent = data.detail || `登录失败: HTTP ${resp.status}`;
+      } catch (err) {
+        msg.textContent = `登录失败: ${err.message}`;
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = '登录';
+      }
+    });
+  </script>
+</body>
+</html>

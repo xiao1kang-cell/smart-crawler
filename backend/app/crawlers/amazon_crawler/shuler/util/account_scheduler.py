@@ -68,8 +68,8 @@ def _env_int(name: str, default: int, minimum: int = 0) -> int:
 # 这里保留只是为了向后兼容外部 import（实际逻辑均走 self._policy_for(...)）。
 
 # 会话粘性：一个 worker 连续使用同一账号的任务数范围
-SESSION_MIN_TASKS = 8
-SESSION_MAX_TASKS = 12
+SESSION_MIN_TASKS = 10
+SESSION_MAX_TASKS = 15
 
 # 日预算：每个账号每天最多执行的任务数（带随机波动）
 DAILY_BUDGET_BASE = 300
@@ -86,8 +86,12 @@ REST_MAX_SECONDS = 60 * 20  # 最多 2 小时
 # worker 切换国家打断短会话时，不按完整会话休息处理。
 COUNTRY_SWITCH_SHORT_SESSION_TASKS = _env_int("COUNTRY_SWITCH_SHORT_SESSION_TASKS", 3)
 COUNTRY_SWITCH_SHORT_SESSION_PAGES = _env_int("COUNTRY_SWITCH_SHORT_SESSION_PAGES", 20)
-COUNTRY_SWITCH_REST_MIN_SECONDS = _env_int("COUNTRY_SWITCH_REST_MIN_SECONDS", 60)
-COUNTRY_SWITCH_REST_MAX_SECONDS = _env_int("COUNTRY_SWITCH_REST_MAX_SECONDS", 120)
+COUNTRY_SWITCH_REST_MIN_SECONDS = _env_int("COUNTRY_SWITCH_REST_MIN_SECONDS", 30)
+COUNTRY_SWITCH_REST_MAX_SECONDS = _env_int("COUNTRY_SWITCH_REST_MAX_SECONDS", 60)
+LOW_ACCOUNT_REST_MIN_SECONDS = _env_int("LOW_ACCOUNT_REST_MIN_SECONDS", 60)
+LOW_ACCOUNT_REST_MAX_SECONDS = _env_int("LOW_ACCOUNT_REST_MAX_SECONDS", 180)
+LOW_ACCOUNT_COOLDOWN_SECONDS = _env_int("LOW_ACCOUNT_COOLDOWN_SECONDS", 15 * 60)
+LOW_ACCOUNT_COUNTRY_EXEMPT = {"US"}
 SCHEDULER_LOCK_TTL_SECONDS = _env_int("SCHEDULER_LOCK_TTL_SECONDS", 30, minimum=1)
 SCHEDULER_LOCK_WAIT_SECONDS = _env_int("SCHEDULER_LOCK_WAIT_SECONDS", 10, minimum=1)
 SCHEDULER_ACQUIRE_RETRY_ATTEMPTS = _env_int("SCHEDULER_ACQUIRE_RETRY_ATTEMPTS", 3, minimum=1)
@@ -397,9 +401,10 @@ class AccountScheduler:
                 session.account.fail_count += 1
                 policy = self._policy_for(account=session.account)
                 if session.account.fail_count >= policy.max_fail:
-                    session.account.cooldown_until = time.time() + policy.cooldown_seconds
+                    cooldown_seconds = self._cooldown_seconds_for_account(session.account)
+                    session.account.cooldown_until = time.time() + cooldown_seconds
                     logger.warning(
-                        f"[调度] 账号 {session.account.username} 失败{policy.max_fail}次，冷却{policy.cooldown_seconds}秒"
+                        f"[调度] 账号 {session.account.username} 失败{policy.max_fail}次，冷却{cooldown_seconds}秒"
                     )
                     # 发射冷却事件
                     try:
@@ -411,7 +416,7 @@ class AccountScheduler:
                             worker_id=worker_id,
                             daily_pages=stats.page_count,
                             session_seq=stats.session_seq,
-                            error_msg=f"fail_count={session.account.fail_count} cooldown={policy.cooldown_seconds}s",
+                            error_msg=f"fail_count={session.account.fail_count} cooldown={cooldown_seconds}s",
                         )
                     except Exception:
                         pass
@@ -696,14 +701,19 @@ class AccountScheduler:
             )
         else:
             # 休息时长和今日使用量正相关（用得越多休息越久）
-            policy = self._policy_for(account=acc)
+            rest_min, rest_max, is_low_account_country = self._rest_window_for_account(acc)
             usage_ratio = stats.task_count / max(1, stats.daily_budget)
-            base_rest = policy.rest_min_seconds + (policy.rest_max_seconds - policy.rest_min_seconds) * usage_ratio
+            base_rest = rest_min + (rest_max - rest_min) * usage_ratio
             rest_seconds = base_rest * random.uniform(0.7, 1.3)
 
             # 非活跃时段休息更久（凌晨刷完一会儿就"睡了"，不会马上回来）
             active_w = self._get_active_hours_weight(acc.country)
-            if active_w < 0.7:
+            if is_low_account_country:
+                logger.info(
+                    f"[调度] 低账号国家短休息策略: {username} country={acc.country} "
+                    f"rest_window={rest_min}-{rest_max}s"
+                )
+            elif active_w < 0.7:
                 rest_seconds *= random.uniform(2.0, 4.0)  # 深夜：休息翻 2~4 倍
             elif active_w < 1.0:
                 rest_seconds *= random.uniform(1.3, 2.0)  # 边缘：休息翻 1.3~2 倍
@@ -764,6 +774,27 @@ class AccountScheduler:
         session.account = None
         session.tasks_in_session = 0
         session.pages_in_session = 0
+
+    def _is_low_account_country(self, account: Account) -> bool:
+        """非 US 国家使用更短的休息/冷却策略。"""
+        country = str(getattr(account, "country", "") or "").strip().upper()
+        return bool(country and country not in LOW_ACCOUNT_COUNTRY_EXEMPT)
+
+    def _rest_window_for_account(self, account: Account) -> tuple[int, int, bool]:
+        """返回账号会话结束后的休息区间；第三个返回值表示是否命中低账号国家策略。"""
+        if self._is_low_account_country(account):
+            rest_min = max(0, LOW_ACCOUNT_REST_MIN_SECONDS)
+            rest_max = max(rest_min, LOW_ACCOUNT_REST_MAX_SECONDS)
+            return rest_min, rest_max, True
+
+        policy = self._policy_for(account=account)
+        return policy.rest_min_seconds, policy.rest_max_seconds, False
+
+    def _cooldown_seconds_for_account(self, account: Account) -> int:
+        """连续失败达到阈值后的冷却时间；US 保持平台默认策略。"""
+        if self._is_low_account_country(account):
+            return max(0, LOW_ACCOUNT_COOLDOWN_SECONDS)
+        return self._policy_for(account=account).cooldown_seconds
 
     def _should_fatigue_rest(self, session: WorkerSession) -> bool:
         """疲劳检测：连续使用后有概率触发休息"""

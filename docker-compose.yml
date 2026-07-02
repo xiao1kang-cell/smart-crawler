@@ -65,6 +65,7 @@ services:
     environment:
       # 连接 postgres 服务；服务名 postgres 即容器网络内的主机名
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
+      - APP_ENV=production
       - SC_SECRET=${SC_SECRET:-change-me}
       # 管理员账号 —— 弱口令 aosen/admin 已废弃，密码经环境变量注入
       # ADMIN_PASSWORD 只在首次建号时生效；控制台改过的密码不会被部署覆盖。
@@ -94,6 +95,7 @@ services:
       - AMAZON_VOC_TOKEN=${AMAZON_VOC_TOKEN:-}
       - AMAZON_VOC_PUBLIC_BASE_URL=${AMAZON_VOC_PUBLIC_BASE_URL:-}
       - AMAZON_VOC_REDIS_URL=${AMAZON_VOC_REDIS_URL:-redis://redis:6379/0}
+      - REDIS_URL=${AMAZON_VOC_REDIS_URL:-redis://redis:6379/0}
       - AMAZON_VOC_QUEUE_PREFIX=${AMAZON_VOC_QUEUE_PREFIX:-amazon:voc}
       - AMAZON_VOC_RESULT_PREFIX=${AMAZON_VOC_RESULT_PREFIX:-crawler-data}
       - AMAZON_VOC_DEFAULT_TENANT=${AMAZON_VOC_DEFAULT_TENANT:-default}
@@ -194,18 +196,20 @@ services:
     image: smart-crawler:latest
     container_name: smart-crawler-amazon-voc-worker
     restart: unless-stopped
-    command: python -m app.amazon_voc.worker
+    command: python -m app.crawlers.amazon_worker
     volumes:
       - ./data:/app/data
       - ./backend:/app/backend:ro
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
+      - APP_ENV=production
       - RUN_SCHEDULER=0
       - AMAZON_VOC_WORKER_ID=amazon-voc-worker-1
       - AMAZON_VOC_WORKER_JOB_TYPES=${AMAZON_VOC_WORKER_JOB_TYPES:-}
       - AMAZON_VOC_WORKER_MARKETS=${AMAZON_VOC_WORKER_MARKETS:-}
       - AMAZON_VOC_WORKER_EXCLUDE_MARKETS=${AMAZON_VOC_WORKER_EXCLUDE_MARKETS:-}
       - AMAZON_VOC_REDIS_URL=${AMAZON_VOC_REDIS_URL:-redis://redis:6379/0}
+      - REDIS_URL=${AMAZON_VOC_REDIS_URL:-redis://redis:6379/0}
       - AMAZON_VOC_PUBLIC_BASE_URL=${AMAZON_VOC_PUBLIC_BASE_URL:-}
       - AMAZON_VOC_QUEUE_PREFIX=${AMAZON_VOC_QUEUE_PREFIX:-amazon:voc}
       - AMAZON_VOC_RESULT_PREFIX=${AMAZON_VOC_RESULT_PREFIX:-crawler-data}
@@ -215,6 +219,7 @@ services:
       - AMAZON_VOC_OSS_BUCKET=${AMAZON_VOC_OSS_BUCKET:-}
       - AMAZON_VOC_OSS_ACCESS_KEY_ID=${AMAZON_VOC_OSS_ACCESS_KEY_ID:-}
       - AMAZON_VOC_OSS_ACCESS_KEY_SECRET=${AMAZON_VOC_OSS_ACCESS_KEY_SECRET:-}
+      - AMAZON_CRAWLER_LOG_DIR=/app/data/logs/amazon_crawler
       - RESIDENTIAL_PROXY=${RESIDENTIAL_PROXY:-}
     depends_on:
       postgres:
@@ -227,19 +232,23 @@ services:
     image: smart-crawler:latest
     container_name: smart-crawler-amazon-voc-daemon
     restart: unless-stopped
-    command: python -m app.amazon_voc.daemon
+    command: python -m app.crawlers.amazon_daemon --api-url http://smart-crawler:8077
     volumes:
       - ./data:/app/data
       - ./backend:/app/backend:ro
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-smart_crawler}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smart_crawler}}
+      - APP_ENV=production
       - RUN_SCHEDULER=0
       - AMAZON_VOC_REDIS_URL=${AMAZON_VOC_REDIS_URL:-redis://redis:6379/0}
+      - REDIS_URL=${AMAZON_VOC_REDIS_URL:-redis://redis:6379/0}
       - AMAZON_VOC_CALLBACK_SECRET=${AMAZON_VOC_CALLBACK_SECRET:-}
-      - AMAZON_VOC_CALLBACK_RETRY_INTERVAL_SECONDS=${AMAZON_VOC_CALLBACK_RETRY_INTERVAL_SECONDS:-60}
-      - AMAZON_VOC_CALLBACK_RETRY_MIN_INTERVAL_SECONDS=${AMAZON_VOC_CALLBACK_RETRY_MIN_INTERVAL_SECONDS:-300}
-      - AMAZON_VOC_CALLBACK_RETRY_MAX_ATTEMPTS=${AMAZON_VOC_CALLBACK_RETRY_MAX_ATTEMPTS:-5}
-      - AMAZON_VOC_CALLBACK_RETRY_BATCH_SIZE=${AMAZON_VOC_CALLBACK_RETRY_BATCH_SIZE:-50}
+      - CALLBACK_SECRET=${AMAZON_VOC_CALLBACK_SECRET:-}
+      - CALLBACK_RETRY_INTERVAL_SECONDS=${CALLBACK_RETRY_INTERVAL_SECONDS:-60}
+      - CALLBACK_RETRY_MIN_INTERVAL_SECONDS=${CALLBACK_RETRY_MIN_INTERVAL_SECONDS:-300}
+      - CALLBACK_RETRY_MAX_ATTEMPTS=${CALLBACK_RETRY_MAX_ATTEMPTS:-5}
+      - CALLBACK_RETRY_BATCH_SIZE=${CALLBACK_RETRY_BATCH_SIZE:-50}
+      - AMAZON_CRAWLER_LOG_DIR=/app/data/logs/amazon_crawler
     depends_on:
       postgres:
         condition: service_healthy

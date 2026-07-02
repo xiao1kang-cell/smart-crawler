@@ -12,6 +12,10 @@ LOG_DIR="$ROOT/logs/amazon_voc"
 PID_FILE="$LOG_DIR/listing.pid"
 LOG_FILE="$LOG_DIR/listing.out.log"
 
+if [[ -d /opt/homebrew/opt/expat/lib ]]; then
+  export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH:+$DYLD_LIBRARY_PATH:}/opt/homebrew/opt/expat/lib"
+fi
+
 mkdir -p "$LOG_DIR"
 if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" >/dev/null 2>&1; then
   echo "amazon voc listing already running pid=$(cat "$PID_FILE")"
@@ -21,6 +25,7 @@ fi
 nohup env \
   APP_ENV="$APP_ENV" \
   API_URL="$API_URL" \
+  AMAZON_VOC_INIT_DB="${AMAZON_VOC_INIT_DB:-0}" \
   AMAZON_VOC_WORKER_NODE="$NODE" \
   AMAZON_VOC_LISTING_WORKER_PROCESSES="$COUNT" \
   AMAZON_VOC_REVIEW_US_WORKER_PROCESSES=0 \

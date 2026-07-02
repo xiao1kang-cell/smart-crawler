@@ -14,10 +14,12 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 from sqlalchemy import and_, func, or_
 
-from app.db import IS_SQLITE, session_scope
+from app.db import IS_SQLITE, engine, session_scope
 from app.models import (
     AccountUsageLog,
     AmazonCrawlerAccount,
+    AmazonCrawlerAccountImportItem,
+    AmazonCrawlerAccountImportJob,
     AmazonListingJob,
     AmazonReviewJob,
     CrawlerQueueDepthSnapshot,
@@ -110,6 +112,60 @@ def _bool_value(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "t", "yes", "y"}
     return bool(value)
+
+
+_ACCOUNT_IMPORT_STATUS = {0: "pending", 1: "running", 2: "done", 3: "failed"}
+
+
+def _account_import_job_row(row: AmazonCrawlerAccountImportJob) -> Dict[str, Any]:
+    return {
+        "id": int(row.id or 0),
+        "job_id": row.job_id or "",
+        "status": int(row.status or 0),
+        "status_desc": _ACCOUNT_IMPORT_STATUS.get(int(row.status or 0), "unknown"),
+        "node_id": row.node_id or "",
+        "account_type": row.account_type or "",
+        "target_country": row.target_country or "",
+        "proxy_strategy": row.proxy_strategy or "",
+        "static_ip_count": int(row.static_ip_count or 0),
+        "static_ip_pool": _json_obj(row.static_ip_pool) or [],
+        "limit_count": int(row.limit_count or 0),
+        "source_rows": int(row.source_rows or 0),
+        "queued_rows": int(row.queued_rows or 0),
+        "attempted_rows": int(row.attempted_rows or 0),
+        "success_count": int(row.success_count or 0),
+        "failed_count": int(row.failed_count or 0),
+        "existing_browser_count": int(row.existing_browser_count or 0),
+        "file_proxy_count": int(row.file_proxy_count or 0),
+        "created_usernames": _json_obj(row.created_usernames) or [],
+        "failed_items": _json_obj(row.failed_items) or [],
+        "error_msg": row.error_msg or "",
+        "created_by": row.created_by or "admin",
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+        "started_at": row.started_at,
+        "finished_at": row.finished_at,
+    }
+
+
+def _account_import_item_row(row: AmazonCrawlerAccountImportItem) -> Dict[str, Any]:
+    return {
+        "id": int(row.id or 0),
+        "job_id": row.job_id or "",
+        "row_no": int(row.row_no or 0),
+        "username": row.username or "",
+        "password": row.password or "",
+        "totp_secret": row.totp_secret or "",
+        "country": row.country or "",
+        "browser_id": row.browser_id or "",
+        "had_browser_id": bool(row.had_browser_id),
+        "proxy": row.proxy or "",
+        "status": int(row.status or 0),
+        "node_id": row.node_id or "",
+        "error_msg": row.error_msg or "",
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
 
 
 def _account_row(row: AmazonCrawlerAccount) -> Dict[str, Any]:
@@ -298,6 +354,205 @@ class MySQLTaskDB:
 
     def close(self) -> None:
         return None
+
+    def ensure_account_import_tables(self) -> None:
+        AmazonCrawlerAccountImportJob.__table__.create(bind=engine, checkfirst=True)
+        AmazonCrawlerAccountImportItem.__table__.create(bind=engine, checkfirst=True)
+
+    def create_account_import_job(self, *, job_id: str, accounts: List[Dict],
+                                  account_type: str, target_country: str,
+                                  static_ip_count: int = 0, static_ip_pool: List = None,
+                                  limit_count: int = 0, proxy_strategy: str = "",
+                                  created_by: str = "admin") -> Dict:
+        self.ensure_account_import_tables()
+        now = datetime.utcnow()
+        source_rows = len(accounts or [])
+        safe_limit = max(int(limit_count or 0), 0)
+        queued_accounts = list(accounts or [])
+        if safe_limit:
+            queued_accounts = queued_accounts[:safe_limit]
+        existing_browser_count = sum(1 for item in queued_accounts if str(item.get("browser_id") or "").strip())
+        file_proxy_count = sum(1 for item in queued_accounts if str(item.get("proxy") or "").strip())
+
+        with session_scope() as s:
+            row = AmazonCrawlerAccountImportJob(
+                job_id=str(job_id),
+                status=0,
+                node_id="",
+                account_type=str(account_type or "").strip().upper(),
+                target_country=_market(target_country),
+                proxy_strategy=str(proxy_strategy or ""),
+                static_ip_count=int(static_ip_count or 0),
+                static_ip_pool=static_ip_pool or [],
+                limit_count=safe_limit,
+                source_rows=source_rows,
+                queued_rows=len(queued_accounts),
+                attempted_rows=0,
+                success_count=0,
+                failed_count=0,
+                existing_browser_count=existing_browser_count,
+                file_proxy_count=file_proxy_count,
+                created_usernames=[],
+                failed_items=[],
+                error_msg="",
+                created_by=created_by or "admin",
+                created_at=now,
+                updated_at=now,
+            )
+            s.add(row)
+            for item in queued_accounts:
+                browser_id = str(item.get("browser_id") or "").strip()
+                s.add(AmazonCrawlerAccountImportItem(
+                    job_id=str(job_id),
+                    row_no=int(item.get("row_no") or 0),
+                    username=str(item.get("username") or "").strip(),
+                    password=str(item.get("password") or ""),
+                    totp_secret=str(item.get("totp_secret") or ""),
+                    country=_market(item.get("country") or target_country),
+                    browser_id=browser_id,
+                    had_browser_id=bool(browser_id),
+                    proxy=str(item.get("proxy") or "").strip(),
+                    status=0,
+                    node_id="",
+                    error_msg="",
+                    created_at=now,
+                    updated_at=now,
+                ))
+            s.flush()
+            return _account_import_job_row(row)
+
+    def get_account_import_job(self, job_id: str) -> Optional[Dict]:
+        with session_scope() as s:
+            row = (s.query(AmazonCrawlerAccountImportJob)
+                   .filter(AmazonCrawlerAccountImportJob.job_id == str(job_id))
+                   .first())
+            return _account_import_job_row(row) if row else None
+
+    def claim_next_account_import_job(self, node_id: str) -> Optional[Dict]:
+        now = datetime.utcnow()
+        with session_scope() as s:
+            q = (s.query(AmazonCrawlerAccountImportJob)
+                 .filter(AmazonCrawlerAccountImportJob.status == 0)
+                 .order_by(AmazonCrawlerAccountImportJob.id.asc()))
+            if not IS_SQLITE:
+                q = q.with_for_update(skip_locked=True)
+            row = q.first()
+            if row is None:
+                return None
+            row.status = 1
+            row.node_id = str(node_id or "")
+            row.started_at = row.started_at or now
+            row.updated_at = now
+            s.flush()
+            return _account_import_job_row(row)
+
+    def reset_stale_account_import_jobs(self, stale_seconds: int = 900) -> int:
+        cutoff = datetime.utcnow() - timedelta(seconds=max(int(stale_seconds or 900), 60))
+        now = datetime.utcnow()
+        with session_scope() as s:
+            rows = (s.query(AmazonCrawlerAccountImportJob)
+                    .filter(AmazonCrawlerAccountImportJob.status == 1,
+                            AmazonCrawlerAccountImportJob.updated_at < cutoff)
+                    .all())
+            for row in rows:
+                row.status = 0
+                row.node_id = ""
+                row.error_msg = ""
+                row.updated_at = now
+                items = (s.query(AmazonCrawlerAccountImportItem)
+                         .filter(AmazonCrawlerAccountImportItem.job_id == row.job_id,
+                                 AmazonCrawlerAccountImportItem.status == 1)
+                         .all())
+                for item in items:
+                    item.status = 0
+                    item.node_id = ""
+                    item.error_msg = ""
+                    item.updated_at = now
+            return len(rows)
+
+    def get_account_import_items(self, job_id: str) -> List[Dict]:
+        with session_scope() as s:
+            rows = (s.query(AmazonCrawlerAccountImportItem)
+                    .filter(AmazonCrawlerAccountImportItem.job_id == str(job_id))
+                    .order_by(AmazonCrawlerAccountImportItem.id.asc())
+                    .all())
+            return [_account_import_item_row(row) for row in rows]
+
+    def mark_account_import_item_running(self, item_id: int, node_id: str) -> None:
+        now = datetime.utcnow()
+        with session_scope() as s:
+            row = s.get(AmazonCrawlerAccountImportItem, int(item_id))
+            if row is None or int(row.status or 0) != 0:
+                return
+            row.status = 1
+            row.node_id = str(node_id or "")
+            row.error_msg = ""
+            row.updated_at = now
+
+    def mark_account_import_item_done(self, item_id: int, username: str, browser_id: str) -> None:
+        now = datetime.utcnow()
+        with session_scope() as s:
+            row = s.get(AmazonCrawlerAccountImportItem, int(item_id))
+            if row is None:
+                return
+            row.status = 2
+            row.username = str(username or "")
+            row.browser_id = str(browser_id or "")
+            row.error_msg = ""
+            row.updated_at = now
+
+    def mark_account_import_item_failed(self, item_id: int, error_msg: str) -> None:
+        now = datetime.utcnow()
+        with session_scope() as s:
+            row = s.get(AmazonCrawlerAccountImportItem, int(item_id))
+            if row is None:
+                return
+            row.status = 3
+            row.error_msg = str(error_msg or "")[:500]
+            row.updated_at = now
+
+    def refresh_account_import_job_stats(self, job_id: str, final_status: Optional[int] = None,
+                                         error_msg: str = "") -> Optional[Dict]:
+        now = datetime.utcnow()
+        with session_scope() as s:
+            job = (s.query(AmazonCrawlerAccountImportJob)
+                   .filter(AmazonCrawlerAccountImportJob.job_id == str(job_id))
+                   .first())
+            if job is None:
+                return None
+            items = (s.query(AmazonCrawlerAccountImportItem)
+                     .filter(AmazonCrawlerAccountImportItem.job_id == str(job_id))
+                     .order_by(AmazonCrawlerAccountImportItem.id.asc())
+                     .all())
+            attempted_rows = sum(1 for item in items if int(item.status or 0) != 0)
+            success_count = sum(1 for item in items if int(item.status or 0) == 2)
+            failed_count = sum(1 for item in items if int(item.status or 0) == 3)
+            pending_count = sum(1 for item in items if int(item.status or 0) == 0)
+            running_count = sum(1 for item in items if int(item.status or 0) == 1)
+            if final_status is None and items and pending_count == 0 and running_count == 0:
+                final_status = 2
+
+            job.attempted_rows = attempted_rows
+            job.success_count = success_count
+            job.failed_count = failed_count
+            job.created_usernames = [item.username or "" for item in items if int(item.status or 0) == 2][:50]
+            job.failed_items = [
+                {
+                    "row_no": int(item.row_no or 0),
+                    "username": item.username or "",
+                    "reason": item.error_msg or "unknown",
+                }
+                for item in items if int(item.status or 0) == 3
+            ][:200]
+            job.updated_at = now
+            if final_status is not None:
+                job.status = int(final_status)
+                if int(final_status) in (2, 3):
+                    job.finished_at = now
+            if error_msg:
+                job.error_msg = str(error_msg)[:1000]
+            s.flush()
+            return _account_import_job_row(job)
 
     def ensure_monitoring_tables(self) -> None:
         return None

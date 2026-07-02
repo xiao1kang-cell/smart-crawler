@@ -989,6 +989,69 @@ class AmazonCrawlerAccount(Base):
     label = Column(String, index=True)
 
 
+class AmazonCrawlerAccountImportJob(Base):
+    """Async account import job consumed by remote BitBrowser nodes."""
+
+    __tablename__ = "amazon_crawler_account_import_jobs"
+    __table_args__ = (
+        UniqueConstraint("job_id", name="uq_amazon_account_import_job_id"),
+        Index("idx_amazon_account_import_status", "status", "created_at"),
+        Index("idx_amazon_account_import_node", "node_id", "status"),
+    )
+
+    id = Column(BIGINT_PK, primary_key=True)
+    job_id = Column(String(64), nullable=False, index=True)
+    status = Column(Integer, nullable=False, default=0)  # 0=pending 1=running 2=done 3=failed
+    node_id = Column(String(128), nullable=False, default="")
+    account_type = Column(String(10), nullable=False, default="")
+    target_country = Column(String(10), nullable=False, default="")
+    proxy_strategy = Column(String(24), nullable=False, default="")
+    static_ip_count = Column(Integer, nullable=False, default=0)
+    static_ip_pool = Column(JSON)
+    limit_count = Column(Integer, nullable=False, default=0)
+    source_rows = Column(Integer, nullable=False, default=0)
+    queued_rows = Column(Integer, nullable=False, default=0)
+    attempted_rows = Column(Integer, nullable=False, default=0)
+    success_count = Column(Integer, nullable=False, default=0)
+    failed_count = Column(Integer, nullable=False, default=0)
+    existing_browser_count = Column(Integer, nullable=False, default=0)
+    file_proxy_count = Column(Integer, nullable=False, default=0)
+    created_usernames = Column(JSON)
+    failed_items = Column(JSON)
+    error_msg = Column(Text)
+    created_by = Column(String(64), nullable=False, default="admin")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime)
+    finished_at = Column(DateTime)
+
+
+class AmazonCrawlerAccountImportItem(Base):
+    """Single Excel row belonging to an account import job."""
+
+    __tablename__ = "amazon_crawler_account_import_items"
+    __table_args__ = (
+        Index("idx_amazon_account_import_item_job", "job_id", "id"),
+        Index("idx_amazon_account_import_item_status", "job_id", "status"),
+    )
+
+    id = Column(BIGINT_PK, primary_key=True)
+    job_id = Column(String(64), nullable=False, index=True)
+    row_no = Column(Integer, nullable=False, default=0)
+    username = Column(String(128), nullable=False, default="")
+    password = Column(String(256), nullable=False, default="")
+    totp_secret = Column(String(256), nullable=False, default="")
+    country = Column(String(10), nullable=False, default="")
+    browser_id = Column(String(128), nullable=False, default="")
+    had_browser_id = Column(Boolean, nullable=False, default=False)
+    proxy = Column(Text)
+    status = Column(Integer, nullable=False, default=0)  # 0=pending 1=running 2=done 3=failed
+    node_id = Column(String(128), nullable=False, default="")
+    error_msg = Column(String(512), nullable=False, default="")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class CrawlerEventLog(Base):
     """Amazon crawler structured event log.
 

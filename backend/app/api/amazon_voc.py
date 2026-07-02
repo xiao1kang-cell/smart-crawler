@@ -323,6 +323,16 @@ def _normalize_payload(job_type: str, payload: dict[str, Any]) -> tuple[dict[str
             raise HTTPException(status_code=422, detail="star_filter must be a list")
         out.setdefault("limit", 999)
         out.setdefault("max_pages", 10)
+        try:
+            limit = int(out.get("limit") or 0)
+        except (TypeError, ValueError):
+            limit = 0
+        try:
+            page_cap = max(1, int(out.get("max_pages") or 10))
+        except (TypeError, ValueError):
+            page_cap = 10
+        if limit > 0:
+            out["max_pages"] = min(max(1, (limit + 9) // 10), page_cap)
     asin = str(out.get("asin") or "").strip().upper()
     if not asin:
         raise HTTPException(status_code=422, detail="asin required")
