@@ -8,6 +8,7 @@ data/*.db
 .env
 .env.*
 !.env.example
+**/secrets/*.env
 data/
 backups/
 node_modules/
